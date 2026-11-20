@@ -219,7 +219,7 @@ fn a_question_opens_the_sidebar_and_is_answered_there() {
     h.get_by_label("Use this one");
     shot(&mut h, "ask");
     // The second release, then Use this one.
-    h.get_all_by_role(Role::RadioButton).nth(1).unwrap().click();
+    h.get_all_by_role(Role::RadioButton).filter(|n| !n.accesskit_node().label().is_some_and(|l| l.starts_with("Appearance"))).nth(1).unwrap().click();
     h.run_steps(2);
     click(&mut h, "Use this one");
     until(&mut h, "Choose to finish", |a| a.m.snapshot(0).steps["choose"].state == StepState::Ok);
@@ -3801,4 +3801,19 @@ fn the_disc_before_stays_on_the_canvas_until_the_next_goes_in() {
     until(&mut h, "the new disc", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].state == StepState::Ok));
     let a = app(&h);
     assert_eq!(a.m.snapshot(0).steps["rip"].items.len(), a.m.newest(0).unwrap().snap.steps["rip"].items.len());
+}
+
+/// System, Light or Dark, picked at the bottom of the recipes and kept.
+#[test]
+fn the_appearance_is_picked_and_remembered() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    h.get_by_label("Appearance: Dark").click();
+    h.run_steps(2);
+    assert!(app(&h).dark);
+    assert_eq!(std::fs::read_to_string(e.dir.path().join("config/appearance")).unwrap(), "dark");
+    h.get_by_label("Appearance: System").click();
+    h.run_steps(2);
+    assert_eq!(app(&h).appearance, drt_app::Appearance::System);
+    assert_eq!(std::fs::read_to_string(e.dir.path().join("config/appearance")).unwrap(), "system");
 }

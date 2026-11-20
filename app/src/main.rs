@@ -88,7 +88,14 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx.set_fonts(drt_app::theme::fonts());
             let dark = cc.egui_ctx.system_theme() == Some(egui::Theme::Dark);
-            let app = App::new(model, dark);
+            let saved = model.store.load_appearance().and_then(|s| drt_app::Appearance::parse(&s)).unwrap_or(drt_app::Appearance::System);
+            let mut app = App::new(model, dark);
+            app.appearance = saved;
+            match saved {
+                drt_app::Appearance::Light => app.dark = false,
+                drt_app::Appearance::Dark => app.dark = true,
+                drt_app::Appearance::System => {}
+            }
             Ok(Box::new(Keep { window: Window(app), _rt: rt }))
         }),
     )

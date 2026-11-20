@@ -16,7 +16,7 @@ pub mod theme;
 pub mod tray;
 pub mod widgets;
 
-pub use app::{App, Tray};
+pub use app::{App, Appearance, Tray};
 pub use model::{Deps, Model};
 pub use store::Store;
 

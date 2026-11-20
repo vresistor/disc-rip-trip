@@ -112,6 +112,17 @@ impl Store {
         }
     }
 
+    /// Light, dark or as the system is: "system", "light" or "dark".
+    pub fn load_appearance(&self) -> Option<String> {
+        std::fs::read_to_string(self.dir.join("appearance")).ok().map(|s| s.trim().to_owned())
+    }
+
+    pub fn save_appearance(&self, a: &str) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join("appearance"), a)?;
+        Ok(())
+    }
+
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         if self.settings_unreadable.is_some() {
             return Ok(());

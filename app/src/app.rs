@@ -5,7 +5,7 @@ use crate::canvas::{self, CardExtra, Click, Marks, View};
 use crate::chrome;
 use crate::model::Model;
 use crate::theme::{self, font, kind_icon, mix, state_icon, Pal};
-use crate::widgets::{chip, pill, Btn, Look, Tone};
+use crate::widgets::{chip, pill, segmented, Btn, Look, Tone};
 use drt_engine::{Scope, Setting, StepState};
 use egui::{pos2, vec2, Align, Align2, Key, Layout as L, Margin, Rect, RichText, Sense, Stroke, Ui};
 use std::collections::{HashMap, HashSet};
@@ -58,6 +58,8 @@ pub struct App {
     /// The name being typed for a new recipe.
     pub naming: Option<String>,
     pub dark: bool,
+    /// Light, dark or following the system; remembered.
+    pub appearance: Appearance,
     applied: Option<bool>,
     /// Text being typed into a parameter, by `step/key`.
     pub(crate) buffers: HashMap<String, String>,
@@ -143,7 +145,47 @@ pub struct App {
     pub(crate) test_send: std::sync::Arc<std::sync::Mutex<Option<crate::tray::TestSend>>>,
 }
 
+/// How the window looks: as the system is, or always light or dark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appearance {
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub fn parse(s: &str) -> Option<Appearance> {
+        match s {
+            "system" => Some(Appearance::System),
+            "light" => Some(Appearance::Light),
+            "dark" => Some(Appearance::Dark),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Appearance::System => "system",
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        }
+    }
+}
+
 impl App {
+    /// Changes how the window looks, and remembers it.
+    pub fn set_appearance(&mut self, a: Appearance) {
+        self.appearance = a;
+        match a {
+            Appearance::Light => self.dark = false,
+            Appearance::Dark => self.dark = true,
+            Appearance::System => {}
+        }
+        if let Err(e) = self.m.store.save_appearance(a.as_str()) {
+            eprintln!("couldn't save the appearance: {e:#}");
+        }
+    }
+
     pub fn new(m: Model, dark: bool) -> App {
         App {
             m,
@@ -160,6 +202,7 @@ impl App {
             editing: false,
             naming: None,
             dark,
+            appearance: if dark { Appearance::Dark } else { Appearance::Light },
             applied: None,
             buffers: HashMap::new(),
             focus_done: false,
@@ -429,6 +472,11 @@ impl App {
             // A sidebar opening can take a pass more to lay out.
             ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::new(3).unwrap());
         }
+        if self.appearance == Appearance::System {
+            if let Some(t) = ctx.system_theme() {
+                self.dark = t == egui::Theme::Dark;
+            }
+        }
         if self.applied != Some(self.dark) {
             theme::apply(&ctx, &Pal::get(self.dark));
             self.applied = Some(self.dark);
@@ -674,9 +722,14 @@ impl App {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                let label = if self.dark { "Light" } else { "Dark" };
-                if Btn::new("", label).look(Look::Quiet).font(font(13.0, 400)).show(ui, p).clicked() {
-                    self.dark = !self.dark;
+                let all = [Appearance::System, Appearance::Light, Appearance::Dark];
+                let at = Some(match self.appearance {
+                    Appearance::System => 0,
+                    _ if self.dark => 2,
+                    _ => 1,
+                });
+                if let Some(k) = segmented(ui, p, "Appearance", &["System", "Light", "Dark"], at, true) {
+                    self.set_appearance(all[k]);
                 }
             });
         });
