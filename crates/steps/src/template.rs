@@ -21,18 +21,27 @@ pub const PRESETS: &[(&str, &str)] = &[
 
 pub const DEFAULT: &str = "{albumartist}/{album}/{track} - {title}";
 
-/// The layouts for a disc image. A dump is several files that only mean
-/// anything together (the cue names its tracks; the log is the evidence
-/// behind the hashes), so a dump's template names its *folder*, and the
-/// files go in under the names they were made with. Renaming tracks would
-/// mean rewriting the cue, which changes the file Redump's hash describes.
-pub const DUMP_PRESETS: &[(&str, &str)] = &[("Name", "{name}"), ("System / Name", "{system}/{name}"), ("System / Game", GAME_FOLDER), ("Date and disc name", "{date} {label}")];
+// A disc image's layouts. A dump is several files that only mean
+// anything together (the cue names its tracks; the log is the evidence
+// behind the hashes), so a dump's template names its *folder*, and the
+// files go in under the names they were made with. Renaming tracks would
+// mean rewriting the cue, which changes the file Redump's hash describes.
 
 /// A game's discs in one folder: the discs of a set together, with their
 /// playlist beside them.
 pub const GAME_FOLDER: &str = "{system}/{title}";
 
 pub const DUMP_DEFAULT: &str = "{name}";
+
+/// A game's discs, each in its own folder under its system, by Redump's
+/// name: what the built-in Games recipe files them as.
+pub const GAME_DEFAULT: &str = "{system}/{name}";
+
+/// The layouts for a game disc's image: a system's games together.
+pub const GAME_PRESETS: &[(&str, &str)] = &[("System / Name", GAME_DEFAULT), ("System / Game", GAME_FOLDER), ("Name", "{name}"), ("Date and disc name", "{date} {label}")];
+
+/// The layouts for any other disc's image.
+pub const DATA_PRESETS: &[(&str, &str)] = &[("Name", "{name}"), ("System / Name", GAME_DEFAULT), ("Date and disc name", "{date} {label}")];
 
 /// What a Library offers: the music layouts and the image ones.
 pub const LIBRARY_PRESETS: &[(&str, &str)] = &[
@@ -56,7 +65,10 @@ pub const EPISODE_DEFAULT: &str = "Shows/{title} ({year}) [tmdbid-{tmdbid}]/Seas
 /// The layouts for a DVD or Blu-ray title. *Jellyfin* is the pair: a film
 /// with the film layout, an episode with the episode one, so one Library
 /// files both.
-pub const VIDEO_PRESETS: &[(&str, &str)] = &[("Jellyfin", "Jellyfin"), ("Jellyfin film", MOVIE_DEFAULT), ("Jellyfin episode", EPISODE_DEFAULT)];
+pub const VIDEO_PRESETS: &[(&str, &str)] = &[(JELLYFIN, JELLYFIN), ("Jellyfin film", MOVIE_DEFAULT), ("Jellyfin episode", EPISODE_DEFAULT)];
+
+/// The film layout for a film and the episode one for an episode.
+pub const JELLYFIN: &str = "Jellyfin";
 
 /// The tokens a video title's template understands.
 pub const VIDEO_TOKENS: &[(&str, &str)] = &[
@@ -85,10 +97,10 @@ pub struct VideoFields {
 }
 
 /// The template a Place uses for a video title: its own, unless it's
-/// *Jellyfin* or still the music default, which give the film or the
-/// episode layout by what the title is.
+/// *Jellyfin*, which gives the film or the episode layout by what the
+/// title is.
 pub fn video_template(names: &str, episode: bool) -> &str {
-    if names.is_empty() || names == "Jellyfin" || resolve(names) == DEFAULT {
+    if names.is_empty() || names == JELLYFIN {
         if episode {
             EPISODE_DEFAULT
         } else {
@@ -153,6 +165,72 @@ pub const DUMP_TOKENS: &[(&str, &str)] = &[
     ("serial", "a game's serial, SLES-00860"),
     ("region", "a game's region, Europe"),
 ];
+
+/// The tokens any disc's image understands: [`DUMP_TOKENS`] less what
+/// only a game has.
+pub const DATA_TOKENS: &[(&str, &str)] = &[
+    ("name", "Redump's name, or else the name stored on the disc"),
+    ("label", "the name stored on the disc"),
+    ("system", "Redump's system, when it knows the disc"),
+    ("date", "the day it was ripped, 2026-11-18"),
+    ("size", "the disc's size, 4.3 GB"),
+];
+
+/// What a Folder's names are for, from what reaches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Files {
+    /// Tracks (and the cue sheets, lyrics and scans filed beside them).
+    Music,
+    /// A game disc's image: the Game disc step said which system.
+    Game,
+    /// Any other disc's image.
+    Data,
+    /// Films and episodes from a DVD or Blu-ray.
+    Video,
+}
+
+impl Files {
+    /// From what arrives at the Folder: what kind of file, and whether the
+    /// steps before it found which system it's for. `None` when it could
+    /// be anything (branches of different kinds joined).
+    pub fn of(flow: &drt_engine::Flow) -> Option<Files> {
+        use drt_engine::ItemKind as K;
+        match flow.kind {
+            K::ImageFile if flow.found.contains("system") => Some(Files::Game),
+            K::ImageFile => Some(Files::Data),
+            K::VideoFile => Some(Files::Video),
+            K::AudioFile | K::TextFile | K::PictureFile => Some(Files::Music),
+            _ => None,
+        }
+    }
+
+    /// Its default, presets and tokens.
+    pub fn fitted(self) -> drt_engine::Fitted {
+        // Saved when every Folder started on the music layout: an image or
+        // a video on it means its own default.
+        const MUSIC_DEFAULT: &[&str] = &[DEFAULT, PRESETS[0].0];
+        let (default, presets, tokens, was_default) = match self {
+            Files::Music => (DEFAULT, PRESETS, TOKENS, &[][..]),
+            Files::Game => (GAME_DEFAULT, GAME_PRESETS, DUMP_TOKENS, MUSIC_DEFAULT),
+            Files::Data => (DUMP_DEFAULT, DATA_PRESETS, DATA_TOKENS, MUSIC_DEFAULT),
+            Files::Video => (JELLYFIN, VIDEO_PRESETS, VIDEO_TOKENS, MUSIC_DEFAULT),
+        };
+        drt_engine::Fitted { default, presets, tokens, was_default }
+    }
+}
+
+/// A Folder's names where it stands: [`Files::of`] what arrives, or every
+/// layout when that's mixed.
+pub fn names_for(flow: &drt_engine::Flow) -> drt_engine::Fitted {
+    Files::of(flow).map_or(drt_engine::Fitted { default: DEFAULT, presets: LIBRARY_PRESETS, tokens: TOKENS, was_default: &[] }, Files::fitted)
+}
+
+/// A preset's name for a template or a name, from every layout there is;
+/// anything else as it is: what a Folder's card says.
+pub fn preset_name(names: &str) -> String {
+    let t = renamed(names);
+    LIBRARY_PRESETS.iter().chain(VIDEO_PRESETS).find(|(n, p)| *p == t || *n == t).map_or(t, |(n, _)| n).to_owned()
+}
 
 /// What a disc image's template can refer to.
 #[derive(Clone, Debug, Default)]
@@ -399,6 +477,34 @@ mod tests {
     }
 
     #[test]
+    fn what_a_folder_files_comes_from_what_reaches_it() {
+        use drt_engine::{Flow, ItemKind as K};
+        let flow = |kind, found: &[&'static str]| Flow { kind, found: found.iter().copied().collect(), ..Flow::start() };
+        assert_eq!(Files::of(&flow(K::AudioFile, &["release"])), Some(Files::Music));
+        // A cue sheet, a lyrics file or a scan is filed beside its tracks.
+        for k in [K::TextFile, K::PictureFile] {
+            assert_eq!(Files::of(&flow(k, &[])), Some(Files::Music));
+        }
+        assert_eq!(Files::of(&flow(K::ImageFile, &["system", "name"])), Some(Files::Game));
+        assert_eq!(Files::of(&flow(K::ImageFile, &["name"])), Some(Files::Data));
+        assert_eq!(Files::of(&flow(K::VideoFile, &[])), Some(Files::Video));
+        // Branches of different files joined: every layout, the music default.
+        assert_eq!(Files::of(&flow(K::AnyFile, &[])), None);
+        let any = names_for(&flow(K::AnyFile, &[]));
+        assert_eq!((any.default, any.presets), (DEFAULT, LIBRARY_PRESETS));
+        // Each family's default is one of its presets, and its presets' tokens are its own.
+        for f in [Files::Music, Files::Game, Files::Data, Files::Video] {
+            let x = f.fitted();
+            assert!(x.presets.iter().any(|(_, t)| *t == x.default), "{f:?}");
+            for (_, t) in x.presets.iter().filter(|(n, _)| !n.starts_with("Jellyfin")) {
+                for tok in t.split('{').skip(1).map(|p| p.split(['}', ':']).next().unwrap()) {
+                    assert!(x.tokens.iter().any(|(k, _)| *k == tok), "{f:?}: {tok}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_sorted_artist_layout_moves_the_article() {
         assert_eq!(render(resolve("Sorted artist / Album / 01 Artist - Title"), &tortoise()), PathBuf::from("Cinematic Orchestra, The/Every Day/01 The Cinematic Orchestra - All That You Give"));
     }
@@ -459,7 +565,6 @@ mod tests {
             PathBuf::from("Shows/The Sopranos (1999) [tmdbid-1398]/Season 03/The Sopranos (1999) - S03E01 - Mr. Ruggerio's Neighborhood")
         );
         // The music default, as a Folder left alone has, means Jellyfin too.
-        assert_eq!(video_template(DEFAULT, true), EPISODE_DEFAULT);
         assert_eq!(video_template("Jellyfin film", true), "Jellyfin film", "a layout you picked is kept");
         assert_eq!(render_video("Jellyfin film", &film), PathBuf::from("Movies/Blade Runner (1982) [tmdbid-78]/Blade Runner (1982)"));
         assert_eq!(render_video("{title}/{season}x{episode:03}", &sopranos()), PathBuf::from("The Sopranos/3x001"));

@@ -3,7 +3,7 @@
 
 use crate::store::Store;
 use anyhow::{anyhow, bail, Result};
-use drt_engine::{check, Command, Engine, ItemState, Node, ParamKind, ParamSpec, Recipe, Run, Scope, Setting, Settings, Snapshot, Spot, StepInfo, StepState};
+use drt_engine::{check, flows_in, Command, Engine, Flow, ItemState, Node, ParamKind, ParamSpec, Recipe, Run, Scope, Setting, Settings, Snapshot, Spot, StepInfo, StepState};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1049,6 +1049,31 @@ impl Model {
         }
     }
 
+    /// What arrives at a step in the recipe as shown (an earlier disc's
+    /// as that run had it): what a setting that follows it goes by.
+    pub fn shown_flow(&self, i: usize, id: &str) -> Option<Flow> {
+        match self.shown_run(i).filter(|_| !self.shows_newest(i)) {
+            Some(r) => flows_in(&r.recipe.root, &self.engine.registry).remove(id),
+            None => self.flow(i, id),
+        }
+    }
+
+    /// What arrives at a step in the recipe as it is now.
+    pub fn flow(&self, i: usize, id: &str) -> Option<Flow> {
+        flows_in(&self.recipes[i].root, &self.engine.registry).remove(id)
+    }
+
+    /// The value in effect for a setting as shown: its own, or the default
+    /// where its step stands.
+    pub fn shown_value(&self, i: usize, id: &str, spec: &ParamSpec) -> Option<Value> {
+        spec.resolve_at(&self.shown_param(i, id, spec), self.shown_flow(i, id).as_ref())
+    }
+
+    /// The value in effect for a setting as it is now.
+    pub fn value(&self, i: usize, id: &str, spec: &ParamSpec) -> Option<Value> {
+        spec.resolve_at(&self.param(i, id, spec), self.flow(i, id).as_ref())
+    }
+
     pub fn param(&self, i: usize, id: &str, spec: &ParamSpec) -> Setting<Value> {
         match spec.scope {
             Scope::Drive => self.engine.settings.lock().unwrap().drive(&self.drive(i), spec.key),
@@ -1100,15 +1125,21 @@ impl Model {
     /// with (its built-in's value) nor the step's default. Its card shows
     /// a dot; its sidebar says *yours*. `builtin`: [`Model::builtin`].
     pub fn is_yours(&self, i: usize, id: &str, spec: &ParamSpec, builtin: Option<&Recipe>) -> bool {
-        let Setting::Chosen { value, .. } = self.shown_param(i, id, spec) else { return false };
+        let set = self.shown_param(i, id, spec);
+        if !matches!(set, Setting::Chosen { .. }) {
+            return false;
+        }
+        // Both as they read where the step stands: a value that only ever
+        // meant the default is the default.
+        let flow = self.shown_flow(i, id);
         let seeded = builtin.and_then(|b| {
             let mut root = b.root.clone();
             match root.find_mut(id) {
-                Some(Node::Step { params, .. }) => params.get(spec.key).and_then(|s| s.resolve(None)),
+                Some(Node::Step { params, .. }) => params.get(spec.key).cloned(),
                 _ => None,
             }
         });
-        seeded.or_else(|| spec.default.clone()).as_ref() != Some(&value)
+        spec.resolve_at(&seeded.unwrap_or(Setting::Default), flow.as_ref()) != spec.resolve_at(&set, flow.as_ref())
     }
 
     /// The built-in recipe this one was seeded from, by name, if any.

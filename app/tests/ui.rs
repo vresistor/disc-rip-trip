@@ -1916,6 +1916,109 @@ fn a_folder_of_disc_images_names_its_folder_from_the_dump() {
     shot(&mut h, "step-folder-images");
 }
 
+/// What a Folder's card says of it, as `Label value` rows.
+fn card_says(h: &mut Harness<Window>, id: &str) -> Vec<String> {
+    let ctx = h.ctx.clone();
+    let s = snap(h);
+    app_mut(h).cards(&ctx, &s)[id].settings.iter().map(|x| format!("{} {}", x.label, x.value)).collect()
+}
+
+/// What a Folder's template box holds.
+fn template_box(h: &Harness<Window>) -> String {
+    h.get_all_by_role(Role::TextInput).find(|n| n.accesskit_node().label().as_deref() == Some("Template")).and_then(|n| n.accesskit_node().value()).unwrap_or_default()
+}
+
+/// The presets a Folder's Names offers, with its dropdown open.
+fn presets_offered(h: &mut Harness<Window>) -> Vec<String> {
+    h.get_by_label("Names").click();
+    h.run_steps(2);
+    let all = [
+        "Artist / Album / 01 - Title",
+        "Sorted artist / Album / 01 Artist - Title",
+        "Album / 01 - Title",
+        "01 - Title",
+        "Name",
+        "System / Name",
+        "System / Game",
+        "Date and disc name",
+        "Jellyfin",
+        "Jellyfin film",
+        "Jellyfin episode",
+    ];
+    let offered = all.iter().filter(|l| h.query_all_by_label(l).any(|n| n.accesskit_node().role() != Role::ComboBox)).map(|l| (*l).to_owned()).collect();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    offered
+}
+
+#[test]
+fn a_folder_s_names_follow_what_reaches_it() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    // After Rip and FLAC: tracks, the music layouts.
+    open_tile(&mut h, "Library,");
+    h.get_by_value("Artist / Album / 01 - Title");
+    shot(&mut h, "step-folder-music");
+    assert_eq!(presets_offered(&mut h), ["Artist / Album / 01 - Title", "Sorted artist / Album / 01 Artist - Title", "Album / 01 - Title", "01 - Title"]);
+    assert_eq!(card_says(&mut h, "lib1")[1], "Names Artist / Album / 01 - Title");
+    // A game's CHD: by system, and only the image layouts and tokens.
+    h.get_by_label_contains("Games").click();
+    h.run_steps(2);
+    open_tile(&mut h, "Library,");
+    h.get_by_value("System / Name");
+    assert_eq!(template_box(&h), "{system}/{name}");
+    h.get_by_label_contains("PlayStation/Colony Wars (Europe) (Disc 1)/");
+    h.get_by_label("Insert {serial}");
+    assert!(h.query_by_label("Insert {album}").is_none());
+    shot(&mut h, "step-folder-game");
+    assert_eq!(presets_offered(&mut h), ["Name", "System / Name", "System / Game", "Date and disc name"]);
+    assert_eq!(card_says(&mut h, "g_lib"), ["Folder ~/Games", "Names System / Name"]);
+    // Films and episodes, made smaller: Jellyfin's.
+    h.get_by_label_contains("Films and TV").click();
+    h.run_steps(2);
+    open_tile(&mut h, "Library,");
+    h.get_by_value("Jellyfin");
+    h.get_by_label("Insert {tmdbid}");
+    assert!(h.query_by_label("Insert {album}").is_none() && h.query_by_label("Insert {system}").is_none());
+    shot(&mut h, "step-folder-video");
+    assert_eq!(presets_offered(&mut h), ["Jellyfin", "Jellyfin film", "Jellyfin episode"]);
+    assert_eq!(card_says(&mut h, "v_lib")[1], "Names Jellyfin");
+}
+
+#[test]
+fn a_folder_added_after_a_chd_names_its_folder_from_the_dump() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    h.get_by_label_contains("Data discs").click();
+    h.run_steps(2);
+    let i = app(&h).sel;
+    let id = app_mut(&mut h).m.insert_after(i, "d_chd", "folder", true).unwrap();
+    h.run_steps(2);
+    // Nothing is stored: its names are the default for what reaches it.
+    assert_eq!(param(&saved_recipes(&e)[i], &id, "names"), None);
+    assert_eq!(card_says(&mut h, &id)[1], "Names Name");
+    open_id(&mut h, &id);
+    h.get_by_value("Name");
+    assert_eq!(template_box(&h), "{name}");
+    assert!(h.query_by_label("Insert {album}").is_none() && h.query_by_label("Insert {serial}").is_none(), "no music or game tokens for another disc");
+    shot(&mut h, "step-folder-added-after-chd");
+    assert_eq!(presets_offered(&mut h), ["Name", "System / Name", "Date and disc name"]);
+    // One saved on the music layout before names followed the files reads as the image's.
+    app_mut(&mut h).m.set_param(i, &id, "names", Value::from("{albumartist}/{album}/{track} - {title}")).unwrap();
+    h.run_steps(2);
+    assert_eq!(card_says(&mut h, &id)[1], "Names Name");
+    open_id(&mut h, &id);
+    assert_eq!(template_box(&h), "{name}");
+    h.get_by_value("Name");
+    // The + after the CHD offers a Folder.
+    app_mut(&mut h).close_tray();
+    click(&mut h, "Edit");
+    click(&mut h, "Add after CHD");
+    h.event(egui::Event::Text("fol".into()));
+    h.run_steps(2);
+    shot(&mut h, "picker-folder-after-chd");
+}
+
 /// A setting's label (not the control it names).
 fn first(h: &Harness<Window>, label: &str) -> egui::Rect {
     h.get_all_by_role(Role::Label)

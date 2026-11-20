@@ -156,9 +156,10 @@ impl StepInfo {
 
     /// The value in effect for one of this step's settings, wherever it
     /// lives: the node's, the recipe's drive's, or the app's.
-    pub fn resolve_in(&self, key: &str, params: &std::collections::BTreeMap<String, Setting<Value>>, settings: &Settings, drive: &str) -> Option<Value> {
+    /// `flow`: what arrives at the step, for a setting that follows it.
+    pub fn resolve_in(&self, key: &str, params: &std::collections::BTreeMap<String, Setting<Value>>, settings: &Settings, drive: &str, flow: Option<&crate::check::Flow>) -> Option<Value> {
         let spec = self.params.iter().find(|p| p.key == key)?;
-        settings.lookup(spec, self.kind, params, drive).resolve(spec.default.as_ref())
+        spec.resolve_at(&settings.lookup(spec, self.kind, params, drive), flow)
     }
 
     pub fn loops_back(mut self) -> Self {
@@ -347,6 +348,9 @@ pub struct Cx {
     pub(crate) shared: Arc<Shared>,
     pub(crate) info: Arc<StepInfo>,
     pub(crate) params: Arc<BTreeMap<String, Setting<Value>>>,
+    /// What arrives at the step, by the recipe: what its settings that
+    /// follow it go by.
+    pub(crate) flow: Option<Arc<crate::check::Flow>>,
     pub(crate) retries: Arc<tokio::sync::Mutex<mpsc::Receiver<RetryRequest>>>,
     /// The path each item came in with, so a file sent on at a new path is
     /// one this step made (a step passing files through made none).
@@ -460,7 +464,7 @@ impl Cx {
     pub fn param(&self, key: &str) -> Option<Value> {
         let spec = self.info.params.iter().find(|p| p.key == key)?;
         let setting = self.shared.settings.lock().unwrap().lookup(spec, self.info.kind, &self.params, &self.shared.drive);
-        setting.resolve(spec.default.as_ref())
+        spec.resolve_at(&setting, self.flow.as_deref())
     }
 
     pub fn text(&self, key: &str) -> String {

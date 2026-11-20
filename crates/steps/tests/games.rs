@@ -123,6 +123,25 @@ async fn a_game_goes_all_the_way_and_redump_names_it() {
     assert_eq!(s.headline(), "Done");
 }
 
+/// A Folder's names follow what reaches it: one added after the CHD with
+/// nothing chosen, or one saved on the music layout when that was every
+/// Folder's default, files a game by system and name, as its card says.
+#[tokio::test]
+async fn a_game_s_folder_on_no_names_or_the_old_music_default_files_by_system_and_name() {
+    for saved in [None, Some(drt_steps::template::DEFAULT), Some("Artist / Album / 01 - Title")] {
+        let e = engine(vec![APE_ESCAPE]);
+        let mut r = recipes::games();
+        if let Some(Node::Step { params, .. }) = r.root.find_mut("g_lib") {
+            match saved {
+                Some(v) => params.insert("names".into(), Setting::chosen(Value::from(v))),
+                None => params.remove("names"),
+            };
+        }
+        let (s, _) = drive(e.start(&r).unwrap(), Answer::Skip).await;
+        assert_eq!(s.steps["g_lib"].items[0].note, "~/Games/PlayStation/Ape Escape (Europe)", "{saved:?}");
+    }
+}
+
 #[tokio::test]
 async fn a_hash_redump_doesnt_have_asks_with_the_serials_entries() {
     let e = engine(vec![TOMB_RAIDER_UNKNOWN]);

@@ -121,7 +121,29 @@ pub struct ParamSpec {
     /// Makes up a value for a text setting, offered as a *Make one up*
     /// button beside its box (an ntfy topic).
     pub suggest: Option<fn() -> String>,
+    /// What the setting offers where it stands in the recipe, from what
+    /// arrives there: a Folder's names are a track layout for tracks and a
+    /// folder layout for a disc image. Without it, or where nothing is
+    /// known, it's [`ParamSpec::default`] and the kind's own choices.
+    pub fits: Option<Fits>,
 }
+
+/// A setting's default and choices for what arrives at its step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fitted {
+    pub default: &'static str,
+    /// Its presets, by name, for a [`ParamKind::Template`].
+    pub presets: &'static [(&'static str, &'static str)],
+    /// What can go in it, and what each one is, for a template.
+    pub tokens: &'static [(&'static str, &'static str)],
+    /// Stored values that mean "the default" here: what a step saved when
+    /// one default served every kind (an image's Folder kept on the music
+    /// layout). Read as [`Fitted::default`].
+    pub was_default: &'static [&'static str],
+}
+
+/// Works out a setting's [`Fitted`] from what arrives at its step.
+pub type Fits = fn(&crate::check::Flow) -> Fitted;
 
 /// The longest a setting's help may be, in characters.
 pub const HELP_MAX: usize = 110;
@@ -144,7 +166,7 @@ pub struct OnCard {
 
 impl ParamSpec {
     pub fn new(key: &'static str, label: &'static str, kind: ParamKind) -> Self {
-        ParamSpec { key, label, kind, default: None, scope: Scope::Recipe, findable: false, section: "", when: None, only_with: &[], on_card: None, help: None, labels: &[], suggest: None }
+        ParamSpec { key, label, kind, default: None, scope: Scope::Recipe, findable: false, section: "", when: None, only_with: &[], on_card: None, help: None, labels: &[], suggest: None, fits: None }
     }
 
     /// What it changes for you, in one plain sentence.
@@ -232,6 +254,34 @@ impl ParamSpec {
     pub fn on_card_as(mut self, label: &'static str, with: &'static [&'static str], value: Words) -> Self {
         self.on_card = Some(OnCard { label, value: Some(value), with });
         self
+    }
+
+    /// Its default and choices follow what arrives at its step.
+    pub fn fits(mut self, f: Fits) -> Self {
+        self.fits = Some(f);
+        self
+    }
+
+    /// Its default and choices given what arrives (`None` where that isn't
+    /// known: the step's own).
+    pub fn fitted(&self, flow: Option<&crate::check::Flow>) -> Option<Fitted> {
+        Some((self.fits?)(flow?))
+    }
+
+    /// The default where it stands, given what arrives.
+    pub fn default_at(&self, flow: Option<&crate::check::Flow>) -> Option<Value> {
+        self.fitted(flow).map(|f| Value::from(f.default)).or_else(|| self.default.clone())
+    }
+
+    /// The value in effect where it stands: the setting's own, else the
+    /// default there; a value that only ever meant the default reads as it.
+    pub fn resolve_at(&self, setting: &Setting<Value>, flow: Option<&crate::check::Flow>) -> Option<Value> {
+        let default = self.default_at(flow);
+        let value = setting.resolve(default.as_ref())?;
+        match self.fitted(flow) {
+            Some(f) if value.as_str().is_some_and(|v| v.is_empty() || f.was_default.contains(&v)) => default,
+            _ => Some(value),
+        }
     }
 
     pub fn findable(mut self) -> Self {

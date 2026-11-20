@@ -92,7 +92,11 @@ pub fn keep_info() -> StepInfo {
 }
 
 /// Folder and Library: one step for tracks and for disc images. Takes any
-/// file and hands on the same kind, filed: what LibCrypt and M3U need.
+/// file and hands on the same kind, filed: what LibCrypt and M3U need. Its
+/// names follow what reaches it ([`template::names_for`]): a track layout
+/// for music, a folder by system for a game, by name for another disc, the
+/// Jellyfin layout for films; [`template::DEFAULT`] only where it could be
+/// anything.
 pub fn place_info(kind: &'static str, name: &'static str) -> StepInfo {
     StepInfo::new(kind, name, Group::Place, ItemKind::AnyFile, ItemKind::AnyFile)
         .repeatable()
@@ -100,21 +104,13 @@ pub fn place_info(kind: &'static str, name: &'static str) -> StepInfo {
         .gives(&["filed"])
         .from_param("folder")
         .param(ParamSpec::new("folder", "Folder", ParamKind::Folder).on_card("Folder"))
-        .param(ParamSpec::new("names", "Names", ParamKind::Template(template::LIBRARY_PRESETS)).default(template::DEFAULT).on_card_as("Names", &[], |g| {
-            // A preset by its name (*Artist / Album / 01 - Title*); your own, as you wrote it.
-            let t = template::renamed(&s(g, "names")).to_owned();
-            template::LIBRARY_PRESETS.iter().find(|(n, p)| *p == t || *n == t).map_or(t, |(n, _)| (*n).to_owned())
-        }))
-}
-
-/// The template a Place uses for a dump: its own, unless it's still the
-/// music default, which would file an image under "Unknown artist".
-pub fn dump_template(names: &str) -> &str {
-    if names.is_empty() || template::resolve(names) == template::DEFAULT {
-        template::DUMP_DEFAULT
-    } else {
-        names
-    }
+        .param(
+            ParamSpec::new("names", "Names", ParamKind::Template(template::LIBRARY_PRESETS))
+                .default(template::DEFAULT)
+                .fits(template::names_for)
+                // A preset by its name (*System / Name*); your own, as you wrote it.
+                .on_card_as("Names", &[], |g| template::preset_name(&s(g, "names"))),
+        )
 }
 
 /// What a dump's template can use, from what the dump knows.
@@ -128,7 +124,7 @@ pub fn dump_fields(c: &Context) -> template::DumpFields {
 
 /// The folder a dump is filed in, relative, from a Place's template.
 pub fn dump_folder(c: &Context, names: &str) -> PathBuf {
-    template::render_game(dump_template(names), &dump_fields(c), &super::game::game_fields(c))
+    template::render_game(names, &dump_fields(c), &super::game::game_fields(c))
 }
 
 /// The disc's label as an item label.
@@ -641,11 +637,66 @@ mod tests {
         assert_eq!(redump_cache(Path::new("/home/u/.cache/disc-rip-trip/runs/data-discs-1")), PathBuf::from("/home/u/.cache/disc-rip-trip/cache/redump"));
     }
 
+    /// A Folder's names in a recipe, as the run reads them: from what
+    /// reaches it, and what it was saved with.
+    fn names_in(root: &drt_engine::Node, id: &str, saved: Option<&str>) -> (Vec<&'static str>, Option<Value>) {
+        let reg = crate::real();
+        let flows = drt_engine::flows_in(root, &reg);
+        let flow = flows.get(id);
+        let info = place_info("folder", "Folder");
+        let spec = info.params.iter().find(|p| p.key == "names").unwrap();
+        let presets = spec.fitted(flow).map(|f| f.presets.iter().map(|(n, _)| *n).collect()).unwrap_or_default();
+        let set = saved.map_or(drt_engine::Setting::Default, |v| drt_engine::Setting::chosen(Value::from(v)));
+        (presets, spec.resolve_at(&set, flow))
+    }
+
     #[test]
-    fn an_image_left_on_the_music_default_is_filed_by_name() {
-        assert_eq!(dump_template(template::DEFAULT), template::DUMP_DEFAULT);
-        assert_eq!(dump_template("Artist / Album / 01 - Title"), template::DUMP_DEFAULT);
-        assert_eq!(dump_template("System / Name"), "System / Name");
+    fn a_folder_s_names_follow_what_reaches_it() {
+        use crate::recipes;
+        let at = |r: drt_engine::Recipe, id: &str, saved| names_in(&r.root, id, saved);
+        // Tracks: the music layouts.
+        let (presets, v) = at(recipes::cd(), "lib1", None);
+        assert_eq!(v, Some(Value::from(template::DEFAULT)));
+        assert_eq!(presets, ["Artist / Album / 01 - Title", "Sorted artist / Album / 01 Artist - Title", "Album / 01 - Title", "01 - Title"]);
+        // A game's image: by system, as the Games recipe files it.
+        let (presets, v) = at(recipes::games(), "g_lib", None);
+        assert_eq!(v, Some(Value::from("{system}/{name}")));
+        assert_eq!(presets, ["System / Name", "System / Game", "Name", "Date and disc name"]);
+        // Any other disc's image: by name.
+        let (presets, v) = at(recipes::data(), "d_lib", None);
+        assert_eq!(v, Some(Value::from("{name}")));
+        assert!(!presets.contains(&"System / Game") && !presets.iter().any(|p| p.contains("Artist")));
+        // Films and episodes: Jellyfin's.
+        let (presets, v) = at(recipes::video(), "v_lib", None);
+        assert_eq!(v, Some(Value::from("Jellyfin")));
+        assert_eq!(presets, ["Jellyfin", "Jellyfin film", "Jellyfin episode"]);
+    }
+
+    #[test]
+    fn an_image_saved_on_the_music_default_is_filed_by_its_own() {
+        use crate::recipes;
+        for saved in [template::DEFAULT, "Artist / Album / 01 - Title", ""] {
+            assert_eq!(names_in(&recipes::data().root, "d_lib", Some(saved)).1, Some(Value::from(template::DUMP_DEFAULT)), "{saved:?}");
+            assert_eq!(names_in(&recipes::games().root, "g_lib", Some(saved)).1, Some(Value::from(template::GAME_DEFAULT)), "{saved:?}");
+            assert_eq!(names_in(&recipes::video().root, "v_lib", Some(saved)).1, Some(Value::from("Jellyfin")), "{saved:?}");
+        }
+        // What you chose stays, another kind's default included.
+        assert_eq!(names_in(&recipes::data().root, "d_lib", Some("System / Name")).1, Some(Value::from("System / Name")));
+        assert_eq!(names_in(&recipes::games().root, "g_lib", Some("{name}")).1, Some(Value::from("{name}")));
+        // And on music, the music default is just the default.
+        assert_eq!(names_in(&recipes::cd().root, "lib1", Some(template::DEFAULT)).1, Some(Value::from(template::DEFAULT)));
+    }
+
+    #[test]
+    fn a_folder_s_card_says_its_layout_by_name() {
+        let info = place_info("folder", "Folder");
+        let words = info.params.iter().find(|p| p.key == "names").and_then(|p| p.on_card).and_then(|c| c.value).unwrap();
+        let says = |v: &str| words(&|k| (k == "names").then(|| Value::from(v)));
+        assert_eq!(says("{system}/{name}"), "System / Name");
+        assert_eq!(says("{name}"), "Name");
+        assert_eq!(says("Jellyfin"), "Jellyfin");
+        assert_eq!(says(template::DEFAULT), "Artist / Album / 01 - Title");
+        assert_eq!(says("{year}/{title}"), "{year}/{title}");
     }
 
     #[tokio::test]

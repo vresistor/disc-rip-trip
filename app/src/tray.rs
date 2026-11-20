@@ -11,7 +11,7 @@ use crate::theme::{font, kind_icon, mix, state_icon, Pal};
 use crate::widgets::{pill, segmented, Btn, Look, Tone};
 use drt_engine::{Answer, Command, Context, Group, ItemState, ItemView, ParamKind, ParamSpec, QuestionShape, Scope, Setting, Snapshot, StepInfo, StepState, StepView, Subject};
 use drt_steps::real::{expand, mmss};
-use drt_steps::template;
+use drt_steps::template::{self, Files};
 use egui::{pos2, vec2, Align, Color32, Layout as L, Rect, RichText, Sense, Stroke, Ui};
 use std::path::PathBuf;
 
@@ -740,7 +740,7 @@ fn state_pill(v: &StepView, info: &Option<std::sync::Arc<StepInfo>>) -> (String,
 /// The settings shown: beside a list (`beside`), the ones the card shows
 /// locked go; with nothing to list, every one shows, as text.
 fn rail_specs_beside(app: &App, i: usize, id: &str, info: &StepInfo, beside: bool) -> Vec<ParamSpec> {
-    let values: Vec<(&str, Option<serde_json::Value>)> = info.params.iter().map(|s| (s.key, app.m.shown_param(i, id, s).resolve(s.default.as_ref()))).collect();
+    let values: Vec<(&str, Option<serde_json::Value>)> = info.params.iter().map(|s| (s.key, app.m.shown_value(i, id, s))).collect();
     let get = |k: &str| values.iter().find(|(x, _)| *x == k).and_then(|(_, v)| v.clone());
     let locked = read_only(app, i, Scope::Recipe);
     info.params
@@ -787,7 +787,7 @@ pub fn filed_dir(files: &[drt_engine::Made], base: &str) -> PathBuf {
 fn folder_of(app: &App, i: usize, id: &str) -> Option<String> {
     let info = app.m.info(i, id)?;
     let spec = info.params.iter().find(|s| s.kind == ParamKind::Folder)?;
-    app.m.shown_param(i, id, spec).resolve(spec.default.as_ref()).map(|v| value_text(&v))
+    app.m.shown_value(i, id, spec).map(|v| value_text(&v))
 }
 
 /// The titles CD-Text offered: its candidate's, by track. (A run kept
@@ -1183,7 +1183,7 @@ enum Block {
 fn setting(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, spec: &ParamSpec, focus: bool) {
     let i = app.sel;
     let set = app.m.shown_param(i, id, spec);
-    let value = set.resolve(spec.default.as_ref());
+    let value = app.m.shown_value(i, id, spec);
     let unset = value.is_none();
     let key = format!("{id}/{}", spec.key);
     let finding = app.m.finding.get(&i).copied();
@@ -1457,7 +1457,7 @@ pub struct TestSend {
 /// while the settings are locked.
 fn send_test(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, info: &StepInfo) {
     let i = app.sel;
-    let get = |k: &str| info.params.iter().find(|s| s.key == k).and_then(|s| app.m.param(i, id, s).resolve(s.default.as_ref()));
+    let get = |k: &str| info.params.iter().find(|s| s.key == k).and_then(|s| app.m.value(i, id, s));
     let desktop = get("desktop").and_then(|v| v.as_bool()).unwrap_or(true);
     let server = get("ntfy_server").map(|v| value_text(&v)).unwrap_or_default();
     let topic = get("ntfy_topic").map(|v| value_text(&v).trim().to_owned()).unwrap_or_default();
@@ -1529,8 +1529,8 @@ fn plain(ui: &mut Ui, p: &Pal, text: &str, label_id: egui::Id) {
 fn template_text(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, spec: &ParamSpec, label_id: egui::Id) {
     let i = app.sel;
     let snap = app.m.snapshot(i);
-    let stored = app.m.shown_param(i, id, spec).resolve(spec.default.as_ref()).map(|v| value_text(&v)).unwrap_or_else(|| template::DEFAULT.to_owned());
-    let n = names(files_of(app, &snap, id), &stored);
+    let stored = app.m.shown_value(i, id, spec).map(|v| value_text(&v)).unwrap_or_else(|| template::DEFAULT.to_owned());
+    let n = names(app, id, spec, &stored);
     plain(ui, p, n.preset.unwrap_or("Custom"), label_id);
     ui.label(RichText::new(&n.tpl).font(font(13.0, 400)).color(p.muted));
     ui.add_space(3.0);
@@ -1547,10 +1547,10 @@ fn example(app: &App, snap: &Snapshot, id: &str, files: Files, shown: &str, pres
         let one = template::render_video(shown, &film).display().to_string();
         return if preset == Some("Jellyfin") { format!("{one}\n{}", template::render_video(template::EPISODE_DEFAULT, &ep).display()) } else { one };
     }
-    if files == Files::Dumps {
+    if matches!(files, Files::Game | Files::Data) {
         let f = match ctx.as_ref().filter(|c| c.get(Subject::Disc, "label").is_some() || c.get(Subject::Disc, "name").is_some()) {
             Some(c) => dump_fields(c),
-            None => dump_sample(),
+            None => dump_sample(files),
         };
         format!("{}/", template::render_dump(shown, &f).display())
     } else {
@@ -1571,10 +1571,9 @@ fn template_field(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, spec: &ParamSpe
     // What it files decides its presets, tokens and example: disc images
     // name a folder from the dump's facts; tracks a path from the music's.
     let snap = app.m.snapshot(i);
-    let stored = app.m.param(i, id, spec).resolve(spec.default.as_ref()).map(|v| value_text(&v)).unwrap_or_else(|| template::DEFAULT.to_owned());
-    // As the step reads it: a dump still on the music default uses the
-    // dump default; a video title the Jellyfin layout.
-    let Names { files, presets, tokens, preset, tpl } = names(files_of(app, &snap, id), &stored);
+    let stored = app.m.value(i, id, spec).map(|v| value_text(&v)).unwrap_or_else(|| template::DEFAULT.to_owned());
+    // As the step reads it: its own, or the default for what reaches it.
+    let Names { files, presets, tokens, preset, tpl } = names(app, id, spec, &stored);
     // The preset, or Custom.
     let combo = crate::widgets::combo((key, "preset"), p)
         .selected_text(preset.unwrap_or("Custom"))
@@ -2845,7 +2844,7 @@ fn place(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, v: &StepView, ctx
         return vec![];
     }
     // A video title: where it went, as the step says.
-    if fed_video(app, snap, v) {
+    if files_of(app, &id) == Files::Video {
         let list: Vec<Row> = v
             .items
             .iter()
@@ -2866,9 +2865,9 @@ fn place(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, v: &StepView, ctx
     }
     // A disc image goes into a folder its template names, its files as
     // they were made.
-    if fed_dumps(app, snap, v) {
+    if matches!(files_of(app, &id), Files::Game | Files::Data) {
         let names = names_of(app, i, &id);
-        let folder = ctx.map(dump_fields).map(|f| template::render_dump(drt_steps::real::data::dump_template(&names), &f).display().to_string()).unwrap_or_default();
+        let folder = ctx.map(dump_fields).map(|f| template::render_dump(&names, &f).display().to_string()).unwrap_or_default();
         let list: Vec<Row> = v
             .items
             .iter()
@@ -2949,8 +2948,8 @@ fn hold(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, v: &StepView, ctx:
         None => (None, String::new(), None),
     };
     // Disc images wait in a folder their template names, not as tracks.
-    let dumps = before.is_some_and(|pv| fed_dumps(app, snap, pv));
-    let dump_dir = if dumps { names.as_ref().zip(ctx).map(|(t, c)| template::render_dump(drt_steps::real::data::dump_template(t), &dump_fields(c)).display().to_string()) } else { None };
+    let dumps = before.is_some() && matches!(files_of(app, &pred), Files::Game | Files::Data);
+    let dump_dir = if dumps { names.as_ref().zip(ctx).map(|(t, c)| template::render_dump(t, &dump_fields(c)).display().to_string()) } else { None };
     let names = if dumps { None } else { names };
     let path_of = |n: u32, label: &str| names.as_ref().map(|t| template::render(t, &fields(ctx, n, label)));
     // Where they wait, once above the rows: the folder before, and the
@@ -3020,7 +3019,7 @@ fn names_of(app: &App, i: usize, id: &str) -> String {
     app.m
         .info(i, id)
         .and_then(|inf| inf.params.iter().find(|s| s.key == "names").cloned())
-        .and_then(|s| app.m.shown_param(i, id, &s).resolve(s.default.as_ref()))
+        .and_then(|s| app.m.shown_value(i, id, &s))
         .map(|v| value_text(&v))
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| template::DEFAULT.to_owned())
@@ -3045,60 +3044,10 @@ fn fields(ctx: Option<&Context>, n: u32, fallback_title: &str) -> template::Fiel
     }
 }
 
-/// Whether a folder step is fed disc images rather than tracks: what's
-/// upstream of it works on dumps.
-fn fed_dumps(app: &App, snap: &Snapshot, v: &StepView) -> bool {
-    let reg = &app.m.engine.registry;
-    let mut cur = v;
-    for _ in 0..snap.steps.len() {
-        let Some(pred) = cur.preds.first().and_then(|x| snap.steps.get(x)) else { return false };
-        if let Some(info) = reg.info(&pred.step) {
-            if info.input == drt_engine::ItemKind::Dump || info.output == drt_engine::ItemKind::Dump {
-                return true;
-            }
-            if info.input == drt_engine::ItemKind::Track {
-                return false;
-            }
-        }
-        cur = pred;
-    }
-    false
-}
-
-/// Whether a step is fed video titles (from a Rip of a video disc, through
-/// Transcode or Remux).
-fn fed_video(app: &App, snap: &Snapshot, v: &StepView) -> bool {
-    let reg = &app.m.engine.registry;
-    let mut cur = v;
-    for _ in 0..snap.steps.len() {
-        let Some(pred) = cur.preds.first().and_then(|x| snap.steps.get(x)) else { return false };
-        if let Some(info) = reg.info(&pred.step) {
-            if info.input == drt_engine::ItemKind::Title || info.output == drt_engine::ItemKind::Title {
-                return true;
-            }
-            if matches!(info.input, drt_engine::ItemKind::Track | drt_engine::ItemKind::Dump) {
-                return false;
-            }
-        }
-        cur = pred;
-    }
-    false
-}
-
-/// What a Folder's names are for.
-#[derive(Clone, Copy, PartialEq)]
-enum Files {
-    Music,
-    Dumps,
-    Video,
-}
-
-fn files_of(app: &App, snap: &Snapshot, id: &str) -> Files {
-    match snap.steps.get(id) {
-        Some(v) if fed_dumps(app, snap, v) => Files::Dumps,
-        Some(v) if fed_video(app, snap, v) => Files::Video,
-        _ => Files::Music,
-    }
+/// What a Folder's names are for: what reaches it, as its step says
+/// ([`template::Files::of`]); tracks where that could be anything.
+fn files_of(app: &App, id: &str) -> Files {
+    app.m.shown_flow(app.sel, id).as_ref().and_then(Files::of).unwrap_or(Files::Music)
 }
 
 /// A Folder's names: its presets and tokens, the preset it's on (or
@@ -3111,28 +3060,23 @@ struct Names {
     tpl: String,
 }
 
-fn names(files: Files, stored: &str) -> Names {
-    match files {
-        Files::Dumps => {
-            let stored = drt_steps::real::data::dump_template(stored).to_owned();
-            let tpl = template::resolve(&stored).to_owned();
-            let preset = template::DUMP_PRESETS.iter().find(|(l, t)| *l == stored || *t == tpl).map(|(l, _)| *l);
-            Names { files, presets: template::DUMP_PRESETS, tokens: template::DUMP_TOKENS, preset, tpl }
-        }
-        Files::Video => {
-            // "Jellyfin" is a layout of its own: a film's or an episode's,
-            // by what the title is. Shown as the film's.
-            let preset = template::VIDEO_PRESETS.iter().find(|(l, t)| *l == stored || *t == stored).map(|(l, _)| *l);
-            let raw = template::VIDEO_PRESETS.iter().find(|(l, _)| *l == stored).map_or(stored, |(_, t)| *t);
-            let tpl = template::video_template(raw, false).to_owned();
-            Names { files, presets: template::VIDEO_PRESETS, tokens: template::VIDEO_TOKENS, preset, tpl }
-        }
-        Files::Music => {
-            let tpl = template::resolve(stored).to_owned();
-            let preset = template::PRESETS.iter().find(|(l, t)| *l == stored || *t == tpl).map(|(l, _)| *l);
-            Names { files, presets: template::PRESETS, tokens: template::TOKENS, preset, tpl }
-        }
-    }
+/// `value`: the names in effect, as [`Model::value`] reads them, so a
+/// Folder still on another kind's old default shows its own.
+fn names(app: &App, id: &str, spec: &ParamSpec, value: &str) -> Names {
+    let files = files_of(app, id);
+    let fitted = spec.fitted(app.m.shown_flow(app.sel, id).as_ref()).unwrap_or_else(|| files.fitted());
+    let (presets, tokens) = (fitted.presets, fitted.tokens);
+    let stored = template::renamed(value);
+    let tpl = if files == Files::Video {
+        // "Jellyfin" is a layout of its own: a film's or an episode's, by
+        // what the title is. Shown as the film's.
+        let raw = presets.iter().find(|(l, _)| *l == stored).map_or(stored, |(_, t)| *t);
+        template::video_template(raw, false).to_owned()
+    } else {
+        template::resolve(stored).to_owned()
+    };
+    let preset = presets.iter().find(|(l, t)| *l == stored || *t == stored || (files != Files::Video && *t == tpl)).map(|(l, _)| *l);
+    Names { files, presets, tokens, preset, tpl }
 }
 
 /// A sample film, and a sample episode, for a video template's example.
@@ -3160,8 +3104,12 @@ fn dump_fields(c: &Context) -> template::DumpFields {
     template::DumpFields { name, label, system: get("system"), date: template::today(), size: if bytes > 0 { drt_steps::real::media::size(bytes) } else { String::new() } }
 }
 
-/// A disc image to show an example folder with when there's none yet.
-fn dump_sample() -> template::DumpFields {
+/// A disc image to show an example folder with when there's none yet: a
+/// game's for a game.
+fn dump_sample(files: Files) -> template::DumpFields {
+    if files == Files::Game {
+        return template::DumpFields { name: "Colony Wars (Europe) (Disc 1)".into(), label: "SLES_008.60".into(), system: "PlayStation".into(), date: template::today(), size: "680 MB".into() };
+    }
     template::DumpFields { name: "Encarta 98 Encyclopedia (USA) (Disc 1)".into(), label: "ENCARTA98".into(), system: "IBM PC".into(), date: template::today(), size: "650 MB".into() }
 }
 

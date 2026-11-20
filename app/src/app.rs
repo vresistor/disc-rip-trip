@@ -1319,7 +1319,8 @@ impl App {
         for (id, v) in &snap.steps {
             let Some(info) = self.m.info(i, id) else { continue };
             let sets: Vec<(&drt_engine::ParamSpec, Setting<serde_json::Value>)> = info.params.iter().map(|s| (s, self.m.shown_param(i, id, s))).collect();
-            let get = |k: &str| sets.iter().find(|(s, _)| s.key == k).and_then(|(s, set)| set.resolve(s.default.as_ref()));
+            let flow = self.m.shown_flow(i, id);
+            let get = |k: &str| sets.iter().find(|(s, _)| s.key == k).and_then(|(s, set)| s.resolve_at(set, flow.as_ref()));
             // Changed by you, from what the recipe came with.
             let yours = |k: &str| sets.iter().find(|(s, _)| s.key == k).is_some_and(|(s, _)| self.m.is_yours(i, id, s, builtin.as_ref()));
             let settings = sets

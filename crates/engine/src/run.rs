@@ -176,22 +176,24 @@ impl Engine {
     fn views(&self, recipe: &Recipe, g: &[GNode]) -> Snapshot {
         let drive = Self::drive_of(recipe);
         let settings = self.settings.lock().unwrap();
+        let flows = crate::check::flows_in(&recipe.root, &self.registry);
         let mut steps = BTreeMap::new();
         for n in g {
+            let flow = flows.get(&n.id);
             let info = self.registry.info(&n.step);
             let name = n.label.clone().or_else(|| info.as_ref().map(|i| i.name.to_owned())).unwrap_or_else(|| n.step.clone());
             let from = info
                 .as_ref()
                 .and_then(|i| {
                     let f = i.summary?;
-                    Some(f(&|key: &str| i.resolve_in(key, &n.params, &settings, &drive)))
+                    Some(f(&|key: &str| i.resolve_in(key, &n.params, &settings, &drive, flow)))
                 })
                 .or_else(|| {
                     info.as_ref().and_then(|i| {
                         let key = i.from_param?;
                         let spec = i.params.iter().find(|p| p.key == key)?;
                         let set = settings.lookup(spec, i.kind, &n.params, &drive);
-                        set.resolve(spec.default.as_ref()).map(|v| v.as_str().map(str::to_owned).unwrap_or(v.to_string()))
+                        spec.resolve_at(&set, flow).map(|v| v.as_str().map(str::to_owned).unwrap_or(v.to_string()))
                     })
                 })
                 .or_else(|| info.as_ref().map(|i| i.from.to_owned()))
@@ -293,6 +295,7 @@ impl Engine {
             }
         }
 
+        let mut flows = crate::check::flows_in(&recipe.root, &self.registry);
         let mut tasks: Vec<JoinHandle<()>> = Vec::new();
         for (i, n) in g.iter().enumerate().rev() {
             let (step, info) = self.registry.get(&n.step).expect("checked above");
@@ -303,6 +306,7 @@ impl Engine {
                 shared: shared.clone(),
                 info,
                 params: Arc::new(n.params.clone()),
+                flow: flows.remove(&n.id).map(Arc::new),
                 retries: Arc::new(tokio::sync::Mutex::new(retry_rx)),
                 arrived: Arc::default(),
                 tray_seen: Arc::default(),

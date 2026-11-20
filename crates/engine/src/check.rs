@@ -249,6 +249,30 @@ pub fn flow_after(root: &Node, id: &str, reg: &Registry) -> Option<Flow> {
     find(root, Flow::start(), id, reg).err().flatten()
 }
 
+/// What arrives at each step, by id, as far as the tree checks: what a
+/// setting that follows its step's input goes by.
+pub fn flows_in(root: &Node, reg: &Registry) -> std::collections::HashMap<String, Flow> {
+    fn go(node: &Node, given: Flow, reg: &Registry, out: &mut std::collections::HashMap<String, Flow>) -> Option<Flow> {
+        match node {
+            Node::Step { id, step, .. } => {
+                let after = reg.info(step).filter(|i| given.fits(i)).map(|i| given.after(&i));
+                out.insert(id.clone(), given);
+                after
+            }
+            Node::Chain { nodes } => nodes.iter().try_fold(given, |f, n| go(n, f, reg, out)),
+            Node::Branches { branches } => {
+                let outs: Vec<Option<Flow>> = branches.iter().map(|b| go(b, given.clone(), reg, out)).collect();
+                let outs = outs.into_iter().collect::<Option<Vec<_>>>()?;
+                (!outs.is_empty()).then(|| Flow::join(&outs))
+            }
+            Node::Group { body, .. } => go(body, given, reg, out),
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    go(root, Flow::start(), reg, &mut out);
+    out
+}
+
 /// The kind of item arriving after the step `id`.
 pub fn kind_after(root: &Node, id: &str, reg: &Registry) -> Option<ItemKind> {
     flow_after(root, id, reg).map(|f| f.kind)
