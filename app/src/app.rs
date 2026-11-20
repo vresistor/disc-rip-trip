@@ -94,7 +94,7 @@ pub struct App {
     pub cues: HashMap<String, (StepState, f64)>,
     /// The +s that would offer nothing, for the tree they were worked out
     /// on: they aren't drawn.
-    dead_pluses: Option<(drt_engine::Node, std::collections::HashSet<String>)>,
+    dead_pluses: Option<(drt_engine::Node, std::collections::HashSet<drt_engine::Spot>)>,
     /// The top band this frame (the list's top row, the header), and the
     /// title field in it when editing, for `chrome::band`.
     band: Vec<Rect>,
@@ -1171,7 +1171,7 @@ impl App {
             Some(Tray::Question { step }) => Some(step.clone()),
             None => self.selected.clone(),
         };
-        let plus_open = self.popover.as_ref().map(|p| p.after.clone());
+        let plus_open = self.popover.as_ref().map(|p| p.at.clone());
         let editing = self.editing && !self.m.running(i);
         crate::tray::take_covers(self, ui.ctx());
         let cards = self.cards(ui.ctx(), snap);
@@ -1183,7 +1183,7 @@ impl App {
         };
         if editing && self.dead_pluses.as_ref().is_none_or(|(root, _)| *root != self.m.recipes[i].root) {
             let root = self.m.recipes[i].root.clone();
-            let dead = root.ids().into_iter().filter(|id| self.m.placements_after(i, id).is_empty()).map(str::to_owned).collect();
+            let dead = self.m.spots(i).into_iter().filter(|at| self.m.offers(i, at).is_empty()).collect();
             self.dead_pluses = Some((root, dead));
         }
         let none = std::collections::HashSet::new();
@@ -1191,7 +1191,8 @@ impl App {
         let view = self.views.entry(i).or_insert(View { zoom: 1.0, pan: canvas::MARGIN });
         // The window's bottom-right corner is the sidebar's while it's out.
         let round = if self.side_w >= 1.0 { 0.0 } else { self.round };
-        let marks = Marks { open: open.as_deref(), editing, plus_open: plus_open.as_deref(), doomed: &doomed, round, cues: &self.cues, dead, cards: &cards, t };
+        let root = self.m.recipes[i].root.clone();
+        let marks = Marks { open: open.as_deref(), editing, plus_open: plus_open.as_ref(), doomed: &doomed, round, cues: &self.cues, dead, cards: &cards, t, root: &root };
         let before = *view;
         let clicked = canvas::show(ui, rect, view, &lay, snap, p, marks);
         // A drag or a scroll takes the camera back from a glide.
@@ -1205,14 +1206,14 @@ impl App {
                 self.close_tray();
                 self.selected = None;
             }
-            Some(Click::Plus(after)) => {
-                if plus_open.as_deref() == Some(after.as_str()) {
+            Some(Click::Plus(at)) => {
+                if plus_open.as_ref() == Some(&at) {
                     self.popover = None;
                 } else {
                     // After a fork, a new branch is what you'd want.
-                    let branch = self.m.fork_after(self.sel, &after);
+                    let branch = self.m.forks_at(self.sel, &at);
                     let v = self.views_of(i);
-                    self.popover = Some(crate::popover::Popover::new(after, branch, (v.zoom, v.pan)));
+                    self.popover = Some(crate::popover::Popover::new(at, branch, (v.zoom, v.pan)));
                     self.selected = None;
                 }
             }

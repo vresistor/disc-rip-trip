@@ -136,8 +136,9 @@ change. Colours still change.
 The built-in *Archive everything* is the recipe we design for: four
 lookups side by side, two lookups after Choose, three outputs, a branch
 inside a branch (Library to NAS, Backup, a cue sheet and `.lrc` files
-beside it), a named group (*For the phone*: Opus, ReplayGain, Phone),
-and one step joining all the outputs at the end (*Notify*). At 1280 × 720,
+beside it), a line for the phone (Opus, ReplayGain, Phone), and one
+step joining all the outputs at the end (*Notify*). (It had the phone's
+line in a named group; the editor can't make groups yet, so it doesn't.) At 1280 × 720,
 *Fit to window* shows all of it, small.
 
 Its layout is the same tree as the engine's: a sequence lays its parts
@@ -241,7 +242,15 @@ its verdict, and the retries the step offers. Filters across the top
   Rip, Check, Make, Save to, Notify), each with its icon and what it does. Arrow
   keys and Enter work. A + where the line splits adds a new branch
   beside the others; anywhere else it continues the line. A + between
-  two tiles inserts there. There's no drag and drop.
+  two tiles inserts there. Where branches come together there's a + too,
+  on the wires where they meet (or, with nothing after them yet, where
+  lines drawn in from each meet): what's added there waits for all of
+  them and gets everything they found. A step that fits both in line and
+  beside what follows has a small *Beside* (or *In line*) button on its
+  row for the other way, so two Folders can sit side by side. There's no
+  drag and drop.
+- **Every built-in recipe can be made this way**, from its first step,
+  one + at a time; a test rebuilds each one so.
 - **The + offers only what can go there** (see *What follows what*). A +
   that would offer nothing isn't drawn.
 - **Click a tile to change its settings**, or to remove it. The sidebar

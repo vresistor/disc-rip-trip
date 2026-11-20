@@ -2192,7 +2192,7 @@ fn a_step_goes_between_two_tiles_from_the_plus_on_their_seam() {
     // accessible name rather than where it is drawn.
     h.get_by_label("Add between FLAC and Review").click_accesskit();
     h.run_steps(2);
-    assert!(app(&h).popover.as_ref().is_some_and(|p| p.after == "flac" && !p.branch));
+    assert!(app(&h).popover.as_ref().is_some_and(|p| p.at == drt_engine::Spot::After("flac".into()) && !p.branch));
     // Offered: exactly what, put there in line, leaves the recipe checking.
     let i = app(&h).sel;
     let want: Vec<String> = app(&h).m.placements_after(i, "flac").into_iter().filter(|(_, inline, _)| *inline).map(|(info, _, _)| info.name.to_owned()).collect();
@@ -4045,4 +4045,171 @@ fn open_tray_from_the_drive_and_from_rip_mid_read() {
     shot(&mut h, "sidebar-rip-tray-opened");
     click(&mut h, "Read them all again");
     until(&mut h, "all read", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Bad) == 0 && a.m.snapshot(0).steps["rip"].count(ItemState::Ok) == 17);
+}
+
+/// Puts the view at `zoom` with the + labelled `plus` at the canvas's
+/// middle, a little left so its menu has room on the right.
+fn look_at_join(h: &mut Harness<Window>, plus: &str, zoom: f32) {
+    let a = app(h);
+    let (i, lay, c) = (a.sel, a.layout(a.sel), a.canvas_rect());
+    let root = a.m.recipes[i].root.clone();
+    let snap = a.m.snapshot(i);
+    let j = lay.joins.iter().find(|j| drt_app::popover::join_title(&root, &j.path, &snap) == plus).unwrap_or_else(|| panic!("no + {plus}"));
+    let want = egui::vec2(c.width() * 0.4, c.height() * 0.45);
+    app_mut(h).set_view(i, (zoom, want - egui::vec2(j.at.0, j.at.1) * zoom));
+    h.run_steps(2);
+}
+
+/// The name the registry gives a step kind, as its tile and the + list show it.
+fn step_name(h: &Harness<Window>, kind: &str) -> &'static str {
+    app(h).m.engine.registry.info(kind).unwrap_or_else(|| panic!("no step {kind}")).name
+}
+
+/// Opens the + with this label and picks `kind` from its list.
+fn add_with_plus(h: &mut Harness<Window>, plus: &str, kind: &str) {
+    h.get_by_label(plus).click_accesskit();
+    h.run_steps(2);
+    let name = step_name(h, kind);
+    h.get_all_by_role(Role::ListItem).find(|n| n.accesskit_node().label().as_deref() == Some(name)).unwrap_or_else(|| panic!("{name} isn't offered by {plus}")).click_accesskit();
+    h.run_steps(3);
+}
+
+#[test]
+fn branches_meet_at_a_plus_and_what_goes_there_gets_all_of_them() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    click(&mut h, "Edit");
+    // CDs: the lookups meet at Choose, with a + where their wires arrive.
+    look_at_join(&mut h, "Add after MusicBrainz and CD-Text, before Choose", 0.7);
+    // A real click: it sits on Choose's edge, and must take the click.
+    h.get_by_label("Add after MusicBrainz and CD-Text, before Choose").click();
+    h.run_steps(2);
+    let offered: Vec<String> = h.get_all_by_role(Role::ListItem).filter_map(|n| n.accesskit_node().label()).collect();
+    // Beside Choose's line, nothing chosen yet: another Choose, a Rip, a Notify.
+    for name in ["Choose", "Rip", "Notify"] {
+        assert!(offered.iter().any(|o| o == name), "{name} in {offered:?}");
+    }
+    shot(&mut h, "join-plus-lookups");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    // FLAC's, MP3's and Next disc's lines end with nothing after them: a +
+    // where lines from each meet, for something after all three.
+    look_at_join(&mut h, "Add after FLAC, MP3 and Next disc", 0.6);
+    shot(&mut h, "join-plus-cd-end");
+    h.get_by_label("Add after FLAC, MP3 and Next disc").click_accesskit();
+    h.run_steps(2);
+    assert!(app(&h).popover.as_ref().is_some_and(|p| matches!(p.at, drt_engine::Spot::Join(_))));
+    let offered: Vec<String> = h.get_all_by_role(Role::ListItem).filter_map(|n| n.accesskit_node().label()).filter(|l| !l.contains(", ")).collect();
+    assert_eq!(offered, ["Notify"], "only what takes what all three give");
+    shot(&mut h, "join-plus-cd");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    // The archive: an inner set (NAS, Backup…) and the outer, at Notify.
+    click(&mut h, "Cancel");
+    h.get_by_label_contains("Archive everything, Ready").click();
+    h.run_steps(2);
+    click(&mut h, "Edit");
+    // The copies after the FLAC library meet Notify with MP3's and the
+    // phone's lines; their own + is in the gap, and shows which it follows.
+    let inner = "Add after NAS, Backup and 3 more";
+    look_at_join(&mut h, inner, 0.6);
+    shot(&mut h, "join-plus-archive-closed");
+    h.get_by_label(inner).click();
+    h.run_steps(2);
+    shot(&mut h, "join-plus-archive");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.get_by_label("Add after FLAC, MP3 and Opus, before Notify");
+}
+
+/// A PS1 recipe made by hand, one + at a time: checked against Redump,
+/// filed, its LibCrypt protection file and its playlist side by side, then
+/// one Notify once both are done; and the tray opened for the next disc.
+#[test]
+fn a_ps1_recipe_is_built_by_hand_with_its_side_by_side_steps_joined() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    click(&mut h, "New recipe");
+    h.event(egui::Event::Text("PlayStation".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    pick_drive(&mut h, recipes::BLU_RAY);
+    let n = |h: &Harness<Window>, k: &str| step_name(h, k);
+    for (after, kind) in [("drive", "game-disc"), ("game-disc", "game-rip"), ("game-rip", "check"), ("check", "redump"), ("redump", "game-choose"), ("game-choose", "chd"), ("chd", "folder")] {
+        let plus = format!("Add after {}", n(&h, after));
+        add_with_plus(&mut h, &plus, kind);
+    }
+    // Where to file it: the folder picker is the system's, so set directly.
+    let i = app(&h).sel;
+    app_mut(&mut h).m.set_param(i, "folder", "folder", Value::from("~/Games")).unwrap();
+    app_mut(&mut h).m.set_param(i, "folder", "names", Value::from("{system}/{name}")).unwrap();
+    let plus = format!("Add after {}", n(&h, "folder"));
+    add_with_plus(&mut h, &plus, "libcrypt");
+    // The playlist beside the protection file, not after it: both fit in
+    // line, so its row has a button for the other way.
+    let (folder, sbi, m3u) = (n(&h, "folder"), n(&h, "libcrypt"), n(&h, "m3u"));
+    click(&mut h, "Fit to window");
+    h.get_by_label(&format!("Add between {folder} and {sbi}")).click_accesskit();
+    h.run_steps(2);
+    shot(&mut h, "ps1-beside");
+    // A real click: the button sits on the row, and must take the click.
+    h.get_by_label(&format!("Add {m3u} beside {sbi}")).click();
+    h.run_steps(3);
+    // Where they meet, one Notify after both.
+    let join = format!("Add after {sbi} and {m3u}");
+    look_at_join(&mut h, &join, 0.6);
+    h.get_by_label(&join).click();
+    h.run_steps(2);
+    shot(&mut h, "ps1-join-plus");
+    h.get_all_by_role(Role::ListItem).find(|x| x.accesskit_node().label().as_deref() == Some(n(&h, "tell"))).unwrap().click_accesskit();
+    h.run_steps(3);
+    // And the tray opened once it's chosen: beside CHD's line.
+    let plus = format!("Add between {} and {}", n(&h, "game-choose"), n(&h, "chd"));
+    add_with_plus(&mut h, &plus, "next-disc");
+    let r = app(&h).m.recipes[i].clone();
+    use drt_engine::recipe::{branches, chain};
+    let want = chain([
+        Node::step("drive", "drive"),
+        Node::step("gamedisc", "game-disc"),
+        Node::step("gamerip", "game-rip"),
+        Node::step("check", "check"),
+        Node::step("redump", "redump"),
+        Node::step("gamechoose", "game-choose"),
+        branches([
+            chain([Node::step("chd", "chd"), Node::step("folder", "folder"), branches([Node::step("libcrypt", "libcrypt"), Node::step("m3u", "m3u")]), Node::step("tell", "tell")]),
+            Node::step("nextdisc", "next-disc"),
+        ]),
+    ]);
+    fn shape(n: &Node) -> Node {
+        match n {
+            Node::Step { id, step, .. } => Node::step(id, step),
+            Node::Chain { nodes } => {
+                let mut v = vec![];
+                for n in nodes.iter().map(shape) {
+                    match n {
+                        Node::Chain { nodes } => v.extend(nodes),
+                        n => v.push(n),
+                    }
+                }
+                if v.len() == 1 {
+                    v.pop().unwrap()
+                } else {
+                    Node::Chain { nodes: v }
+                }
+            }
+            Node::Branches { branches } => Node::Branches { branches: branches.iter().map(shape).collect() },
+            Node::Group { name, body } => Node::Group { name: name.clone(), body: Box::new(shape(body)) },
+        }
+    }
+    assert_eq!(shape(&r.root), shape(&want), "{:#?}", r.root);
+    drt_engine::check(&r.root, &app(&h).m.engine.registry).unwrap();
+    click(&mut h, "Fit to window");
+    shot(&mut h, "ps1-canvas");
+    let met = format!("{join}, before {}", n(&h, "tell"));
+    look_at_join(&mut h, &met, 0.45);
+    shot(&mut h, "ps1-canvas-near");
+    click(&mut h, "Save");
+    assert!(app(&h).m.cant_start(i).is_none(), "{:?}", app(&h).m.cant_start(i));
+    shot(&mut h, "ps1-saved");
 }

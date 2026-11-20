@@ -117,6 +117,34 @@ impl Wire {
     }
 }
 
+/// Where a + goes where a set of branches comes together, to add a step
+/// that gets everything from all of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JoinPlace {
+    /// The branches' path in the recipe (`Spot::Join`).
+    pub path: Vec<usize>,
+    /// Where the + goes: where the wires out of the branches meet, at the
+    /// left edge of what follows them; with nothing after them, in the gap
+    /// after them, level with their middle.
+    pub at: (f32, f32),
+    /// Where each branch ends, and its wire out leaves.
+    pub from: Vec<(f32, f32)>,
+    /// Whether wires already leave the branches' ends. If not, the + is
+    /// shown with lines from each end into it.
+    pub met: bool,
+}
+
+impl JoinPlace {
+    /// The lines from each branch's end into the +: straight along, then
+    /// a curve over the last half gap, as the wires into a step run.
+    pub fn lines_in(&self, gap: f32) -> Vec<Wire> {
+        let mut out = Layout::default();
+        let from: Vec<_> = self.from.iter().map(|p| (*p, String::new())).collect();
+        wire_all(&from, &[(self.at, String::new())], gap / 2.0, &mut out);
+        out.wires
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Layout {
     pub width: f32,
@@ -130,6 +158,9 @@ pub struct Layout {
     /// Where a + goes between two tiles of a strip when editing, by the id
     /// of the tile on its left: on the seam between them, half way down.
     pub seams: Vec<(String, (f32, f32))>,
+    /// Where a + goes after each set of branches, outermost first where
+    /// two end together.
+    pub joins: Vec<JoinPlace>,
     /// Lines from a step that ends the disc back into the first tile, for
     /// the next disc: down from the step, along under everything, and up
     /// into the start. Corner points, in order; the last is the arrow's tip.
@@ -169,21 +200,8 @@ impl Layout {
 pub fn layout_with_loops(root: &Node, m: Metrics, loops_back: impl Fn(&str) -> bool) -> Layout {
     // A branch that leads back to the start is drawn last of its siblings,
     // so its line back runs under the others rather than through them.
-    fn last(n: &Node, f: &dyn Fn(&str) -> bool) -> Node {
-        let leads_back = |n: &Node| n.ids().into_iter().any(f);
-        match n {
-            Node::Chain { nodes } => Node::Chain { nodes: nodes.iter().map(|n| last(n, f)).collect() },
-            Node::Branches { branches } => {
-                let mut bs: Vec<Node> = branches.iter().map(|n| last(n, f)).collect();
-                bs.sort_by_key(|b| leads_back(b));
-                Node::Branches { branches: bs }
-            }
-            Node::Group { name, body } => Node::Group { name: name.clone(), body: Box::new(last(body, f)) },
-            step => step.clone(),
-        }
-    }
-    let root = last(root, &loops_back);
-    let mut l = layout(&root, m);
+    let leads_back = |n: &Node| n.ids().into_iter().any(&loops_back);
+    let mut l = layout_ordered(root, m, &leads_back);
     let ids: Vec<String> = l.tiles.iter().map(|t| t.id.clone()).filter(|id| loops_back(id)).collect();
     for id in ids {
         l.loop_back(&id);
@@ -192,10 +210,17 @@ pub fn layout_with_loops(root: &Node, m: Metrics, loops_back: impl Fn(&str) -> b
 }
 
 pub fn layout(root: &Node, m: Metrics) -> Layout {
-    let unit = Unit::of(root);
+    layout_ordered(root, m, &|_| false)
+}
+
+/// The layout, with the branches `last` picks drawn after their siblings.
+fn layout_ordered(root: &Node, m: Metrics, last: &dyn Fn(&Node) -> bool) -> Layout {
+    let unit = Unit::of(root, vec![], last);
     let (w, h) = unit.size(&m);
     let mut out = Layout { width: w + m.gap, height: h, ..Default::default() };
     unit.place(0.0, 0.0, &m, &mut out);
+    // Outermost first, as the recipe has them.
+    out.joins.sort_by(|a, b| a.path.len().cmp(&b.path.len()).then(a.path.cmp(&b.path)));
     out
 }
 
@@ -203,7 +228,8 @@ pub fn layout(root: &Node, m: Metrics) -> Layout {
 enum Unit<'a> {
     Strip(Vec<&'a str>),
     Seq(Vec<Unit<'a>>),
-    Par(Vec<Unit<'a>>),
+    /// Branches, and their path in the recipe.
+    Par(Vec<Unit<'a>>, Vec<usize>),
     Group(&'a str, Box<Unit<'a>>),
 }
 
@@ -211,16 +237,24 @@ enum Unit<'a> {
 struct Ends {
     ins: Vec<((f32, f32), String)>,
     outs: Vec<((f32, f32), String)>,
+    /// Sets of branches ending here, by index in `joins`, outermost last:
+    /// their wires meet at whatever follows.
+    open: Vec<usize>,
 }
 
 impl<'a> Unit<'a> {
-    fn of(n: &'a Node) -> Unit<'a> {
+    fn of(n: &'a Node, path: Vec<usize>, last: &dyn Fn(&Node) -> bool) -> Unit<'a> {
+        let at = |k: usize| {
+            let mut p = path.clone();
+            p.push(k);
+            p
+        };
         match n {
             Node::Step { id, .. } => Unit::Strip(vec![id]),
             Node::Chain { nodes } => {
                 let mut units: Vec<Unit> = Vec::new();
-                for n in nodes {
-                    match (Unit::of(n), units.last_mut()) {
+                for (k, n) in nodes.iter().enumerate() {
+                    match (Unit::of(n, at(k), last), units.last_mut()) {
                         (Unit::Strip(ids), Some(Unit::Strip(prev))) => prev.extend(ids),
                         (u, _) => units.push(u),
                     }
@@ -231,8 +265,12 @@ impl<'a> Unit<'a> {
                     Unit::Seq(units)
                 }
             }
-            Node::Branches { branches } => Unit::Par(branches.iter().map(Unit::of).collect()),
-            Node::Group { name, body } => Unit::Group(name, Box::new(Unit::of(body))),
+            Node::Branches { branches } => {
+                let mut bs: Vec<(usize, &Node)> = branches.iter().enumerate().collect();
+                bs.sort_by_key(|(_, b)| last(b));
+                Unit::Par(bs.into_iter().map(|(k, b)| Unit::of(b, at(k), last)).collect(), path)
+            }
+            Node::Group { name, body } => Unit::Group(name, Box::new(Unit::of(body, at(0), last))),
         }
     }
 
@@ -243,7 +281,7 @@ impl<'a> Unit<'a> {
                 let s: Vec<_> = us.iter().map(|u| u.size(m)).collect();
                 (s.iter().map(|x| x.0).sum::<f32>() + m.gap * (s.len() as f32 - 1.0), s.iter().map(|x| x.1).fold(0.0, f32::max))
             }
-            Unit::Par(us) => {
+            Unit::Par(us, _) => {
                 let s: Vec<_> = us.iter().map(|u| u.size(m)).collect();
                 (s.iter().map(|x| x.0).fold(0.0, f32::max), s.iter().map(|x| x.1).sum::<f32>() + m.vgap * (s.len() as f32 - 1.0))
             }
@@ -274,34 +312,64 @@ impl<'a> Unit<'a> {
                 }
                 // On the strip's right edge, like the seams between tiles.
                 out.pluses.push((ids[n - 1].to_owned(), (x + w, mid)));
-                Ends { ins: vec![((x, mid), ids[0].to_owned())], outs: vec![((x + w, mid), ids[n - 1].to_owned())] }
+                Ends { ins: vec![((x, mid), ids[0].to_owned())], outs: vec![((x + w, mid), ids[n - 1].to_owned())], open: vec![] }
             }
             Unit::Seq(us) => {
                 let (_, h) = self.size(m);
                 let mut cx = x;
                 let mut first: Option<Vec<((f32, f32), String)>> = None;
                 let mut last: Option<Vec<((f32, f32), String)>> = None;
+                let mut open: Vec<usize> = vec![];
                 for u in us {
                     let (uw, uh) = u.size(m);
                     let e = u.place(cx, y + (h - uh) / 2.0, m, out);
                     if let Some(outs) = &last {
                         wire_all(outs, &e.ins, m.gap, out);
+                        // The wires out of the branches before meet here:
+                        // the outermost's + goes where they arrive.
+                        for &j in &open {
+                            out.joins[j].met = true;
+                        }
+                        if let (Some(&j), [(to, _)]) = (open.last(), e.ins.as_slice()) {
+                            out.joins[j].at = *to;
+                        }
                     }
                     first.get_or_insert(e.ins);
                     last = Some(e.outs);
+                    open = e.open;
                     cx += uw + m.gap;
                 }
-                Ends { ins: first.unwrap_or_default(), outs: last.unwrap_or_default() }
+                Ends { ins: first.unwrap_or_default(), outs: last.unwrap_or_default(), open }
             }
-            Unit::Par(us) => {
+            Unit::Par(us, path) => {
                 let mut cy = y;
-                let mut e = Ends { ins: vec![], outs: vec![] };
+                let mut e = Ends { ins: vec![], outs: vec![], open: vec![] };
                 for u in us {
                     let (_, uh) = u.size(m);
                     let r = u.place(x, cy, m, out);
                     e.ins.extend(r.ins);
                     e.outs.extend(r.outs);
+                    e.open.extend(r.open);
                     cy += uh + m.vgap;
+                }
+                let (w, h) = self.size(m);
+                let from: Vec<(f32, f32)> = e.outs.iter().map(|o| o.0).collect();
+                // In the gap after them, level with their middle; but not on
+                // top of the + at the end of a branch reaching that far: then
+                // half way between that branch and the next.
+                let mut at = (x + w + m.gap / 2.0, y + h / 2.0);
+                if let Some(k) = from.iter().position(|f| (f.1 - at.1).abs() < 1.0 && at.0 - f.0 < m.gap) {
+                    let ys: Vec<f32> = from.iter().map(|f| f.1).collect();
+                    let other = ys.iter().copied().filter(|&v| v > ys[k]).fold(None, |b: Option<f32>, v| Some(b.map_or(v, |b| b.min(v))));
+                    let other = other.or_else(|| ys.iter().copied().filter(|&v| v < ys[k]).fold(None, |b: Option<f32>, v| Some(b.map_or(v, |b| b.max(v)))));
+                    if let Some(o) = other {
+                        at.1 = (ys[k] + o) / 2.0;
+                    }
+                }
+                // One branch left alone is just a line: its own + will do.
+                if us.len() > 1 {
+                    out.joins.push(JoinPlace { path: path.clone(), at, from, met: false });
+                    e.open.push(out.joins.len() - 1);
                 }
                 e
             }
@@ -320,7 +388,12 @@ impl<'a> Unit<'a> {
                 if let Some(p) = r.outs.last() {
                     wire_all(std::slice::from_ref(p), &[((x + w, oy), last.clone())], 0.0, out);
                 }
-                Ends { ins: vec![((x, iy), first)], outs: vec![((x + w, oy), last)] }
+                // Branches ending inside the box: their + stays inside it.
+                for &j in &r.open {
+                    let (jx, _) = out.joins[j].at;
+                    out.joins[j].at.0 = jx.min(x + w - m.group_pad / 2.0);
+                }
+                Ends { ins: vec![((x, iy), first)], outs: vec![((x + w, oy), last)], open: vec![] }
             }
         }
     }
@@ -413,7 +486,7 @@ mod tests {
             assert_eq!(w.to, (to.x, to.mid_y()), "{}", w.to_step);
         }
         // A group's edge wires name the step inside.
-        let a = layout(&recipes::archive().root, Metrics::default());
+        let a = layout(&grouped(), Metrics::default());
         assert!(a.wires.iter().all(|w| a.tile(&w.from_step).is_some() && a.tile(&w.to_step).is_some()));
     }
 
@@ -448,15 +521,87 @@ mod tests {
         assert!(l.height > plain.height);
     }
 
+    /// The archive recipe with its phone line in a named group.
+    fn grouped() -> Node {
+        use drt_engine::recipe::group;
+        let mut root = recipes::archive().root;
+        let Node::Chain { nodes } = &mut root else { panic!() };
+        let Some(Node::Branches { branches }) = nodes.iter_mut().rev().find(|n| matches!(n, Node::Branches { .. })) else { panic!() };
+        let phone = branches.pop().unwrap();
+        branches.push(group("For the phone", phone));
+        root
+    }
+
     #[test]
-    fn the_most_complex_recipe_has_its_group_and_its_join() {
+    fn the_most_complex_recipe_has_its_join_and_a_group_draws_round_its_steps() {
         let l = layout(&recipes::archive().root, Metrics::default());
+        let tell = l.tile("a_tell").unwrap().rect;
+        let into_tell = l.wires.iter().filter(|w| w.to == (tell.x, tell.mid_y())).count();
+        assert_eq!(into_tell, 7, "NAS, Backup, the cue sheet, the .lrc files, the scans, MP3's library and the phone");
+        let l = layout(&grouped(), Metrics::default());
         assert_eq!(l.groups.len(), 1);
         assert_eq!(l.groups[0].name, "For the phone");
         let tell = l.tile("a_tell").unwrap().rect;
-        let into_tell = l.wires.iter().filter(|w| w.to == (tell.x, tell.mid_y())).count();
-        assert_eq!(into_tell, 7, "NAS, Backup, the cue sheet, the .lrc files, the scans, MP3's library and the phone group");
+        assert_eq!(l.wires.iter().filter(|w| w.to == (tell.x, tell.mid_y())).count(), 7, "the group's wire for the phone");
         let phone = l.tile("a_ph").unwrap().rect;
         assert!(l.groups[0].rect.right() > phone.right());
+    }
+
+    #[test]
+    fn each_set_of_branches_has_a_plus_where_its_wires_meet() {
+        let m = Metrics::default();
+        let l = layout(&recipes::cd().root, m);
+        // The lookups meet at Choose: the + sits on Choose's left edge,
+        // where their wires arrive.
+        let choose = l.tile("choose").unwrap().rect;
+        let lookups = l.joins.iter().find(|j| j.path == [2]).unwrap();
+        assert_eq!(lookups.at, (choose.x, choose.mid_y()));
+        assert!(lookups.met);
+        assert_eq!(lookups.from.len(), 2);
+        // Nothing after FLAC's, MP3's and Next disc's lines yet: a + in the
+        // gap after them, level with their middle, with lines drawn in.
+        let end = l.joins.iter().find(|j| j.path == [6]).unwrap();
+        assert!(!end.met);
+        assert_eq!(end.from.len(), 3);
+        let right = l.tiles.iter().map(|t| t.rect.right()).fold(0.0, f32::max);
+        assert_eq!(end.at.0, right + m.gap / 2.0);
+        assert!(end.at.0 < l.width);
+        assert_eq!(end.lines_in(m.gap).len(), 3);
+        assert!(end.lines_in(m.gap).iter().all(|w| w.to == end.at));
+        // In the archive, two sets of branches end in the same gap: the
+        // outer one's + is at Notify, the inner one's in the gap.
+        let a = layout(&recipes::archive().root, m);
+        let tell = a.tile("a_tell").unwrap().rect;
+        let (outer, inner) = (&a.joins.iter().find(|j| j.path == [6]).unwrap(), &a.joins.iter().find(|j| j.path.len() > 2).unwrap());
+        assert_eq!(outer.at, (tell.x, tell.mid_y()));
+        assert!(inner.met && inner.at != outer.at && inner.at.0 < tell.x);
+        // Not on the + at the end of the cue sheet's line, level with it:
+        // half way down to the next.
+        let cue = a.tile("a_cue").unwrap().rect;
+        let lrc = a.tile("a_lrc").unwrap().rect;
+        assert_eq!(inner.at.1, (cue.mid_y() + lrc.mid_y()) / 2.0);
+    }
+
+    #[test]
+    fn a_plus_after_branches_knows_them_by_their_place_in_the_recipe_however_they_are_drawn() {
+        use drt_engine::recipe::{branches, chain};
+        let m = Metrics::default();
+        // Next disc listed first is drawn last; the inner branches are still
+        // the recipe's second branch's second part.
+        let root = chain([
+            Node::step("d", "drive"),
+            Node::step("r", "rip"),
+            branches([Node::step("next", "next-disc"), chain([Node::step("f", "flac"), branches([Node::step("a", "folder"), Node::step("b", "folder")])])]),
+        ]);
+        let l = layout_with_loops(&root, m, |id| id == "next");
+        let paths: Vec<&[usize]> = l.joins.iter().map(|j| j.path.as_slice()).collect();
+        assert_eq!(paths, [&[2][..], &[2, 1, 1][..]]);
+        for j in &l.joins {
+            assert!(matches!(root.at(&j.path), Some(Node::Branches { .. })));
+        }
+        // One branch left, after the others were removed: just a line, no +.
+        let root = chain([Node::step("d", "drive"), branches([chain([Node::step("f", "flac"), Node::step("g", "folder")])])]);
+        assert!(layout(&root, m).joins.is_empty());
+        assert!(root.joins().is_empty());
     }
 }

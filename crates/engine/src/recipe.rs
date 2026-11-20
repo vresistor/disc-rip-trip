@@ -85,6 +85,170 @@ impl Node {
     }
 }
 
+/// Where a + is: after a step, or where a set of branches comes
+/// together. What's added after a join gets everything from every branch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Spot {
+    /// After the step with this id.
+    After(String),
+    /// After the branches at this path: from the root, the index of each
+    /// part of a chain, each branch, and 0 for a group's body.
+    Join(Vec<usize>),
+}
+
+impl Node {
+    fn kids(&self) -> &[Node] {
+        match self {
+            Node::Step { .. } => &[],
+            Node::Chain { nodes: v } | Node::Branches { branches: v } => v,
+            Node::Group { body, .. } => std::slice::from_ref(&**body),
+        }
+    }
+
+    fn kid_mut(&mut self, k: usize) -> Option<&mut Node> {
+        match self {
+            Node::Step { .. } => None,
+            Node::Chain { nodes: v } | Node::Branches { branches: v } => v.get_mut(k),
+            Node::Group { body, .. } => (k == 0).then_some(&mut **body),
+        }
+    }
+
+    /// The node at this path (see [`Spot::Join`]).
+    pub fn at(&self, path: &[usize]) -> Option<&Node> {
+        path.iter().try_fold(self, |n, &k| n.kids().get(k))
+    }
+
+    fn at_mut(&mut self, path: &[usize]) -> Option<&mut Node> {
+        path.iter().try_fold(self, |n, &k| n.kid_mut(k))
+    }
+
+    /// The path to the step `id`.
+    pub fn path_of(&self, id: &str) -> Option<Vec<usize>> {
+        match self {
+            Node::Step { id: x, .. } => (x == id).then(Vec::new),
+            n => n.kids().iter().enumerate().find_map(|(k, c)| {
+                let mut p = c.path_of(id)?;
+                p.insert(0, k);
+                Some(p)
+            }),
+        }
+    }
+
+    /// Every set of two or more branches, by path, outermost first. (One
+    /// left alone, after the others were removed, is just a line.)
+    pub fn joins(&self) -> Vec<Vec<usize>> {
+        fn go(n: &Node, path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+            if matches!(n, Node::Branches { branches } if branches.len() > 1) {
+                out.push(path.clone());
+            }
+            for (k, c) in n.kids().iter().enumerate() {
+                path.push(k);
+                go(c, path, out);
+                path.pop();
+            }
+        }
+        let mut out = vec![];
+        go(self, &mut vec![], &mut out);
+        out
+    }
+
+    /// The steps that end this node: its last step, or the last of each
+    /// branch.
+    pub fn ends(&self) -> Vec<&str> {
+        match self {
+            Node::Step { id, .. } => vec![id.as_str()],
+            Node::Chain { nodes } => nodes.last().map(Node::ends).unwrap_or_default(),
+            Node::Branches { branches } => branches.iter().flat_map(Node::ends).collect(),
+            Node::Group { body, .. } => body.ends(),
+        }
+    }
+
+    /// The steps that start this node: its first step, or the first of
+    /// each branch.
+    pub fn starts(&self) -> Vec<&str> {
+        match self {
+            Node::Step { id, .. } => vec![id.as_str()],
+            Node::Chain { nodes } => nodes.first().map(Node::starts).unwrap_or_default(),
+            Node::Branches { branches } => branches.iter().flat_map(Node::starts).collect(),
+            Node::Group { body, .. } => body.starts(),
+        }
+    }
+
+    /// The path of what a spot follows: the step, or the branches.
+    fn spot_path(&self, at: &Spot) -> Option<Vec<usize>> {
+        match at {
+            Spot::After(id) => self.path_of(id),
+            Spot::Join(p) => matches!(self.at(p), Some(Node::Branches { .. })).then(|| p.clone()),
+        }
+    }
+
+    /// What comes next on the line after a spot, if anything: going out
+    /// of any chain it ends, as far as the chain around it.
+    pub fn next_at(&self, at: &Spot) -> Option<&Node> {
+        let mut path = self.spot_path(at)?;
+        while let Some(k) = path.pop() {
+            match self.at(&path)? {
+                Node::Chain { nodes } if k + 1 < nodes.len() => return Some(&nodes[k + 1]),
+                Node::Chain { .. } | Node::Group { .. } => {}
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// Whether the line splits straight after this spot: a fork, where a
+    /// new step goes beside the branches.
+    pub fn forks_at(&self, at: &Spot) -> bool {
+        let Some(mut path) = self.spot_path(at) else { return false };
+        let Some(k) = path.pop() else { return false };
+        matches!(self.at(&path), Some(Node::Chain { nodes }) if matches!(nodes.get(k + 1), Some(Node::Branches { .. })))
+    }
+
+    /// Puts `new` at a spot: in line, straight after what's there, or
+    /// `beside` what follows it on a line of its own. After a join, in
+    /// line, it gets everything from every branch, and goes in front of
+    /// whatever already followed them. False if there's no such spot.
+    pub fn add_at(&mut self, at: &Spot, new: Node, beside: bool) -> bool {
+        let path = match at {
+            Spot::After(id) if beside => return self.add_branch_after(id, new),
+            Spot::After(id) => return self.insert_after(id, new),
+            Spot::Join(p) => p,
+        };
+        if !matches!(self.at(path), Some(Node::Branches { .. })) {
+            return false;
+        }
+        let Some((&k, up)) = path.split_last() else {
+            // The whole recipe is these branches.
+            let me = std::mem::replace(self, Node::Chain { nodes: vec![] });
+            *self = Node::Chain { nodes: vec![me, new] };
+            return true;
+        };
+        match self.at_mut(up) {
+            Some(Node::Chain { nodes }) => {
+                match nodes.get_mut(k + 1) {
+                    Some(Node::Branches { branches }) if beside => branches.push(new),
+                    Some(_) if beside => {
+                        let mut rest: Vec<Node> = nodes.drain(k + 1..).collect();
+                        let rest = if rest.len() == 1 { rest.pop().unwrap() } else { Node::Chain { nodes: rest } };
+                        nodes.push(Node::Branches { branches: vec![rest, new] });
+                    }
+                    _ => nodes.insert(k + 1, new),
+                }
+                true
+            }
+            // A branch, or a group, that is these branches: a chain of them
+            // and the new step.
+            Some(parent) => {
+                let slot = parent.kid_mut(k).unwrap();
+                let me = std::mem::replace(slot, Node::Chain { nodes: vec![] });
+                *slot = Node::Chain { nodes: vec![me, new] };
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 impl Recipe {
     /// Brings a recipe saved by an older version up to date: a step that
     /// was marked to hold becomes a Hold step in front of it. Gives whether

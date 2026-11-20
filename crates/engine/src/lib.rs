@@ -15,11 +15,11 @@ pub mod setting;
 pub mod snapshot;
 pub mod step;
 
-pub use check::{check, first_misfit, fits, fits_flow, flow_after, kind_after, CheckError, Flow};
+pub use check::{check, first_misfit, fits, fits_flow, flow_after, kind_after, offers, placements, CheckError, Flow, Offer};
 pub use context::{Candidate, Context, Fact, Subject};
 pub use item::{Item, ItemKind};
 pub use lanes::LaneKind;
-pub use recipe::{Node, Recipe};
+pub use recipe::{Node, Recipe, Spot};
 pub use run::{cache_dir, Engine, Run};
 pub use setting::{ParamKind, ParamSpec, Scope, Setting, Settings, HELP_MAX};
 pub use snapshot::{Answer, Choice, Command, Decision, ItemChoice, ItemState, ItemView, Made, Question, QuestionShape, Snapshot, StepState, StepView};

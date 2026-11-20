@@ -4,7 +4,7 @@
 
 use crate::app::{App, Tray};
 use crate::theme::{font, kind_icon, mix, Pal};
-use drt_engine::{Group, StepInfo};
+use drt_engine::{Group, Node, Snapshot, Spot, StepInfo};
 use egui::{pos2, vec2, Color32, Key, Rect, RichText, Sense, Stroke, Ui};
 
 pub const WIDTH: f32 = 320.0;
@@ -13,8 +13,8 @@ pub const MAX_HEIGHT: f32 = 420.0;
 /// An open popover.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Popover {
-    /// The step whose strip the + follows.
-    pub after: String,
+    /// Where its + is: after a step, or where branches meet.
+    pub at: Spot,
     pub search: String,
     /// Whether it adds a branch: a + where the line splits does; any other
     /// continues the line.
@@ -27,8 +27,8 @@ pub struct Popover {
 }
 
 impl Popover {
-    pub fn new(after: String, branch: bool, view: (f32, egui::Vec2)) -> Popover {
-        Popover { after, search: String::new(), branch, sel: 0, view, focused: false }
+    pub fn new(at: Spot, branch: bool, view: (f32, egui::Vec2)) -> Popover {
+        Popover { at, search: String::new(), branch, sel: 0, view, focused: false }
     }
 }
 
@@ -38,6 +38,59 @@ struct Opt<'a> {
     /// Where it goes: the way this + places things if it fits so, else
     /// the other way (a second encoder after Rip goes beside the first).
     branch: bool,
+    /// It fits the other way too, differently: a small button on its row
+    /// puts it so (a second Folder beside the first, not after it).
+    other: bool,
+}
+
+/// Names in a list: "A", "A and B", "A, B and C".
+fn and_list(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// What a + where branches meet says: what it comes after, and what it
+/// goes in front of. "Add after MusicBrainz and CD-Text, before Choose".
+pub fn join_title(root: &Node, path: &[usize], snap: &Snapshot) -> String {
+    let Some(node) = root.at(path) else { return "Add".into() };
+    let name = |id: &str| snap.steps.get(id).map_or(id.to_owned(), |v| v.name.clone());
+    let Node::Branches { branches } = node else { return "Add".into() };
+    // By the step that ends each line, else (two Libraries, or a line
+    // that splits again) the one that starts it; past three, the first
+    // two and how many more.
+    let list = |ids: Vec<&str>| {
+        let names: Vec<String> = ids.into_iter().map(name).collect();
+        let unique = names.iter().enumerate().all(|(k, n)| !names[..k].contains(n));
+        unique.then(|| few(&names))
+    };
+    let ends: Option<Vec<&str>> = branches.iter().map(|b| if let [one] = b.ends()[..] { Some(one) } else { None }).collect();
+    let starts: Option<Vec<&str>> = branches.iter().map(|b| b.starts().first().copied()).collect();
+    let what = ends.and_then(list).or_else(|| starts.and_then(list)).unwrap_or_else(|| format!("all {} lines", branches.len()));
+    match next_names(root, &Spot::Join(path.to_vec()), snap) {
+        Some(next) => format!("Add after {what}, before {next}"),
+        None => format!("Add after {what}"),
+    }
+}
+
+/// The steps that come next after a spot, by name: "Choose", "FLAC, MP3
+/// and Next disc".
+fn next_names(root: &Node, at: &Spot, snap: &Snapshot) -> Option<String> {
+    let next = root.next_at(at)?;
+    let names: Vec<String> = next.starts().into_iter().map(|id| snap.steps.get(id).map_or(id.to_owned(), |v| v.name.clone())).collect();
+    Some(few(&names))
+}
+
+/// Up to three names in a list; past three, the first two and how many
+/// more: "NAS, Backup and 3 more".
+fn few(names: &[String]) -> String {
+    if names.len() > 3 {
+        format!("{} and {} more", names[..2].join(", "), names.len() - 2)
+    } else {
+        and_list(names)
+    }
 }
 
 /// What it'll do: a step's own words, else its settings summed up.
@@ -55,7 +108,11 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     let ctx = ui.ctx().clone();
     // Anchored to its +, in screen space; the canvas moving closes it.
     let v = app.views_of(i);
-    let Some(&(_, (px, py))) = lay.pluses.iter().chain(&lay.seams).find(|(id, _)| *id == pop.after) else {
+    let anchor = match &pop.at {
+        Spot::After(after) => lay.pluses.iter().chain(&lay.seams).find(|(id, _)| id == after).map(|p| p.1),
+        Spot::Join(path) => lay.joins.iter().find(|j| j.path == *path).map(|j| j.at),
+    };
+    let Some((px, py)) = anchor else {
         app.popover = None;
         return;
     };
@@ -64,11 +121,18 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
         return;
     }
     let plus = canvas.min + v.pan + vec2(px, py) * v.zoom;
+    let snap = app.m.snapshot(i);
+    let root = app.m.recipes[i].root.clone();
     // On a seam: the tile it goes in front of.
-    let between = lay.seams.iter().any(|(id, _)| *id == pop.after).then(|| {
-        let next = lay.tiles.iter().position(|t| t.id == pop.after).and_then(|k| lay.tiles.get(k + 1)).map(|t| t.id.clone()).unwrap_or_default();
-        app.m.snapshot(i).steps.get(&next).map_or(next, |v| v.name.clone())
-    });
+    let between = match &pop.at {
+        Spot::After(after) => lay.seams.iter().any(|(id, _)| id == after).then(|| {
+            let next = lay.tiles.iter().position(|t| t.id == *after).and_then(|k| lay.tiles.get(k + 1)).map(|t| t.id.clone()).unwrap_or_default();
+            snap.steps.get(&next).map_or(next, |v| v.name.clone())
+        }),
+        Spot::Join(_) => None,
+    };
+    // What a step put the other way would go beside, or in front of.
+    let next = next_names(&root, &pop.at, &snap).unwrap_or_default();
     let plus_r = 13.0 * v.zoom;
     // A click anywhere else closes it (the + itself toggles it).
     let outside = ctx.input(|inp| inp.pointer.any_pressed() && inp.pointer.interact_pos().is_some_and(|at| !app.popover_rect.contains(at) && at.distance(plus) > plus_r + 2.0));
@@ -93,12 +157,12 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     // The options: everything that checks here, placed as this + places
     // things (a branch where the line splits, in line anywhere else) if it
     // fits so, else the other way; filtered by the search.
-    let placements = app.m.placements_after(i, &pop.after);
+    let offers = app.m.offers(i, &pop.at);
     let needle = pop.search.to_lowercase();
-    let mut opts: Vec<Opt> = placements
+    let mut opts: Vec<Opt> = offers
         .iter()
-        .filter(|(info, _, _)| needle.is_empty() || info.name.to_lowercase().contains(&needle) || describe(info).to_lowercase().contains(&needle))
-        .map(|&(info, inline, br)| Opt { info, branch: if pop.branch { br } else { !inline } })
+        .filter(|o| needle.is_empty() || o.info.name.to_lowercase().contains(&needle) || describe(o.info).to_lowercase().contains(&needle))
+        .map(|o| Opt { info: o.info, branch: o.beside, other: o.other })
         .collect();
     opts.sort_by_key(|o| (o.info.group as u8, o.info.name));
     if down && !opts.is_empty() {
@@ -121,7 +185,10 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     }
     let x = x.clamp(canvas.left() + 8.0, (canvas.right() - 8.0 - WIDTH).max(canvas.left() + 8.0));
     let y = (plus.y - 44.0).clamp(canvas.top() + 8.0, (canvas.bottom() - 8.0 - h).max(canvas.top() + 8.0));
-    let name = app.m.snapshot(i).steps.get(&pop.after).map(|v| v.name.clone()).unwrap_or_default();
+    let name = match &pop.at {
+        Spot::After(id) => snap.steps.get(id).map(|v| v.name.clone()).unwrap_or_default(),
+        Spot::Join(_) => String::new(),
+    };
     let moved = down || up;
 
     let area = egui::Area::new(ui.scope_id().with("plus-popover")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).constrain(false).show(&ctx, |ui| {
@@ -137,9 +204,10 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
                 // Header: what this adds after, and how.
                 egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 10, top: 10, bottom: 8 }).show(ui, |ui| {
                     ui.set_width(WIDTH - 24.0);
-                    let title = match &between {
-                        Some(next) => format!("Add between {name} and {next}"),
-                        None => format!("Add after {name}"),
+                    let title = match (&pop.at, &between) {
+                        (Spot::Join(path), _) => join_title(&root, path, &snap),
+                        (_, Some(next)) => format!("Add between {name} and {next}"),
+                        (_, None) => format!("Add after {name}"),
                     };
                     ui.label(RichText::new(title).font(font(13.5, 600)));
                     ui.add_space(8.0);
@@ -194,13 +262,34 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
                         }
                         pt.extend(kind_icon(o.info.kind, pos2(r.left() + 14.0, r.top() + 6.0), 16.0, p.kind(o.info.kind)));
                         pt.text(pos2(r.left() + 40.0, r.top() + 4.0), egui::Align2::LEFT_TOP, o.info.name, font(13.5, 500), p.ink);
+                        // The other way, as a small button at the row's end.
+                        let other = o.other.then(|| {
+                            let (word, said) = if o.branch { ("In line", format!("Add {} in line, before {next}", o.info.name)) } else { ("Beside", format!("Add {} beside {next}", o.info.name)) };
+                            let g = pt.layout_no_wrap(word.to_owned(), font(12.0, 500), p.muted);
+                            let b = Rect::from_min_size(pos2(r.right() - 14.0 - g.size().x - 16.0, r.center().y - 11.0), vec2(g.size().x + 16.0, 22.0));
+                            (b, g, said)
+                        });
+                        let right = other.as_ref().map_or(r.right() - 16.0, |(b, _, _)| b.left() - 8.0);
                         let mut job = egui::text::LayoutJob::single_section(describe(o.info), egui::TextFormat::simple(font(12.0, 400), p.muted));
-                        job.wrap = egui::text::TextWrapping::truncate_at_width(WIDTH - 56.0);
+                        job.wrap = egui::text::TextWrapping::truncate_at_width(right - r.left() - 40.0);
                         pt.galley(pos2(r.left() + 40.0, r.top() + 22.0), pt.layout_job(job), p.muted);
+                        if let Some((b, g, said)) = other {
+                            let resp = ui.interact(b, ui.scope_id().with(("other-way", o.info.kind)), Sense::click());
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &said));
+                            let hov = resp.hovered();
+                            let (fill, fg, line) = if hov { (mix(p.action, 0.12, p.raised), p.action, p.action) } else { (p.raised, p.muted, p.line) };
+                            let pt = ui.painter();
+                            pt.rect(b, 11.0, fill, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+                            pt.galley(b.center() - g.size() / 2.0, g, fg);
+                            let resp = resp.on_hover_text(&said);
+                            if resp.clicked() {
+                                chosen = Some((o.info.kind, !o.branch));
+                            }
+                        }
                         if on && moved {
                             ui.scroll_to_rect(r, None);
                         }
-                        if resp.clicked() {
+                        if resp.clicked() && chosen.is_none() {
                             chosen = Some((o.info.kind, o.branch));
                         }
                     }
@@ -215,7 +304,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     // Adding: the sidebar opens only if the new step needs something set.
     if let Some((kind, as_branch)) = chosen {
         app.popover = None;
-        match app.m.insert_after(i, &pop.after, kind, as_branch) {
+        match app.m.add(i, &pop.at, kind, as_branch) {
             Ok(new) => {
                 let focus = app.m.engine.missing(&app.m.recipes[i]).into_iter().find(|m| m.step == new).map(|m| m.key.to_owned());
                 match focus {

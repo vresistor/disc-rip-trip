@@ -3,7 +3,7 @@
 //! size, text included, so zooming scales the whole picture uniformly.
 
 use crate::theme::{font, kind_icon, mix, Pal};
-use drt_engine::{Snapshot, StepState};
+use drt_engine::{Snapshot, Spot, StepState};
 use drt_layout::Layout;
 use egui::epaint::{CubicBezierShape, PathShape, RectShape};
 use egui::{pos2, vec2, Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
@@ -68,8 +68,8 @@ impl View {
 /// What was clicked on the canvas.
 pub enum Click {
     Tile(String),
-    /// The + after the strip ending in this step.
-    Plus(String),
+    /// A +: after a strip, on a seam, or where branches meet.
+    Plus(Spot),
     /// The canvas itself, away from any tile.
     Empty,
 }
@@ -80,7 +80,7 @@ pub struct Marks<'a> {
     pub open: Option<&'a str>,
     /// Show a + after every strip, and which one's picker is open.
     pub editing: bool,
-    pub plus_open: Option<&'a str>,
+    pub plus_open: Option<&'a Spot>,
     /// Tiles a Remove would take with it, marked in red.
     pub doomed: &'a [String],
     /// The window's corner radius, for the canvas's bottom-right corner.
@@ -88,13 +88,15 @@ pub struct Marks<'a> {
     /// One-shot cues playing: a tile that just finished, failed or asked,
     /// with the state it turned to and when.
     pub cues: &'a std::collections::HashMap<String, (StepState, f64)>,
-    /// Steps after which nothing could be added: no + there.
-    pub dead: &'a std::collections::HashSet<String>,
+    /// Where nothing could be added: no + there.
+    pub dead: &'a std::collections::HashSet<Spot>,
     /// What each card shows besides its step's view: its settings, its
     /// cover.
     pub cards: &'a std::collections::HashMap<String, CardExtra>,
     /// The clock the animations run on, in seconds.
     pub t: f64,
+    /// The recipe drawn, for what each + says.
+    pub root: &'a drt_engine::Node,
 }
 
 /// What a card shows that isn't in its step's view.
@@ -328,7 +330,8 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
     }
     // The + after each strip, while editing.
     if marks.editing {
-        for (id, (x, y)) in lay.pluses.iter().filter(|(id, _)| !marks.dead.contains(id)) {
+        let after = |id: &str| Spot::After(id.to_owned());
+        for (id, (x, y)) in lay.pluses.iter().filter(|(id, _)| !marks.dead.contains(&after(id))) {
             let c = at(*x, *y);
             let name = snap.steps.get(id).map_or(id.clone(), |v| {
                 // Two strips ending in a Library: say which, by its folder.
@@ -342,18 +345,41 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
             let hit = Rect::from_center_size(c, vec2(26.0, 26.0) * z);
             let resp = ui.interact(hit, ui.scope_id().with(("plus", id)), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, format!("Add after {name}")));
-            let on = marks.plus_open == Some(id.as_str());
-            let (fill, fg, line) = if on { (p.action, p.action_ink, p.action) } else { (p.raised, p.muted, p.line) };
-            let fill = if resp.hovered() && !on { mix(p.ink, 0.05, fill) } else { fill };
-            painter.circle(c, 13.0 * z, fill, Stroke::new(1.5 * z, line));
-            painter.extend(kind_icon("plus", c - vec2(8.0, 8.0) * z, 16.0 * z, fg));
-            if resp.clicked() {
-                click = Some(Click::Plus(id.clone()));
+            if plus(&painter, c, z, p, &resp, marks.plus_open == Some(&after(id))) {
+                click = Some(Click::Plus(after(id)));
+            }
+        }
+        // Where branches meet, a + to add what gets everything from all of
+        // them: on the wires where they arrive, or, with nothing after them
+        // yet, at the end of lines drawn in from each.
+        for j in lay.joins.iter() {
+            let spot = Spot::Join(j.path.clone());
+            if marks.dead.contains(&spot) {
+                continue;
+            }
+            let c = at(j.at.0, j.at.1);
+            let hit = Rect::from_center_size(c, vec2(26.0, 26.0) * z);
+            let resp = ui.interact(hit, ui.scope_id().with(("join", &j.path)), Sense::click());
+            let open = marks.plus_open == Some(&spot);
+            // Lines in from each branch's end: always where no wire meets
+            // it yet; else, while it's pointed at or open, to show which
+            // branches it follows.
+            if !j.met || open || resp.hovered() {
+                let col = if j.met { mix(p.action, 0.7, p.surface) } else { mix(p.faint, 0.6, p.surface) };
+                for w in j.lines_in(drt_layout::Metrics::default().gap) {
+                    let pts: Vec<Pos2> = w.points(24).into_iter().map(|(x, y)| at(x, y)).collect();
+                    painter.extend(Shape::dashed_line(&pts, Stroke::new(2.0 * z, col), 6.0 * z, 6.0 * z));
+                }
+            }
+            let label = crate::popover::join_title(marks.root, &j.path, snap);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &label));
+            if plus(&painter, c, z, p, &resp, open) {
+                click = Some(Click::Plus(spot));
             }
         }
         // A smaller, quieter + on each seam inside a strip, to put a step
         // between two: it adds in line after the tile on its left.
-        for (id, (x, y)) in lay.seams.iter().filter(|(id, _)| !marks.dead.contains(id)) {
+        for (id, (x, y)) in lay.seams.iter().filter(|(id, _)| !marks.dead.contains(&after(id))) {
             let c = at(*x, *y);
             let name_of = |id: &str| snap.steps.get(id).map_or(id.to_owned(), |v| v.name.clone());
             let right = lay.tiles.iter().position(|t| t.id == *id).and_then(|k| lay.tiles.get(k + 1)).map(|t| name_of(&t.id)).unwrap_or_default();
@@ -361,7 +387,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
             let resp = ui.interact(hit, ui.scope_id().with(("seam", id)), Sense::click());
             let label = format!("Add between {} and {right}", name_of(id));
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &label));
-            let on = marks.plus_open == Some(id.as_str());
+            let on = marks.plus_open == Some(&after(id));
             let (fill, fg, line) = if on {
                 (p.action, p.action_ink, p.action)
             } else if resp.hovered() {
@@ -372,7 +398,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
             painter.circle(c, 8.5 * z, fill, Stroke::new(1.0 * z, line));
             painter.extend(kind_icon("plus", c - vec2(5.5, 5.5) * z, 11.0 * z, fg));
             if resp.clicked() {
-                click = Some(Click::Plus(id.clone()));
+                click = Some(Click::Plus(after(id)));
             }
         }
     }
@@ -381,6 +407,17 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
         click = Some(Click::Empty);
     }
     click
+}
+
+/// A + after a strip or where branches meet: a circle with a plus, filled
+/// in the action colour while its menu is open. Gives whether it was
+/// clicked.
+fn plus(painter: &egui::Painter, c: Pos2, z: f32, p: &Pal, resp: &egui::Response, on: bool) -> bool {
+    let (fill, fg, line) = if on { (p.action, p.action_ink, p.action) } else { (p.raised, p.muted, p.line) };
+    let fill = if resp.hovered() && !on { mix(p.ink, 0.05, fill) } else { fill };
+    painter.circle(c, 13.0 * z, fill, Stroke::new(1.5 * z, line));
+    painter.extend(kind_icon("plus", c - vec2(8.0, 8.0) * z, 16.0 * z, fg));
+    resp.clicked()
 }
 
 /// A polyline with its corners rounded to `r` (less where a leg is short),

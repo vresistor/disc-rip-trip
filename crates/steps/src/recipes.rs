@@ -1,6 +1,6 @@
 //! The built-in recipes.
 
-use drt_engine::recipe::{branches, chain, group};
+use drt_engine::recipe::{branches, chain};
 use drt_engine::{Node, Recipe};
 
 /// The simulated drives. The built-in recipes read from these; on real
@@ -38,8 +38,9 @@ pub fn cd() -> Recipe {
 }
 
 /// The most complex recipe we design for: four lookups, two after Choose,
-/// four outputs, a branch inside a branch, a named group, and a join at the
-/// end.
+/// four outputs, a branch inside a branch, and a join at the end. (No
+/// named group: the editor can't make one yet, and every built-in recipe
+/// can be made in the editor.)
 pub fn archive() -> Recipe {
     Recipe {
         name: "Archive everything".into(),
@@ -66,7 +67,7 @@ pub fn archive() -> Recipe {
                     ]),
                 ]),
                 chain([Node::step("a_mp3", "mp3"), Node::step("a_mlib", "folder").labelled("Library").with("folder", "~/Music/MP3")]),
-                group("For the phone", chain([Node::step("a_opus", "opus"), Node::step("a_rg", "replaygain"), Node::step("a_ph", "folder").labelled("Phone").with("folder", "~/Sync/Phone")])),
+                chain([Node::step("a_opus", "opus"), Node::step("a_rg", "replaygain"), Node::step("a_ph", "folder").labelled("Phone").with("folder", "~/Sync/Phone")]),
             ]),
             Node::step("a_tell", "tell"),
         ]),

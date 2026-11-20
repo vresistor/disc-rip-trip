@@ -11,7 +11,7 @@
 //! Cover art can't come before Choose (it needs the release).
 
 use crate::item::ItemKind;
-use crate::recipe::Node;
+use crate::recipe::{Node, Spot};
 use crate::step::{Registry, StepInfo};
 use std::collections::BTreeSet;
 use std::fmt;
@@ -153,6 +153,72 @@ pub fn fits_flow<'a>(flow: &Flow, reg: &'a Registry) -> Vec<&'a StepInfo> {
 pub fn fits(given: ItemKind, reg: &Registry) -> Vec<&StepInfo> {
     let mut v: Vec<_> = reg.infos().filter(|i| i.input.accepts(given) && i.input != ItemKind::Nothing).collect();
     v.sort_by_key(|i| (i.group as u8, i.name));
+    v
+}
+
+/// One step a + offers, and how clicking it places it.
+#[derive(Clone, Copy, Debug)]
+pub struct Offer<'a> {
+    pub info: &'a StepInfo,
+    /// Where a click puts it: beside what follows, on a line of its own,
+    /// where the line already splits there (or where only that fits); in
+    /// line anywhere else.
+    pub beside: bool,
+    /// It also fits the other way, and that makes a different recipe: the
+    /// + offers that too.
+    pub other: bool,
+}
+
+impl Offer<'_> {
+    /// The ways this offer can be placed: the click's, then the other.
+    pub fn ways(&self) -> Vec<bool> {
+        if self.other {
+            vec![self.beside, !self.beside]
+        } else {
+            vec![self.beside]
+        }
+    }
+}
+
+/// Every step that fits at a spot, with whether it checks in line and
+/// beside what follows. A step that fits neither way isn't listed.
+pub fn placements<'a>(root: &Node, at: &Spot, reg: &'a Registry) -> Vec<(&'a StepInfo, bool, bool)> {
+    trials(root, at, reg).into_iter().map(|(info, a, b)| (info, a.is_some(), b.is_some())).collect()
+}
+
+/// What a + at this spot offers: the same for the window as for anything
+/// that builds a recipe the way it does.
+pub fn offers<'a>(root: &Node, at: &Spot, reg: &'a Registry) -> Vec<Offer<'a>> {
+    let fork = root.forks_at(at);
+    trials(root, at, reg)
+        .into_iter()
+        .map(|(info, inline, beside)| {
+            let (first, second) = if fork { (beside, inline) } else { (inline, beside) };
+            match (first, second) {
+                (Some(x), Some(y)) => Offer { info, beside: fork, other: x != y },
+                (Some(_), None) => Offer { info, beside: fork, other: false },
+                _ => Offer { info, beside: !fork, other: false },
+            }
+        })
+        .collect()
+}
+
+/// Each step tried at a spot, in line and beside: the recipe it makes, if
+/// that checks. Sorted as the + lists them.
+fn trials<'a>(root: &Node, at: &Spot, reg: &'a Registry) -> Vec<(&'a StepInfo, Option<Node>, Option<Node>)> {
+    let mut v: Vec<_> = reg
+        .infos()
+        .filter(|i| i.input != ItemKind::Nothing)
+        .filter_map(|info| {
+            let trial = |beside| {
+                let mut t = root.clone();
+                (t.add_at(at, Node::step("__new", info.kind), beside) && check(&t, reg).is_ok()).then_some(t)
+            };
+            let (a, b) = (trial(false), trial(true));
+            (a.is_some() || b.is_some()).then_some((info, a, b))
+        })
+        .collect();
+    v.sort_by_key(|(i, _, _)| (i.group as u8, i.name));
     v
 }
 

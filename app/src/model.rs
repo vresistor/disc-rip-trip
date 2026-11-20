@@ -3,7 +3,7 @@
 
 use crate::store::Store;
 use anyhow::{anyhow, bail, Result};
-use drt_engine::{check, fits, kind_after, Command, Engine, ItemState, Node, ParamKind, ParamSpec, Recipe, Run, Scope, Setting, Settings, Snapshot, StepInfo, StepState};
+use drt_engine::{check, Command, Engine, ItemState, Node, ParamKind, ParamSpec, Recipe, Run, Scope, Setting, Settings, Snapshot, Spot, StepInfo, StepState};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -588,21 +588,9 @@ impl Model {
         self.runs.iter().find(|(&j, v)| self.drive(j) == drive && v.iter().any(|r| !r.snap.finished && !self.loops_back_done(Some(&r.snap)))).map(|(&j, _)| j)
     }
 
-    /// Whether branches follow the step `id` in its line: a fork.
-    pub fn fork_after(&self, i: usize, id: &str) -> bool {
-        fn find(n: &Node, id: &str) -> Option<bool> {
-            match n {
-                Node::Chain { nodes } => nodes
-                    .iter()
-                    .position(|n| matches!(n, Node::Step { id: x, .. } if x == id))
-                    .map(|k| matches!(nodes.get(k + 1), Some(Node::Branches { .. })))
-                    .or_else(|| nodes.iter().find_map(|n| find(n, id))),
-                Node::Branches { branches } => branches.iter().find_map(|n| find(n, id)),
-                Node::Group { body, .. } => find(body, id),
-                Node::Step { .. } => None,
-            }
-        }
-        find(&self.recipes[i].root, id).unwrap_or(false)
+    /// Whether the line splits straight after a spot: a fork.
+    pub fn forks_at(&self, i: usize, at: &Spot) -> bool {
+        self.recipes[i].root.forks_at(at)
     }
 
     /// The recipe as it is now: the shown run's snapshot, or how it looks
@@ -1204,32 +1192,38 @@ impl Model {
     /// Every step that can follow `after`, with whether it checks in line
     /// and as a new branch. A step that fits neither way isn't listed.
     pub fn placements_after(&self, i: usize, after: &str) -> Vec<(&StepInfo, bool, bool)> {
-        let reg = &self.engine.registry;
+        drt_engine::placements(&self.recipes[i].root, &Spot::After(after.to_owned()), &self.engine.registry)
+    }
+
+    /// What the + at a spot offers, and how a click places each.
+    pub fn offers(&self, i: usize, at: &Spot) -> Vec<drt_engine::Offer<'_>> {
+        drt_engine::offers(&self.recipes[i].root, at, &self.engine.registry)
+    }
+
+    /// Every spot a + can be: after each step, and after each set of
+    /// branches.
+    pub fn spots(&self, i: usize) -> Vec<Spot> {
         let root = &self.recipes[i].root;
-        let Some(kind) = kind_after(root, after, reg) else { return vec![] };
-        let fits_as = |info: &StepInfo, branch: bool| {
-            let mut trial = root.clone();
-            let new = Node::step("__new", info.kind);
-            let placed = if branch { trial.add_branch_after(after, new) } else { trial.insert_after(after, new) };
-            placed && check(&trial, reg).is_ok()
-        };
-        fits(kind, reg).into_iter().map(|info| (info, fits_as(info, false), fits_as(info, true))).filter(|(_, a, b)| *a || *b).collect()
+        root.ids().into_iter().map(|id| Spot::After(id.to_owned())).chain(root.joins().into_iter().map(Spot::Join)).collect()
     }
 
     /// Puts a new step of `kind` after `after`, if the recipe still checks.
     /// Gives the new step's id.
     pub fn insert_after(&mut self, i: usize, after: &str, kind: &str, branch: bool) -> Result<String> {
+        self.add(i, &Spot::After(after.to_owned()), kind, branch)
+    }
+
+    /// Puts a new step of `kind` at a spot, in line or `beside` what
+    /// follows, if the recipe still checks. Gives the new step's id.
+    pub fn add(&mut self, i: usize, at: &Spot, kind: &str, beside: bool) -> Result<String> {
         if self.ripping(i) {
             bail!("running");
         }
         let root = &self.recipes[i].root;
-        let ids = root.ids();
-        let base: String = kind.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-        let id = (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}{n}") }).find(|c| !ids.contains(&c.as_str())).unwrap();
+        let id = fresh_id(root, kind);
         let mut new = root.clone();
-        let placed = if branch { new.add_branch_after(after, Node::step(&id, kind)) } else { new.insert_after(after, Node::step(&id, kind)) };
-        if !placed {
-            bail!("no step {after}");
+        if !new.add_at(at, Node::step(&id, kind), beside) {
+            bail!("nowhere to add it");
         }
         check(&new, &self.engine.registry).map_err(|e| anyhow!(plain_misfit(&self.engine.registry, &new, &e)))?;
         let before = self.recipes[i].root.clone();
