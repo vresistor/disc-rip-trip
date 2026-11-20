@@ -4457,7 +4457,8 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
         } else {
             h.get_by_label("The disc, 682 MB not clean");
             h.get_by_label("25 sectors came back wrong");
-            h.get_by_label("25 bad sectors, most between 54% and 67%");
+            h.get_by_label("Most between 54% and 67% of the way through");
+            assert!(h.query_by_label_contains("25 bad sectors").is_none(), "the count is in the headline once");
         }
         shot(&mut h, &format!("rip-game-{word}{tag}"));
     }

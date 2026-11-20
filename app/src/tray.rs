@@ -3030,8 +3030,9 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     // The ring in the verdict's colour; but sectors found wrong, red
     // across it, are the verdict, and stand out only on a plain ring.
     let cell = if matches!(cell, crate::card::Cell::Bad | crate::card::Cell::Needs) && !map.wrong.is_empty() { crate::card::Cell::Done } else { cell };
-    let where_line = map_line(&map, sectors);
+    let where_line = map_line(&map, sectors, busy);
     let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
+    let shown = big.clone();
     ring_head(ui, p, &arcs, Some(&ticks), big, small, |ui, _| {
         if busy {
             // The pass, the disc, how far, then the time left and speed.
@@ -3055,7 +3056,9 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             ring_headline(ui, p, head);
             ui.add_space(4.0);
             let took = crate::model::read_in(v, |_| None);
-            let line = [size.clone(), took.map(|t| t.replacen("Read in", "read in", 1))].into_iter().flatten().collect::<Vec<_>>().join(", ");
+            // The size, unless it's already the ring's big number.
+            let size = size.clone().filter(|s| *s != shown);
+            let line = [size, took.map(|t| t.replacen("Read in", "read in", 1))].into_iter().flatten().collect::<Vec<_>>().join(", ");
             if !line.is_empty() {
                 ring_note(ui, p, &cap(&line));
             }
@@ -3147,7 +3150,7 @@ fn disc_ticks(p: &Pal, map: &drt_steps::real::redumper::DiscMap, sectors: u64, p
 /// Where on the disc things went wrong, in a line: *25 bad sectors, most
 /// between 49% and 68%*; or, when the check found none, where the drive
 /// reported errors as it read.
-fn map_line(map: &drt_steps::real::redumper::DiscMap, sectors: u64) -> Option<String> {
+fn map_line(map: &drt_steps::real::redumper::DiscMap, sectors: u64, count: bool) -> Option<String> {
     use drt_steps::real::redumper::most_between;
     if sectors == 0 {
         return None;
@@ -3163,11 +3166,15 @@ fn map_line(map: &drt_steps::real::redumper::DiscMap, sectors: u64) -> Option<St
     if map.wrong_count > 0 {
         let n = map.wrong_count;
         let head = format!("{} bad sector{}", thousands(n), if n == 1 { "" } else { "s" });
-        return Some(match place(&map.wrong) {
-            Some((w, true)) => format!("{head}, {w}"),
-            Some((w, false)) => format!("{head}, most {w}"),
-            None => head,
-        });
+        // Where the headline already says how many, only where they are.
+        return match (place(&map.wrong), count) {
+            (Some((w, true)), true) => Some(format!("{head}, {w}")),
+            (Some((w, false)), true) => Some(format!("{head}, most {w}")),
+            (None, true) => Some(head),
+            (Some((w, true)), false) => Some(cap(&format!("{w} of the way through"))),
+            (Some((w, false)), false) => Some(format!("Most {w} of the way through")),
+            (None, false) => None,
+        };
     }
     place(&map.read).map(|(w, whole)| if whole { format!("Read errors {w}") } else { format!("Most read errors {w}") })
 }
