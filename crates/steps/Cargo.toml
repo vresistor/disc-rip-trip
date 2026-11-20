@@ -19,7 +19,7 @@ quick-xml = "0.41"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # Hashing a dump, with progress and Stop, in one pass for all three.
 crc32fast = "1"
-md-5 = "0.10"
+md-5 = "0.11"
 sha1 = "0.10"
 # Writing the tags ffmpeg can't (an ID3 UFID frame, MP4 freeform atoms), and
 # `drt fix-tags`. Read without its conversions, so nothing else changes.
