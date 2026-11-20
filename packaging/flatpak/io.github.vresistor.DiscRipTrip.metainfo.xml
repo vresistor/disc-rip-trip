@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata. Flatpak refuses to build an app without it, and a
+     release entry is what makes the bundle show a version rather than
+     nothing in `flatpak list`. scripts/build-flatpak.sh fills in @VERSION@
+     (from app/Cargo.toml) and the date, so this file stays static. -->
+<component type="desktop-application">
+  <id>io.github.vresistor.DiscRipTrip</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Disc Rip Trip</name>
+  <summary>Put a disc in, get properly named files in your library</summary>
+  <description>
+    <p>
+      A desktop app that drives MakeMKV, cyanrip, redumper and ffmpeg so you
+      never have to think about title numbers, interlacing, drive offsets,
+      disc serials or filename conventions.
+    </p>
+    <p>
+      One switch asks what you want out of the disc: video named against TMDb
+      and filed in Jellyfin's layout, audio ripped to every format you
+      configure and verified against AccurateRip, or games dumped, verified
+      against Redump and converted to CHD.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.vresistor.DiscRipTrip.desktop</launchable>
+  <url type="homepage">https://github.com/vresistor/disc-rip-trip</url>
+  <url type="bugtracker">https://github.com/vresistor/disc-rip-trip/issues</url>
+  <developer_name>vresistor</developer_name>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="@VERSION@" date="@DATE@">
+      <description>
+        <p>See the project's releases page for what changed.</p>
+      </description>
+    </release>
+  </releases>
+</component>

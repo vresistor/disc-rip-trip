@@ -1,0 +1,21 @@
+[package]
+name = "drt-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Recipes of steps, run: the domain, settings, the type check, the runner and its lanes"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tokio-util.workspace = true
+
+[dev-dependencies]
+# Some tests run on the multi-threaded runtime.
+tokio = { workspace = true, features = ["rt-multi-thread"] }

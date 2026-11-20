@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Disc Rip Trip
+Comment=Put a disc in, get properly named files in your library
+Exec=disc-rip-trip
+Icon=io.github.vresistor.DiscRipTrip
+Terminal=false
+Categories=AudioVideo;Audio;Video;
+Keywords=rip;dvd;blu-ray;cd;makemkv;redumper;cyanrip;

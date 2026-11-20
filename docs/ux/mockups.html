@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disc Rip Trip mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Static mockups for DESIGN-UX.md. One main view: every disc in a drive is
+   shown as its recipe, live. Real disc data throughout. */
+:root {
+  --bg: #e9ecef; --surface: #f9fafb; --raised: #ffffff; --ink: #18202b; --muted: #5b6573; --faint: #8c95a1;
+  --line: #d3d9e0; --action: #2348b8; --action-ink: #ffffff;
+  --ok: #17784a; --ok-soft: #dcefe4; --warn: #a35a10; --warn-soft: #f6e6d2; --bad: #b02a22; --bad-soft: #f5dcd9;
+  --busy: #3b6fe0; --busy-soft: #e3ebfb; --pending: #b9c1cb;
+  --c-src: #6b7a8f; --c-read: #3b6fe0; --c-look: #8a5cd0; --c-make: #c27a1a; --c-put: #2f8a63; --c-chk: #17784a;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #a2acb8; --faint: #707b88; --line: #313a45;
+  --action: #7d9cf2; --action-ink: #0f1520; --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b;
+  --bad: #f07a70; --bad-soft: #3d2120; --busy: #7d9cf2; --busy-soft: #1f2a44; --pending: #46505c; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #a2acb8; --faint: #707b88; --line: #313a45;
+  --action: #7d9cf2; --action-ink: #0f1520; --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b;
+  --bad: #f07a70; --bad-soft: #3d2120; --busy: #7d9cf2; --busy-soft: #1f2a44; --pending: #46505c; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 "Schibsted Grotesk", system-ui, sans-serif; }
+button { font: inherit; color: inherit; }
+a { color: var(--action); }
+:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+
+/* Mockup chrome: which state you're looking at. Not part of the app. */
+.picker { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.picker button { border: 1px solid var(--line); background: var(--raised); border-radius: 999px; padding: 4px 12px; cursor: pointer; font-size: 13px; }
+.picker button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.picker .size { margin-left: 12px; display: flex; gap: 6px; }
+.picker .theme { margin-left: auto; }
+
+/* The window: the list of recipes on the left, the chosen one on the right. */
+.window { width: var(--ww, 1280px); height: var(--wh, 720px); margin: 20px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: grid; grid-template-columns: 232px 1fr; }
+.quiet { border: 0; background: none; color: var(--muted); padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.quiet:hover { background: var(--bg); color: var(--ink); }
+.btn { border: 1px solid var(--line); background: var(--raised); border-radius: 6px; padding: 6px 14px; cursor: pointer; font-weight: 500; font-size: 14px; }
+.btn.primary { background: var(--action); color: var(--action-ink); border-color: var(--action); }
+.btn.danger { color: var(--bad); }
+.btn.small { padding: 3px 10px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: default; }
+
+.side { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
+.side .sh { display: flex; align-items: center; justify-content: space-between; padding: 12px 10px 8px 16px; font-weight: 700; font-size: 15px; }
+.side .add { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.side ul { list-style: none; margin: 0; padding: 0 8px; overflow-y: auto; }
+.ri { display: grid; grid-template-columns: 18px 1fr 16px; gap: 0 8px; padding: 8px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 2px; }
+.ri:hover { background: var(--bg); }
+.ri.on { background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.ri b { font-size: 14.5px; font-weight: 600; }
+.ri .s { grid-column: 2; font-size: 13px; color: var(--muted); }
+.ri .s.busy { color: var(--busy); } .ri .s.needs { color: var(--warn); } .ri .s.ok { color: var(--ok); }
+.ri .dv { grid-column: 2; font-size: 12px; color: var(--faint); }
+.ri svg.ic { grid-row: 1; grid-column: 1; width: 17px; height: 17px; align-self: center; color: var(--muted); }
+.ri.on svg.ic { color: var(--ink); }
+.ri svg:not(.ic) { grid-row: 1 / span 2; grid-column: 3; width: 16px; height: 16px; align-self: center; position: static; }
+.ri input { font: inherit; font-weight: 600; font-size: 14.5px; width: 100%; padding: 2px 6px; margin: -3px -7px; border: 1px solid var(--action); border-radius: 5px; background: var(--raised); color: var(--ink); }
+
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.top { display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.top .title { font-size: 17px; font-weight: 700; }
+.top .meta { font-size: 13px; color: var(--muted); }
+.top .acts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.fl { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; color: var(--action); font-size: 13px; padding: 3px 8px; border-radius: 4px; background: color-mix(in srgb, var(--action) 8%, transparent); }
+.fl svg { width: 13px; height: 13px; }
+
+/* The canvas scrolls both ways; the drawer comes up over it. */
+.stage { position: relative; flex: 1; min-height: 0; }
+.canvas { position: absolute; inset: 0; overflow: auto; background-color: var(--surface);
+  background-image: radial-gradient(circle, var(--line) 1px, transparent 1.2px); background-size: 20px 20px; }
+.board { position: relative; margin: 28px 32px; }
+.board svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.zoom { position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; color: var(--muted); z-index: 2; }
+.zoom button { border: 0; background: none; padding: 4px 8px; display: inline-flex; align-items: center; cursor: pointer; color: var(--muted); }
+.zoom span { padding: 0 4px; font-variant-numeric: tabular-nums; }
+.drawer { position: absolute; left: 0; right: 0; bottom: 0; max-height: 56%; overflow: auto; z-index: 3; background: var(--raised); border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; box-shadow: 0 -14px 36px rgba(0,0,0,.16); padding: 0 20px 18px; }
+.drawer .grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 7px auto 6px; cursor: ns-resize; }
+.drawer .ph { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; position: sticky; top: 0; background: var(--raised); padding: 4px 0; z-index: 1; }
+.drawer h3 { margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.drawer h3 small { font-weight: 500; color: var(--muted); font-size: 13px; }
+.drawer .ph .acts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.drawer .row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.drawer h4 { margin: 0 0 6px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.drawer input[type=text] { padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; }
+select { font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--ink); }
+.setting { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+
+/* Tiles snap together left to right into strips. Every tile shows its status. */
+.strip { position: absolute; display: flex; align-items: stretch; }
+.tile { position: relative; width: 152px; min-height: 112px; background: var(--raised); border: 1px solid var(--line); border-left-width: 0; padding: 10px 12px 12px 18px; display: flex; flex-direction: column; cursor: pointer; }
+.tile:first-child { border-left-width: 1px; border-radius: 10px 0 0 10px; padding-left: 14px; }
+.tile:last-of-type { border-radius: 0 10px 10px 0; }
+.tile:first-child:last-of-type { border-radius: 10px; }
+.tile:not(:last-of-type)::after { content: ""; position: absolute; right: -6px; top: 50%; width: 10px; height: 10px; background: inherit; border-top: 1px solid var(--line); border-right: 1px solid var(--line); transform: translateY(-50%) rotate(45deg); z-index: 1; }
+.tile .k { display: flex; align-items: center; gap: 6px; padding-right: 20px; min-width: 0; }
+svg.ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tile .k svg.ic { color: var(--c); }
+.btn svg.ic, .zoom svg.ic { width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; }
+.btn.ionly svg.ic { margin: 0; }
+.pick svg.ic { color: var(--c); }
+.drawer h3 svg.ic { color: var(--c); width: 18px; height: 18px; }
+.tile .k b { font-size: 13.5px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .from { font-size: 12px; color: var(--muted); line-height: 1.25; }
+.tile .st { font-size: 15px; font-weight: 700; margin-top: auto; padding-top: 8px; line-height: 1.2; color: var(--faint); }
+.tile .d { font-size: 12px; color: var(--muted); line-height: 1.3; min-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .pb { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--busy); }
+.tile .si { position: absolute; top: 9px; right: 9px; width: 16px; height: 16px; }
+.tile.idle .st { color: var(--faint); font-weight: 600; font-size: 14px; }
+.tile.busy .st { color: var(--busy); }
+.tile.ok { background: color-mix(in srgb, var(--ok) 7%, var(--raised)); }
+.tile.ok .st { color: var(--ok); }
+.tile.wait .st { color: var(--warn); font-size: 14px; }
+.tile.needs { background: var(--warn-soft); }
+.tile.needs .st { color: var(--warn); }
+.tile.bad .st { color: var(--bad); }
+.tile.hold .st { color: var(--warn); font-size: 14px; }
+.tile.open { box-shadow: inset 0 0 0 2px var(--action); }
+.tile:hover { filter: brightness(.985); }
+.si.spin { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .si.spin { animation: none; } }
+.plus { position: absolute; right: -37px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--raised); color: var(--muted); font-size: 17px; line-height: 1; cursor: pointer; display: none; place-items: center; z-index: 2; }
+.editing .plus { display: grid; }
+.plus.on { background: var(--action); color: var(--action-ink); border-color: var(--action); }
+/* A group: several steps acting as one, named. */
+.group { position: absolute; border: 1.5px dashed color-mix(in srgb, var(--c-make) 55%, var(--line)); border-radius: 14px; background: color-mix(in srgb, var(--c-make) 4%, transparent); }
+.group > span { position: absolute; top: 4px; left: 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.c-src { --c: var(--c-src); } .c-read { --c: var(--c-read); } .c-look { --c: var(--c-look); } .c-make { --c: var(--c-make); } .c-put { --c: var(--c-put); } .c-chk { --c: var(--c-chk); }
+
+/* Drawer contents. */
+.ask { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 20px; }
+.cand { display: flex; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); cursor: pointer; margin-bottom: 8px; align-items: flex-start; }
+.cand input { margin-top: 4px; }
+.cand.on { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); }
+.cand .art { width: 72px; height: 72px; border-radius: 4px; background: linear-gradient(135deg, #b8392f 0 45%, #f2efe9 45% 70%, #18202b 70%); flex: none; }
+.cand b { font-size: 14.5px; display: block; }
+.cand small { display: block; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.tl { columns: 2; column-gap: 24px; font-size: 13.5px; }
+.tl div { display: flex; gap: 8px; padding: 3px 0; break-inside: avoid; border-bottom: 1px solid var(--line); }
+.tl .n { width: 20px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tl .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl .len { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tl .ok { color: var(--ok); }
+.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-items: start; }
+.items { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.items td { padding: 5px 6px; border-top: 1px solid var(--line); }
+.items tr:first-child td { border-top: 0; }
+.items .n { width: 24px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.items .len { color: var(--muted); font-variant-numeric: tabular-nums; width: 44px; }
+.items tr.bad td { background: var(--bad-soft); }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); white-space: nowrap; }
+.chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.bad { background: var(--bad-soft); color: var(--bad); } .chip.busy { background: var(--busy-soft); color: var(--busy); } .chip.wait { background: var(--warn-soft); color: var(--warn); }
+.menu { position: relative; display: inline-block; }
+.menu .m { position: absolute; right: 0; bottom: calc(100% + 4px); width: 250px; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.2); padding: 5px; z-index: 6; text-align: left; }
+.menu .m button { display: flex; justify-content: space-between; width: 100%; border: 0; background: none; padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 13.5px; }
+.menu .m button:hover { background: var(--surface); }
+.menu .m span { color: var(--faint); font-size: 12px; }
+.menu .m hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; margin-top: 12px; }
+.pick { display: grid; gap: 2px; }
+.pick button { display: flex; gap: 7px; align-items: center; border: 0; background: none; padding: 6px; border-radius: 6px; cursor: pointer; font-size: 13.5px; text-align: left; }
+.pick button:hover { background: var(--surface); }
+.drives { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="picker" role="toolbar" aria-label="Mockup states">
+  <button data-s="running">Ripping</button>
+  <button data-s="ask">A step needs you</button>
+  <button data-s="inside">Inside a step</button>
+  <button data-s="edit">Editing</button>
+  <button data-s="setup">Not set up yet</button>
+  <button data-s="new">New recipe</button>
+  <button data-s="complex">The most complex one</button>
+  <span class="size"></span>
+  <button class="theme" id="theme">Light / dark</button>
+</div>
+<div class="window" id="win"></div>
+<script>
+// ---- icons -------------------------------------------------------------------------
+const FOLDER = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4.5h4l1.5 1.5H14v7H2z"/></svg>';
+const TICK = '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m3 8.5 3 3 7-7"/></svg>';
+const fl = (label, path) => `<a class="fl" href="#" title="${path}">${FOLDER}${label}</a>`;
+const ICON = {
+  busy: '<svg class="si spin" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--busy-soft)" stroke-width="2.4"/><path d="M8 2a6 6 0 0 1 6 6" stroke="var(--busy)" stroke-width="2.4" stroke-linecap="round"/></svg>',
+  ok:   '<svg class="si" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--ok)"/><path d="m4.8 8.3 2.2 2.2 4.2-4.6" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  needs:'<svg class="si" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--warn)"/><path d="M8 4.2v4.6" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/><circle cx="8" cy="11.4" r="1.1" fill="#fff"/></svg>',
+  wait: '<svg class="si" viewBox="0 0 16 16" fill="none" stroke="var(--warn)" stroke-width="1.7"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.8V8l2.2 1.4" stroke-linecap="round"/></svg>',
+  hold: '<svg class="si" viewBox="0 0 16 16" fill="var(--warn)"><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="3" width="3" height="10" rx="1"/></svg>',
+  bad:  '<svg class="si" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--bad)"/><path d="m5.5 5.5 5 5m0-5-5 5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  idle: '<svg class="si" viewBox="0 0 16 16" fill="none" stroke="var(--pending)" stroke-width="1.7"><circle cx="8" cy="8" r="6.2"/></svg>',
+};
+
+// One stroke icon per kind of step, so a tile reads at a glance.
+const P = {
+  drive: '<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h8M18 12h.01"/>',
+  disc: '<circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="2.5"/>',
+  game: '<rect x="2" y="6" width="20" height="12" rx="5"/><path d="M6.5 12h4M8.5 10v4M15.5 11h.01M18 13h.01"/>',
+  tv: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="m7 2 5 5 5-5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.5-4.5"/>',
+  text: '<path d="M4 7V4h16v3M12 4v16M9 20h6"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  note: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  choose: '<path d="M3 6h11M3 12h11M3 18h7m8-2 2 2 4-4"/>',
+  rip: '<path d="M12 3v11m-5-4 5 5 5-5M4 17v4h16v-4"/>',
+  check: '<path d="M12 2.5 20 6v6c0 5-3.5 8.5-8 9.5-4.5-1-8-4.5-8-9.5V6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+  wave: '<path d="M3 10v4M7 7v10M11 4v16M15 8v8M19 10.5v3"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  books: '<path d="M4 4h4v16H4zM10 4h4v16h-4zM16 5.5l3.8-1 3 15.5-3.8 1z"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  hdd: '<path d="M22 13H2l3-8h14z"/><rect x="2" y="13" width="20" height="7" rx="2"/><path d="M6 16.5h.01M10 16.5h.01"/>',
+  phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
+  file: '<path d="M14 2H6v20h13V7z"/><path d="M14 2v5h5M9 13h6M9 17h6"/>',
+  box: '<rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v11h16V9M10 13h4"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5M2 17l10 5 10-5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  pencil: '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  play: '<path d="M7 4v16l13-8z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+  done: '<path d="m5 12.5 4.5 4.5L19 7"/>',
+  fit: '<path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6"/>',
+};
+const ic = name => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${P[name] || ''}</svg>`;
+const STEP_ICON = { 'Drive': 'drive', 'Audio CD': 'disc', 'Game disc': 'game', 'DVD': 'tv', 'MusicBrainz': 'search', 'Discogs': 'search', 'GnuDB': 'search',
+  'Redump': 'search', 'CD-Text': 'text', 'Cover art': 'image', 'Lyrics': 'note', 'Choose': 'choose', 'Rip': 'rip', 'Check': 'check',
+  'FLAC': 'wave', 'MP3': 'wave', 'Opus': 'wave', 'ReplayGain': 'sliders', 'Review': 'eye', 'Library': 'books', 'NAS': 'server', 'Backup': 'hdd',
+  'Phone': 'phone', 'Cue sheet': 'file', 'Archive': 'box', 'Tell me': 'bell', 'Group these': 'layers' };
+const sic = name => ic(STEP_ICON[name]);
+
+// ---- the CD: real table of contents ----------------------------------------------------
+const tracks = [["Jimmy the Exploder",150],["Stop Breaking Down",140],["The Big Three Killed My Baby",149],["Suzy Lee",201],
+  ["Sugar Never Tasted So Good",175],["Wasting My Time",133],["Cannon",151],["Astro",162],["Broken Bricks",111],
+  ["When I Hear My Name",114],["Do",185],["Screwdriver",194],["One More Cup of Coffee",194],["Little People",142],
+  ["Slicker Drips",91],["St. James Infirmary Blues",144],["I Fought Piranhas",189]];
+const mmss = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+
+// ---- recipes are trees: a sequence, branches side by side, or a named group ------------
+// Consecutive steps in a sequence snap into one strip. Wires join whatever ends one
+// part to whatever starts the next, so a split is one-to-many and a join many-to-one.
+const T = (id, c, name, from) => ({ t: 'step', id, c, name, from });
+const seq = (...xs) => ({ t: 'seq', xs });
+const par = (...xs) => ({ t: 'par', xs });
+const group = (name, x) => ({ t: 'group', name, x });
+
+const CD = seq(T('drive','src','Drive','MATSHITA'), T('cd','read','Audio CD','table of contents'),
+  par(T('mb','look','MusicBrainz','lookup'), T('cdtext','look','CD-Text','lookup')),
+  T('choose','chk','Choose','which release'), T('art','look','Cover art','Cover Art Archive'), T('rip','read','Rip','cyanrip, AccurateRip'),
+  par(seq(T('flac','make','FLAC','level 8'), T('review','put','Review','~/Music/Review'), T('lib1','put','Library','~/Music/FLAC')),
+      seq(T('mp3','make','MP3','320 kbps'), T('lib2','put','Library','~/Music/MP3'))));
+
+// The most complex recipe we design for: four lookups, two after-choice lookups,
+// four outputs, a branch inside a branch, a named group, and a join at the end.
+const ARCH = seq(T('a_drive','src','Drive','eHAU324'), T('a_cd','read','Audio CD','table of contents'),
+  par(T('a_mb','look','MusicBrainz','lookup'), T('a_ct','look','CD-Text','lookup'), T('a_dg','look','Discogs','lookup'), T('a_gn','look','GnuDB','lookup')),
+  T('a_ch','chk','Choose','which release'),
+  par(T('a_art','look','Cover art','Cover Art Archive'), T('a_lyr','look','Lyrics','LRCLIB')),
+  T('a_rip','read','Rip','cyanrip, AccurateRip'),
+  par(seq(T('a_flac','make','FLAC','level 8'), T('a_rev','put','Review','~/Music/Review'), T('a_lib','put','Library','~/Music/FLAC'),
+          par(T('a_nas','put','NAS','/mnt/nas/music'), T('a_bak','put','Backup','/run/media/backup'))),
+      seq(T('a_mp3','make','MP3','V0'), T('a_mlib','put','Library','~/Music/MP3')),
+      group('For the phone', seq(T('a_opus','make','Opus','128 kbps'), T('a_rg','make','ReplayGain','album'), T('a_ph','put','Phone','~/Sync/Phone'))),
+      seq(T('a_cue','make','Cue sheet','and rip log'), T('a_arc','put','Archive','~/Archive/CD'))),
+  T('a_tell','put','Tell me','when all done'));
+
+const PS = seq(T('g_drive','src','Drive','eHAU324'), T('g_disc','read','Game disc','filesystem'), T('g_rip','read','Rip','redumper'),
+  T('g_chk','chk','Check','Redump hash'), T('g_look','look','Redump','lookup by hash'), T('g_ch','chk','Choose','which release'), T('g_lib','put','Library','~/Games/Redump'));
+const NEW = seq(T('n_drive','src','Drive','not chosen'));
+
+// ---- layout --------------------------------------------------------------------------
+const TW = 152, TH = 112, G = 52, VG = 16, GP = 12, GL = 26;
+const units = xs => { const out = []; for (const x of xs) { if (x.t === 'step') { const l = out[out.length - 1]; if (l && l.t === 'strip') l.xs.push(x); else out.push({ t: 'strip', xs: [x] }); } else out.push(x); } return out; };
+function measure(n) {
+  if (n.t === 'strip') return n.sz = { w: n.xs.length * TW, h: TH };
+  if (n.t === 'step') return measure({ t: 'strip', xs: [n] });
+  if (n.t === 'seq') { n.us = units(n.xs); const s = n.us.map(measure); return n.sz = { w: s.reduce((a, b) => a + b.w, 0) + G * (s.length - 1), h: Math.max(...s.map(b => b.h)) }; }
+  if (n.t === 'par') { n.us = n.xs.map(x => x.t === 'step' ? { t: 'strip', xs: [x] } : x); const s = n.us.map(measure); return n.sz = { w: Math.max(...s.map(b => b.w)), h: s.reduce((a, b) => a + b.h, 0) + VG * (s.length - 1) }; }
+  if (n.t === 'group') { const s = measure(n.x); return n.sz = { w: s.w + 2 * GP, h: s.h + GL + GP }; }
+}
+let OUT, WIRES, SID;
+function place(n, x, y) {
+  if (n.t === 'strip') {
+    OUT.push(`<div class="strip" style="left:${x}px;top:${y}px">${n.xs.map(tileHTML).join('')}<button class="plus" id="plus-${n.xs[n.xs.length - 1].id}" aria-label="Add a step">+</button></div>`);
+    return { ins: [[x, y + TH / 2]], outs: [[x + n.sz.w, y + TH / 2]] };
+  }
+  if (n.t === 'seq') {
+    let cx = x, first, last;
+    for (const u of n.us) { const r = place(u, cx, y + (n.sz.h - u.sz.h) / 2); if (last) wire(last.outs, r.ins); else first = r; last = r; cx += u.sz.w + G; }
+    return { ins: first.ins, outs: last.outs };
+  }
+  if (n.t === 'par') {
+    let cy = y; const ins = [], outs = [];
+    for (const u of n.us) { const r = place(u, x, cy); ins.push(...r.ins); outs.push(...r.outs); cy += u.sz.h + VG; }
+    return { ins, outs };
+  }
+  if (n.t === 'group') {
+    OUT.push(`<div class="group" style="left:${x}px;top:${y}px;width:${n.sz.w}px;height:${n.sz.h}px"><span>${n.name}</span></div>`);
+    const r = place(n.x, x + GP, y + GL);
+    return { ins: [[x, r.ins[0][1]]], outs: [[x + n.sz.w, r.outs[r.outs.length - 1][1]]] };
+  }
+}
+function wire(outs, ins) {
+  for (const [x1, y1] of outs) for (const [x2, y2] of ins) {
+    // A long wire runs straight, then bends in the last gap.
+    const bx = Math.max(x1, x2 - G), d = (x2 - bx) * .55;
+    WIRES.push(`<path d="M${x1} ${y1} H${bx} C${bx + d} ${y1} ${x2 - d} ${y2} ${x2} ${y2}" fill="none" stroke="var(--faint)" stroke-width="2"/>`);
+  }
+}
+function boardHTML(recipe) {
+  OUT = []; WIRES = []; const s = measure(recipe); place(recipe, 0, 0);
+  return `<div class="board" style="width:${s.w + 40}px;height:${s.h}px"><svg class="wires">${WIRES.join('')}</svg>${OUT.join('')}</div>`;
+}
+
+// ---- tile status ---------------------------------------------------------------------
+const st = (k, t, d = '', p = null, from = null) => ({ k, t, d, p, from });
+let S = {}, MARK = {};
+function tileHTML(t) {
+  const s = S[t.id] || { k: 'idle', t: 'Ready', d: '' };
+  return `<div class="tile c-${t.c} ${s.k} ${MARK[t.id] || ''}" id="t-${t.id}" tabindex="0">${ICON[s.k] || ''}
+    <span class="k">${sic(t.name)}<b>${t.name}</b></span><span class="from">${s.from || t.from}</span>
+    <span class="st">${s.t || ''}</span><span class="d">${s.d || ''}</span>${s.p != null ? `<i class="pb" style="width:${s.p}%"></i>` : ''}</div>`;
+}
+const CD_S = {
+  running: { drive: st('busy','Reading','8×, track 6'), cd: st('ok','17 tracks','43:47'), mb: st('ok','2 releases','by disc ID'), cdtext: st('ok','17 titles','artist, album'),
+    choose: st('ok','The White Stripes','1999, US'), art: st('ok','Found','1200 × 1200'), rip: st('busy','6 of 17','Wasting My Time',35),
+    flac: st('busy','5 of 17','2 encoding',29), review: st('busy','5 of 17','copying 5',29), lib1: st('hold','Holds for you','after review'),
+    mp3: st('busy','4 of 17','3 encoding',23), lib2: st('busy','4 of 17','copying 4',23) },
+  ask: { drive: st('idle','Waiting','for rip'), cd: st('ok','17 tracks','43:47'), mb: st('ok','2 releases','by disc ID'), cdtext: st('ok','17 titles','artist, album'),
+    choose: st('needs','Which release?','2 candidates'), art: st('idle','After choose'), rip: st('wait','Waits for choose'),
+    flac: st('idle','After rip'), review: st('idle','After FLAC'), lib1: st('idle','After review'), mp3: st('idle','After rip'), lib2: st('idle','After MP3') },
+  inside: { drive: st('busy','Re-reading','track 12, careful'), cd: st('ok','17 tracks','43:47'), mb: st('ok','2 releases','by disc ID'), cdtext: st('ok','17 titles','artist, album'),
+    choose: st('ok','The White Stripes','1999, US'), art: st('ok','Found','1200 × 1200'), rip: st('bad','15 ✓  1 ✕','re-reading 12'),
+    flac: st('busy','16 of 17','1 encoding',94), review: st('ok','15 of 17','2 to come'), lib1: st('hold','Waits for you','15 in review'),
+    mp3: st('busy','16 of 17','1 encoding',94), lib2: st('ok','15 of 17','2 to come') },
+  setup: { drive: st('needs','Offset?','not known yet'), cd: st('idle','Insert a CD'), lib2: st('needs','Choose a folder','', null, 'no folder') },
+};
+const ARCH_S = { a_drive: st('busy','Reading','8×, track 11'), a_cd: st('ok','17 tracks','43:47'),
+  a_mb: st('ok','2 releases','by disc ID'), a_ct: st('ok','17 titles','artist, album'), a_dg: st('ok','3 releases','by barcode'), a_gn: st('bad','No answer','timed out'),
+  a_ch: st('ok','The White Stripes','1999, US'), a_art: st('ok','Found','1200 × 1200'), a_lyr: st('ok','14 of 17','synced'),
+  a_rip: st('busy','11 of 17','Do',62), a_flac: st('busy','10 of 17','2 encoding',58), a_rev: st('busy','10 of 17','copying',58), a_lib: st('hold','Holds for you','after review'),
+  a_nas: st('idle','After library'), a_bak: st('idle','After library'), a_mp3: st('busy','9 of 17','3 encoding',52), a_mlib: st('busy','9 of 17','copying',52),
+  a_opus: st('busy','10 of 17','2 encoding',58), a_rg: st('wait','Waits for all 17'), a_ph: st('idle','After ReplayGain'),
+  a_cue: st('wait','After rip'), a_arc: st('idle','After cue sheet'), a_tell: st('idle','After all four') };
+const PS_S = { g_drive: st('idle','Disc in'), g_disc: st('ok','PlayStation','SLES-00860'), g_rip: st('idle','Ready'), g_chk: st('idle','After rip'),
+  g_look: st('idle','After check'), g_ch: st('idle','After lookup'), g_lib: st('idle','After choose') };
+
+// ---- drawers ---------------------------------------------------------------------------
+const X = '<button class="quiet" aria-label="Close">✕</button>';
+const drawer = (c, icon, title, sub, acts, body) => `<div class="drawer"><div class="grip" title="Drag to resize"></div><div class="ph"><h3 class="c-${c}">${ic(icon)}${title}${sub ? `<small>${sub}</small>` : ''}</h3><span class="acts">${acts}${X}</span></div>${body}</div>`;
+const tl = `<div class="tl">${tracks.map(([t, s], i) => `<div><span class="n">${i + 1}</span><span class="t">${t}</span><span class="len">${mmss(s)}</span><span class="ok">✓</span></div>`).join('')}</div>`;
+const D = {};
+D.ask = drawer('chk', 'choose', 'Which release?', 'Choose',
+  `<label class="setting">Ask <select><option>when unsure</option><option>always</option><option>never</option></select></label><button class="quiet">Search</button><button class="btn primary">Use this one</button>`,
+  `<div class="ask"><div>
+    <label class="cand on"><input type="radio" name="rel" checked><span class="art"></span><span><b>The White Stripes</b><small>1999, US<br>Sympathy for the Record Industry, SFTRI 577</small>
+      <span class="chips"><span class="chip ok">${TICK} 17 lengths</span><span class="chip ok">${TICK} CD-Text</span></span></span></label>
+    <label class="cand"><input type="radio" name="rel"><span class="art" style="filter:saturate(.4)"></span><span><b>The White Stripes</b><small>2002, UK<br>XL Recordings, XLCD 151</small>
+      <span class="chips"><span class="chip ok">${TICK} 17 lengths</span><span class="chip ok">${TICK} CD-Text</span></span></span></label>
+  </div><div><h4>Tracks, against the disc</h4>${tl}</div></div>`);
+const rowOf = ([t, s], i) => {
+  const n = i + 1;
+  if (n === 9) return `<tr class="bad"><td class="n">${n}</td><td>${t}</td><td class="len">${mmss(s)}</td><td><span class="chip bad">✕ no match</span></td>
+    <td style="text-align:right"><div class="menu"><button class="btn small">Retry ▾</button><div class="m">
+      <button>Until two reads agree<span>~1 min</span></button><button>On ATAPI eHAU324<span>move disc</span></button><button>Slowly<span>~1 min</span></button>
+      <hr><button>Keep as is</button><button>Leave out</button></div></div></td></tr>`;
+  if (n === 12) return `<tr><td class="n">${n}</td><td>${t}</td><td class="len">${mmss(s)}</td><td><span class="chip busy">re-reading 40%</span></td><td></td></tr>`;
+  return `<tr><td class="n">${n}</td><td>${t}</td><td class="len">${mmss(s)}</td><td><span class="chip ok">${TICK} ${104 - (n % 2)}</span></td><td></td></tr>`;
+};
+D.inside = drawer('read', 'rip', 'Rip', '15 of 17 verified',
+  `<label class="setting">First read <select><option>fast</option><option>careful</option></select></label><label class="setting">AccurateRip <select><option>on</option><option>off</option></select></label>${fl('Working','~/Videos/Disc Rip Trip/staging/music/j9XP3dgj')}`,
+  `<div class="twocol"><table class="items">${tracks.slice(0, 9).map((t, i) => rowOf(t, i)).join('')}</table><table class="items">${tracks.slice(9).map((t, i) => rowOf(t, i + 9)).join('')}</table></div>`);
+const grp = (h, c, xs) => `<div><h4>${h}</h4><div class="pick">${xs.map(x => `<button class="c-${c}">${sic(x)}${x}</button>`).join('')}</div></div>`;
+D.edit = drawer('read', 'plus', 'Add after Audio CD', '', '',
+  `<input type="text" placeholder="Search" aria-label="Search steps" style="width:280px">
+  <div class="groups">${grp('Look up', 'look', ['MusicBrainz','CD-Text','Discogs','GnuDB'])}${grp('Decide', 'chk', ['Choose'])}${grp('Read', 'read', ['Rip'])}${grp('Together', 'make', ['Group these'])}</div>`);
+D.setup = drawer('src', 'drive', 'Read offset', 'Drive, MATSHITA UJ240AS, every recipe', `<span class="chip">1 of 2 to set</span>`,
+  `<div class="row" style="margin-top:0"><input type="text" value="+103" style="width:90px" aria-label="Read offset"><span class="chip wait">near match</span></div>
+  <div class="row"><button class="btn primary">Use +103</button><button class="btn">Measure</button></div>`);
+D.new = drawer('src', 'drive', 'Which drive?', 'Drive', '',
+  `<div class="drives">
+    <label class="cand on"><input type="radio" name="dr" checked><span><b>MATSHITA UJ240AS</b><small>Offset +103, measured<br>Used by CDs and TV</small></span></label>
+    <label class="cand"><input type="radio" name="dr"><span><b>ATAPI eHAU324</b><small>Offset +6, from the drive list<br>Used by Games and Archive everything</small></span></label>
+  </div>`);
+
+// ---- the list of recipes ------------------------------------------------------------------
+const SI = k => ICON[k].replace('class="si', 'class="');
+function sideHTML(state) {
+  const cd = { running: ['busy','6 of 17'], ask: ['needs','Which release?'], inside: ['bad','1 track to retry'], edit: ['','Editing'], setup: ['needs','2 to set'], new: ['busy','6 of 17'], complex: ['busy','6 of 17'] }[state];
+  const items = [
+    ['cd', 'CDs', 'MATSHITA UJ240AS', cd[0] || 'idle', cd[1], 'disc'],
+    ['tv', 'TV', 'MATSHITA UJ240AS', 'idle', 'No disc', 'tv'],
+    ['ps', 'Games', 'ATAPI eHAU324', 'idle', 'Ready to start', 'game'],
+    ['arch', 'Archive everything', 'ATAPI eHAU324', 'busy', '11 of 17', 'box'],
+  ];
+  if (state === 'complex') { items[2][3] = 'idle'; items[2][4] = 'No disc'; }
+  else { items[3][3] = 'idle'; items[3][4] = 'No disc'; }
+  const sel = state === 'complex' ? 'arch' : state === 'new' ? 'new' : 'cd';
+  return `<aside class="side"><div class="sh">Recipes<button class="add" aria-label="New recipe">${ic('plus')}</button></div><ul>
+    ${items.map(([id, name, drive, k, s, i]) => `<li class="ri ${id === sel ? 'on' : ''}">${ic(i)}<b>${name}</b>${SI(k)}<span class="s ${k}">${s}</span><span class="dv">${drive}</span></li>`).join('')}
+    ${state === 'new' ? `<li class="ri on">${ic('disc')}<input type="text" value="Box set" aria-label="Recipe name">${SI('needs')}<span class="s needs">Choose a drive</span><span class="dv">&nbsp;</span></li>` : ''}
+  </ul></aside>`;
+}
+
+// ---- the window ---------------------------------------------------------------------------
+const SIZES = [[1280, 720], [1600, 900], [1920, 1080]];
+let size = SIZES[0], current = 'running';
+function show(state) {
+  current = state;
+  document.querySelectorAll('.picker [data-s]').forEach(b => b.setAttribute('aria-pressed', b.dataset.s === state));
+  document.querySelector('.picker .size').innerHTML = SIZES.map(([w, h]) => `<button data-w="${w}" aria-pressed="${w === size[0]}">${w} × ${h}</button>`).join('');
+  const win = document.getElementById('win'); win.style.setProperty('--ww', size[0] + 'px'); win.style.setProperty('--wh', size[1] + 'px');
+
+  let recipe = CD, top, acts = `<button class="btn">${ic('pencil')}Edit</button><button class="btn danger">${ic('stop')}Stop</button>`, anchor = null, editing = false;
+  S = CD_S[state] || {}; MARK = {};
+  top = `<span class="title">CDs</span><span class="meta">The White Stripes, in MATSHITA UJ240AS</span>`;
+  const status = { running: '<span class="chip busy">about 4 min left</span>', ask: '<span class="chip wait">needs you</span>', inside: '<span class="chip bad">1 track</span>', setup: '<span class="chip wait">2 to set</span>' }[state] || '';
+  if (state === 'ask') { MARK.choose = 'open'; anchor = 't-choose'; }
+  if (state === 'inside') { MARK.rip = 'open'; anchor = 't-rip'; }
+  if (state === 'setup') { MARK.drive = 'open'; anchor = 't-drive'; acts = `<button class="btn">${ic('pencil')}Edit</button><button class="btn primary" disabled>${ic('play')}Start</button>`; }
+  if (state === 'edit') { S = {}; editing = true; anchor = 'plus-cd'; acts = `<button class="btn primary">${ic('done')}Done</button>`; }
+  if (state === 'complex') { recipe = ARCH; S = ARCH_S; top = `<span class="title">Archive everything</span><span class="meta">The White Stripes, in ATAPI eHAU324</span>`; }
+  if (state === 'new') { recipe = NEW; S = { n_drive: st('needs','Which drive?') }; MARK.n_drive = 'open'; anchor = 't-n_drive'; editing = true;
+    top = `<span class="title">Box set</span><span class="meta">new</span>`; acts = `<button class="btn primary">${ic('done')}Done</button>`; }
+  const dr = D[state === 'complex' || state === 'running' ? '' : state] || '';
+  win.innerHTML = sideHTML(state) + `<section class="main ${editing ? 'editing' : ''}"><div class="top">${top}${state === 'complex' ? '<span class="chip busy">about 3 min left</span>' : status}
+      <span class="acts">${state === 'new' ? '' : fl('Working','~/Videos/Disc Rip Trip/staging/music/j9XP3dgj')}${acts}</span></div>
+    <div class="stage"><div class="canvas">${boardHTML(recipe)}</div>${dr}<div class="zoom"><button aria-label="Zoom out">−</button><span>100%</span><button aria-label="Zoom in">+</button><button>${ic('fit')}Fit</button></div></div></section>`;
+  if (state === 'edit') document.getElementById('plus-cd').classList.add('on');
+  requestAnimationFrame(() => {
+    // With a drawer up, the canvas can scroll its content clear of it, and the tile
+    // the drawer belongs to is brought into the part you can still see.
+    const canvas = document.querySelector('.canvas'), d = document.querySelector('.drawer'), z = document.querySelector('.zoom');
+    const dh = d ? d.offsetHeight : 0;
+    canvas.style.paddingBottom = dh + 'px'; z.style.bottom = (dh + 12) + 'px';
+    const a = anchor && document.getElementById(anchor); if (!a) return;
+    const c = canvas.getBoundingClientRect(), r = a.getBoundingClientRect();
+    canvas.scrollLeft += (r.left + r.width / 2) - (c.left + c.width / 2);
+    canvas.scrollTop += (r.top + r.height / 2) - (c.top + (c.height - dh) / 2);
+  });
+}
+function fit() {
+  const canvas = document.querySelector('.canvas'), board = canvas.querySelector('.board'), d = document.querySelector('.drawer');
+  board.style.zoom = 1;
+  const z = Math.min(1, (canvas.clientWidth - 64) / board.offsetWidth, (canvas.clientHeight - (d ? d.offsetHeight : 0) - 56) / board.offsetHeight);
+  board.style.zoom = z; document.querySelector('.zoom span').textContent = Math.round(z * 100) + '%';
+}
+document.addEventListener('click', e => {
+  if (e.target.closest('.zoom button:last-child')) fit();
+  const b = e.target.closest('[data-s]'); if (b) show(b.dataset.s);
+  const w = e.target.closest('[data-w]'); if (w) { size = SIZES.find(s => s[0] == w.dataset.w); show(current); }
+});
+document.getElementById('theme').onclick = () => { const r = document.documentElement;
+  const dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; r.dataset.theme = dark ? 'light' : 'dark'; };
+const [h0, h1] = location.hash.slice(1).split('/');
+show(h0 || 'running'); if (h1 === 'fit') requestAnimationFrame(() => requestAnimationFrame(fit));
+</script>
+</body>
+</html>

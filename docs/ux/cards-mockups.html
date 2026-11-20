@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cards, before and after</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Colours from app/src/theme.rs (Pal::light / Pal::dark). */
+:root {
+  --bg: #e9ecef; --surface: #f9fafb; --raised: #ffffff; --ink: #18202b; --muted: #4c5563; --subtle: #6b7480; --faint: #8c95a1;
+  --line: #d3d9e0; --line-soft: #e8ecf0; --action: #2348b8; --action-ink: #ffffff;
+  --ok: #17784a; --ok-soft: #dcefe4; --ok-tint: #eff6f2; --warn: #a35a10; --warn-soft: #f6e6d2; --bad: #b02a22; --bad-soft: #f5dcd9;
+  --busy: #3b6fe0; --busy-soft: #e3ebfb; --pending: #8a939f;
+  --c-src: #6b7a8f; --c-read: #3b6fe0; --c-look: #8a5cd0; --c-make: #c27a1a; --c-put: #2f8a63; --c-chk: #17784a;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --line-soft: #2a313b; --action: #7d9cf2; --action-ink: #0f1520;
+  --ok: #5cc48e; --ok-soft: #1d3428; --ok-tint: #24302d; --warn: #e3a35a; --warn-soft: #3a2c1b; --bad: #f07a70; --bad-soft: #3d2120;
+  --busy: #7d9cf2; --busy-soft: #1f2a44; --pending: #707b88;
+  --c-src: #8e9cb0; --c-read: #6f95f0; --c-look: #a983e6; --c-make: #dd9a45; --c-put: #4fb385; --c-chk: #5cc48e;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --line-soft: #2a313b; --action: #7d9cf2; --action-ink: #0f1520;
+  --ok: #5cc48e; --ok-soft: #1d3428; --ok-tint: #24302d; --warn: #e3a35a; --warn-soft: #3a2c1b; --bad: #f07a70; --bad-soft: #3d2120;
+  --busy: #7d9cf2; --busy-soft: #1f2a44; --pending: #707b88;
+  --c-src: #8e9cb0; --c-read: #6f95f0; --c-look: #a983e6; --c-make: #dd9a45; --c-put: #4fb385; --c-chk: #5cc48e;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Schibsted Grotesk", system-ui, sans-serif; padding: 24px 16px 64px; }
+.page { max-width: 1440px; margin: 0 auto; }
+header.top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+h1 { font-size: 20px; margin: 0; }
+.intro { color: var(--muted); margin: 0 0 18px; max-width: 820px; }
+.theme { font: inherit; font-size: 13px; color: var(--muted); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+nav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 28px; }
+nav a { font-size: 13px; font-weight: 500; color: var(--muted); text-decoration: none; background: var(--raised); border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; }
+nav a:hover { color: var(--ink); }
+section.case { margin-bottom: 44px; }
+section.case > h2 { font-size: 17px; margin: 0 0 2px; }
+section.case > p { margin: 0 0 12px; color: var(--muted); max-width: 900px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 1199px) { .pair { grid-template-columns: 1fr; } }
+.side { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-width: 0; }
+.side > .label { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--subtle); margin: 0 0 10px; }
+.side.after > .label { color: var(--action); }
+.notes { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; padding-left: 18px; }
+.notes li { margin: 2px 0; }
+.notes b { color: var(--ink); font-weight: 600; }
+.x { color: var(--bad); font-weight: 600; }
+.stage { display: flex; justify-content: center; padding: 6px 0 14px; }
+.scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 10px; }
+.scroll .cap2 { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--subtle); margin: 0 0 8px; }
+.scroll .cap2.new { color: var(--action); }
+.canvas { position: relative; background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 20px 20px; }
+.canvas svg.wires { position: absolute; inset: 0; overflow: visible; }
+.canvas svg.wires path { fill: none; stroke: var(--faint); stroke-width: 2; }
+.canvas svg.wires path.busy { stroke: var(--busy); stroke-dasharray: 6 6; opacity: .7; }
+.canvas svg.wires path.done { stroke: color-mix(in srgb, var(--ok) 35%, var(--faint)); }
+
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* ---- tiles ---- */
+.tile { position: absolute; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; color: var(--ink); }
+.tile.mid { border-radius: 0; } .tile.first { border-radius: 10px 0 0 10px; } .tile.last { border-radius: 0 10px 10px 0; } .tile.alone { border-radius: 10px; }
+.stage .tile, .side .tile { position: relative; }
+.old.ok { background: var(--ok-tint); }
+.old.needs { background: var(--warn-soft); }
+.tile.needs { box-shadow: inset 0 0 0 2px var(--warn); }
+.tile.busy { box-shadow: inset 0 0 0 2px var(--busy); }
+.tile.bad { box-shadow: inset 0 0 0 2px var(--bad); }
+.tile .nm { display: flex; gap: 6px; align-items: center; font-size: 13.5px; font-weight: 600; white-space: nowrap; height: 18px; }
+.tile .st { position: absolute; top: 11px; right: 10px; width: 14px; height: 14px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+.tile .st svg { width: 10px; height: 10px; stroke-width: 2.6; fill: none; stroke: currentColor; stroke-linecap: round; }
+.st.ok { background: var(--ok); } .st.needs { background: var(--warn); } .st.bad { background: var(--bad); }
+.st.busy { border: 2.4px solid var(--busy-soft); border-top-color: var(--busy); border-right-color: var(--busy); }
+.st.idle { border: 1.7px solid var(--pending); }
+.st.wait { border: 1.7px solid var(--muted); color: var(--muted); } .st.wait svg { width: 9px; height: 9px; stroke-width: 2; }
+.st.hold { border-radius: 0; color: var(--warn); } .st.hold svg { width: 14px; height: 14px; stroke-width: 3; }
+.bar { height: 3px; border-radius: 2px; background: var(--busy-soft); }
+.bar i { display: block; height: 3px; border-radius: 2px; background: var(--busy); }
+
+/* today's tile: 152 × 112, status anchored to the bottom */
+.old { width: 152px; height: 112px; padding: 10px 12px 0 14px; }
+.old .sub { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.old .foot { position: absolute; left: 14px; right: 12px; bottom: 11px; }
+.old .main { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.old.busy .main { color: var(--busy); font-size: 15px; font-weight: 700; } .old.needs .main { color: var(--warn); font-size: 15px; font-weight: 700; }
+.old.bad .main { color: var(--bad); font-size: 15px; font-weight: 700; } .old.wait .main, .old.idle .main { color: var(--subtle); font-weight: 600; }
+.old .main.amber { color: var(--warn); font-weight: 700; }
+.old .det { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.old .bar { margin-top: 4px; }
+
+/* proposed tile: four fixed zones, 128 px tall, on a 4 px grid */
+.new { padding: 12px; overflow: hidden; }
+.new .z-id { height: 20px; display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; line-height: 20px; white-space: nowrap; padding-right: 20px; }
+.new .st { top: 15px; right: 12px; }
+.new .z-out { margin-top: 4px; height: 24px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+.new .z-out .r { font-size: 16px; font-weight: 600; line-height: 24px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.new .z-out .q { font-size: 13px; color: var(--muted); line-height: 24px; flex: none; }
+.new .z-out .thumb { width: 24px; height: 24px; flex: none; }
+.new .z-now { height: 24px; font-size: 12px; line-height: 16px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.new .z-now .bar { margin-top: 2px; }
+.new .z-now.act { display: flex; align-items: center; gap: 8px; }
+.new .tbtn { font: inherit; font-size: 12px; font-weight: 600; height: 20px; padding: 0 8px; border-radius: 5px; border: none; background: var(--action); color: var(--action-ink); flex: none; }
+.new .z-ft { position: absolute; left: 0; right: 0; bottom: 0; height: 36px; border-top: 1px solid var(--line-soft); background: var(--surface); padding: 3px 12px 0; display: flex; gap: 4px; align-items: flex-start; overflow: hidden; }
+.new .z-ft .src { font-size: 12px; color: var(--muted); line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.new .z-ft .chip { flex: 0 1 auto; min-width: 0; }
+.new .z-ft .chip:first-child { flex-shrink: 0; }
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--raised); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.chip:hover { border-color: var(--faint); color: var(--ink); }
+.chip.mod { color: var(--ink); } .chip.mod::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--action); flex: none; }
+.chip.lock { cursor: default; } .chip.lock:hover { border-color: var(--line); color: var(--muted); }
+.chip.lock svg { width: 10px; height: 10px; stroke-width: 2.2; }
+.chip.unset { border: 1px dashed var(--warn); color: var(--warn); font-weight: 600; background: transparent; }
+.chip.open { border-color: var(--action); box-shadow: 0 0 0 1px var(--action); color: var(--ink); }
+.st.skip { background: var(--faint); }
+.sheet { display: flex; flex-wrap: wrap; gap: 14px 12px; align-items: flex-start; }
+.sheet figure { margin: 0; }
+.sheet figcaption { font-size: 12px; color: var(--subtle); margin-bottom: 4px; }
+.thumb { width: 40px; height: 40px; border-radius: 4px; background: linear-gradient(135deg, #c8312b 0 50%, #f1f1ee 50% 100%); box-shadow: 0 0 0 1px var(--line); }
+.i-src { color: var(--c-src); } .i-look { color: var(--c-look); } .i-chk { color: var(--c-chk); } .i-read { color: var(--c-read); } .i-make { color: var(--c-make); } .i-put { color: var(--c-put); }
+
+/* ---- drawers, at their real default height ---- */
+.drawer { height: 330px; background: var(--raised); border: 1px solid var(--line); border-radius: 14px 14px 0 0; overflow: hidden; box-shadow: 0 -10px 28px rgba(0,0,0,.08); display: flex; flex-direction: column; position: relative; }
+.drawer .h330 { position: absolute; right: 12px; top: 1px; font-size: 10.5px; color: var(--faint); }
+.grip { flex: none; display: grid; place-items: center; }
+.grip i { width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
+.old-d .grip { height: 16px; } .new-d .grip { height: 10px; }
+.dh { flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 18px; border-bottom: 1px solid var(--line-soft); }
+.old-d .dh { height: 50px; } .new-d .dh { height: 34px; }
+.dh .t { display: flex; gap: 7px; align-items: center; font-size: 17px; font-weight: 700; white-space: nowrap; }
+.new-d .dh .t { font-size: 15px; }
+.dh .say { color: var(--muted); font-size: 13.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dh .say a { color: var(--action); text-decoration: none; font-weight: 500; }
+.dh .acts { display: flex; gap: 6px; align-items: center; margin-left: auto; flex: none; }
+.dh .xx { color: var(--subtle); font-size: 15px; padding-left: 4px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.busy { background: var(--busy-soft); color: var(--busy); }
+.btn { font: inherit; font-size: 13px; font-weight: 500; border-radius: 6px; padding: 3px 10px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); white-space: nowrap; }
+.new-d .btn { font-size: 12.5px; padding: 2px 9px; }
+.btn.primary { background: var(--action); color: var(--action-ink); border-color: var(--action); }
+.btn.quiet { border-color: transparent; background: none; color: var(--muted); }
+.db { flex: 1; display: flex; min-height: 0; }
+.rail { flex: none; background: var(--surface); border-right: 1px solid var(--line-soft); font-size: 13px; overflow: hidden; }
+.old-d .rail { width: 220px; padding: 14px 16px; }
+.old-d .rail .h { font-size: 12.5px; color: var(--muted); margin: 2px 0 2px; }
+.old-d .rail .v { margin: 0 0 14px; }
+.old-d .rail .prov { font-size: 11.5px; color: var(--subtle); margin: -10px 0 14px; } .old-d .rail .prov a { color: var(--action); text-decoration: none; }
+.old-d .rail .f { border: 1px solid var(--line); background: var(--raised); border-radius: 6px; padding: 4px 8px; margin: 0 0 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.new-d .rail { width: 200px; padding: 4px 12px; }
+.rr { display: flex; justify-content: space-between; align-items: center; height: 28px; gap: 8px; font-size: 12.5px; }
+.rr .l { color: var(--muted); white-space: nowrap; }
+.rr .sel { border: 1px solid var(--line); background: var(--raised); border-radius: 5px; padding: 1px 6px; font-size: 12px; white-space: nowrap; }
+.rr .sel::after { content: " ▾"; color: var(--subtle); font-size: 10px; }
+.rr.fold { color: var(--muted); font-weight: 600; font-size: 12px; justify-content: flex-start; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.seg span { padding: 0 7px; font-size: 12px; line-height: 20px; }
+.seg span.on { background: var(--ink); color: var(--raised); }
+.work { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.old-d .work { padding: 6px 16px 0 18px; }
+.new-d .work { padding: 0 14px 0 14px; }
+.tabs { flex: none; display: flex; gap: 16px; align-items: center; border-bottom: 1px solid var(--line-soft); }
+.old-d .tabs { height: 30px; margin-bottom: 10px; } .new-d .tabs { height: 30px; margin-bottom: 2px; }
+.tabs span { font-size: 13.5px; color: var(--muted); font-weight: 500; padding: 5px 0; white-space: nowrap; }
+.new-d .tabs span { font-size: 13px; }
+.tabs span.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--action); }
+.tabs .flow { margin-left: auto; font-size: 12px; color: var(--subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0; font-weight: 400; box-shadow: none; min-width: 0; }
+.tabs .flt { margin-left: auto; display: flex; gap: 2px; font-size: 12px; }
+.tabs .flt b { font-weight: 500; color: var(--muted); padding: 1px 7px; border-radius: 999px; }
+.tabs .flt b.on { color: var(--ink); background: var(--bg); font-weight: 600; }
+.chips { flex: none; display: flex; gap: 6px; align-items: center; height: 26px; margin-bottom: 6px; font-size: 12.5px; color: var(--muted); }
+.chips span { padding: 1px 9px; border-radius: 999px; white-space: nowrap; }
+.chips span.on { border: 1px solid var(--line); color: var(--ink); }
+.chips .fact { margin-left: auto; color: var(--subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0; }
+.capt { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted); height: 22px; line-height: 22px; }
+.thead { flex: none; display: flex; font-size: 12.5px; color: var(--muted); height: 22px; align-items: center; border-bottom: 1px solid var(--line); }
+.li { flex: none; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.old-d .li { height: 34px; } .old-d .li.fact { height: 28px; }
+.new-d .li { height: 24px; font-size: 12.5px; }
+.li .n { width: 18px; text-align: right; color: var(--subtle); font-size: 12px; flex: none; }
+.li .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.li .len { color: var(--muted); font-size: 12px; flex: none; }
+.li .vd { flex: none; font-size: 12.5px; white-space: nowrap; }
+.li .sz { flex: none; font: 11.5px "JetBrains Mono", ui-monospace, monospace; color: var(--muted); width: 44px; text-align: right; }
+.li .chipw { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 7px; flex: none; }
+.li.attn { background: var(--bad-soft); border-radius: 6px; padding: 0 8px; margin: 2px 0; border: none; }
+.old-d .li.attn { height: 60px; flex-wrap: wrap; align-content: center; row-gap: 2px; }
+.new-d .li.attn { height: 44px; flex-wrap: wrap; align-content: center; row-gap: 0; }
+.li.attn .why { flex-basis: 100%; padding-left: 28px; font-size: 12px; color: var(--bad); }
+.li.disc { font-weight: 600; }
+.li.cand { height: 40px; } .li.cand .nm small { display: block; font-size: 12px; color: var(--subtle); font-weight: 400; }
+.ok-t { color: var(--ok); } .bad-t { color: var(--bad); } .busy-t { color: var(--busy); } .mut { color: var(--subtle); } .warn-t { color: var(--warn); }
+.cards { display: flex; flex-direction: column; gap: 8px; flex: none; }
+.old-d .cards { width: 52%; }
+.card { border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; display: flex; gap: 10px; align-items: center; }
+.old-d .card { padding: 8px 10px; height: 92px; }
+.old-d .card .ph { width: 52px; height: 52px; border-radius: 4px; background: var(--surface); display: grid; place-items: center; color: var(--faint); flex: none; }
+.card.on { box-shadow: inset 0 0 0 2px var(--action); border-color: transparent; }
+.card b { font-size: 13.5px; display: block; }
+.card .d { color: var(--muted); }
+.card .w { color: var(--ok); font-size: 12px; }
+.card .rad { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--faint); flex: none; }
+.card.on .rad { border: 4px solid var(--action); }
+.new-d .card { height: 32px; padding: 0 10px; border-radius: 6px; }
+.new-d .card b { display: inline; font-size: 13px; margin-right: 6px; }
+.new-d .card > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.diff { background: var(--busy-soft); color: var(--ink); border-radius: 3px; padding: 0 3px; font-weight: 600; }
+.split { display: flex; gap: 14px; min-height: 0; flex: 1; }
+.split > .col { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.new-d .split .cards { width: 48%; padding-top: 6px; }
+
+/* the chip editor */
+.pop { position: absolute; z-index: 3; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.16); padding: 10px 12px; font-size: 12.5px; }
+.pop .ph { font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; gap: 10px; }
+.pop .ph span { color: var(--subtle); font-weight: 400; }
+.pop .slider { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+.pop .slider i { flex: 1; height: 4px; border-radius: 2px; background: var(--line); position: relative; }
+.pop .slider i::after { content: ""; position: absolute; left: calc(var(--v) - 7px); top: -6px; width: 14px; height: 14px; border-radius: 50%; background: var(--raised); border: 1.5px solid var(--faint); }
+.pop .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--subtle); margin: -4px 0 8px; }
+.pop .foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--line-soft); padding-top: 7px; margin-top: 4px; }
+.pop .foot a { color: var(--action); text-decoration: none; font-weight: 500; }
+.pop .fld { border: 1.5px solid var(--action); border-radius: 6px; padding: 3px 8px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; margin: 4px 0; }
+.pop .ex { color: var(--subtle); font-size: 12px; margin-bottom: 6px; }
+.pop .toks { display: flex; flex-wrap: wrap; gap: 4px; }
+.pop .toks span { font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--muted); }
+.pop .rowsel { display: flex; gap: 6px; align-items: center; }
+.pop .rowsel .sel { border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+.edrow { display: flex; gap: 40px; flex-wrap: wrap; align-items: flex-start; }
+.edcase { position: relative; padding-bottom: 8px; }
+.edcase > p { font-size: 12.5px; color: var(--muted); margin: 0 0 8px; max-width: 360px; }
+
+@media (max-width: 640px) {
+  .old-d .rail { width: 130px; } .new-d .rail { width: 150px; }
+  .tabs .flow, .chips .fact { display: none; }
+  .split { flex-direction: column; } .new-d .split .cards, .old-d .cards { width: 100%; }
+  .dh .say { display: none; }
+}
+
+/* ==== v4: one type scale, one spacing scale (4 8 12 16 24), colour for meaning only ==== */
+:root { --sh1: var(--ink); --sh2: var(--muted); --sh3: var(--subtle); }
+/* tile */
+.new { padding: 12px; }
+.new .z-id { height: 20px; gap: 8px; font-size: 13px; font-weight: 500; line-height: 20px; color: var(--sh2); padding-right: 24px; }
+.new .st { top: 15px; right: 12px; }
+.new .z-out { margin-top: 8px; height: 24px; align-items: center; gap: 8px; }
+.new .z-out .r { font-size: 16px; font-weight: 600; line-height: 24px; color: var(--sh1); }
+.new .z-out .q { font-size: 13px; font-weight: 400; line-height: 20px; color: var(--sh3); }
+.new .z-out .thumb { width: 24px; height: 24px; border-radius: 4px; }
+.new .z-now { margin-top: 4px; height: 20px; font-size: 13px; line-height: 16px; color: var(--sh1); }
+.new .z-now .bar { margin-top: 1px; }
+.new .z-now.act { gap: 8px; }
+.new .tbtn { height: 20px; padding: 0 8px; font-size: 12px; font-weight: 500; line-height: 16px; border-radius: 4px; }
+.new .z-ft { height: 36px; padding: 8px 12px; border-top: none; box-shadow: inset 0 1px 0 var(--line-soft); gap: 4px; align-items: center; }
+.new .gap-ft { height: 48px; }
+.chip { height: 20px; padding: 0 8px; gap: 4px; font-size: 12px; font-weight: 500; line-height: 16px; color: var(--sh2); border-radius: 4px; }
+.chip.mod { color: var(--sh1); }
+/* drawer (proposed) */
+.new-d .grip { height: 12px; }
+.new-d .dh { height: 48px; padding: 0 8px 0 16px; gap: 8px; }
+.new-d .dh .t { font-size: 16px; font-weight: 600; gap: 8px; }
+.new-d .dh .say { font-size: 13px; line-height: 20px; color: var(--sh1); margin-left: 4px; }
+.new-d .dh .acts { gap: 8px; }
+.new-d .dh .xx { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; font-size: 14px; color: var(--sh3); }
+.new-d .pill, .sheet .pill { height: 20px; padding: 0 8px; gap: 4px; font-size: 12px; font-weight: 500; line-height: 16px; }
+.new-d .btn { height: 28px; padding: 0 12px; font-size: 13px; font-weight: 500; line-height: 20px; display: inline-flex; align-items: center; border-radius: 6px; }
+.new-d .work { padding: 0 16px; }
+.new-d .tabs { height: 32px; gap: 16px; margin-bottom: 4px; }
+.new-d .tabs span { font-size: 13px; font-weight: 500; line-height: 20px; padding: 6px 0; color: var(--sh2); }
+.new-d .tabs span.on { color: var(--sh1); font-weight: 600; }
+.new-d .tabs .flt { gap: 4px; }
+.new-d .tabs .flt b { font-size: 12px; font-weight: 500; line-height: 16px; padding: 2px 8px; color: var(--sh2); box-shadow: none; }
+.new-d .tabs .flt b.on { color: var(--sh1); }
+.new-d .li { height: 24px; gap: 12px; font-size: 13px; line-height: 16px; color: var(--sh1); }
+.new-d .li .n, .new-d .li .len, .new-d .li .sz { font: 400 13px/16px "Schibsted Grotesk", system-ui, sans-serif; font-variant-numeric: tabular-nums; color: var(--sh3); }
+.new-d .li .sz { width: 48px; }
+.new-d .li .vd { font-size: 13px; color: var(--sh2); }
+.new-d .li.attn { height: 48px; padding: 8px; row-gap: 0; align-content: center; border-radius: 6px; }
+.new-d .li.attn .why { font-size: 13px; line-height: 16px; padding-left: 30px; }
+.new-d .li.disc { font-weight: 600; }
+.new-d .rail { width: 200px; padding: 4px 16px; }
+.new-d .rr { height: 28px; font-size: 13px; }
+.new-d .rr .l { color: var(--sh2); font-weight: 500; }
+.new-d .card { height: 36px; padding: 0 12px; gap: 8px; font-size: 13px; }
+.new-d .card b { font-size: 13px; font-weight: 600; }
+.new-d .card .d { color: var(--sh3); }
+.new-d .split .cards { padding-top: 8px; gap: 8px; }
+.new-d .split { gap: 16px; }
+.pop { padding: 12px; border-radius: 8px; font-size: 13px; }
+.pop .ph { margin-bottom: 8px; font-weight: 600; color: var(--sh1); } .pop .ph span { color: var(--sh3); font-weight: 400; }
+.pop .foot { padding-top: 8px; margin-top: 8px; }
+.pop .slider { margin: 8px 0; }
+.pop .ticks { margin: 0 0 8px; color: var(--sh3); font-size: 12px; }
+.pop .fld { margin: 8px 0 4px; padding: 4px 8px; }
+.pop .ex { margin-bottom: 8px; color: var(--sh3); font-size: 12px; }
+.pop .toks { gap: 4px; } .pop .toks span { padding: 0 4px; font-size: 12px; }
+
+/* the state outline is drawn over the footer band, not under it */
+.tile.new.busy, .tile.new.needs, .tile.new.bad { box-shadow: none; outline-offset: -2px; }
+.tile.new.busy { outline: 2px solid var(--busy); } .tile.new.needs { outline: 2px solid var(--warn); } .tile.new.bad { outline: 2px solid var(--bad); }
+
+/* ==== v5: today's shape, a little bigger ==== */
+.tile.v5 { width: 176px; height: 128px; padding: 12px; display: flex; flex-direction: column; overflow: hidden; }
+.v5 .z-id { flex: none; }
+.v5 .set { flex: none; margin-top: 4px; height: 16px; font-size: 12px; font-weight: 500; line-height: 16px; color: var(--sh2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; display: flex; align-items: center; gap: 0; }
+.v5 .set svg { width: 10px; height: 10px; stroke-width: 2.2; margin-right: 4px; flex: none; }
+.v5 .set .sep { color: var(--sh3); white-space: pre; }
+.v5 .set .sv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v5 .set .sv:first-of-type { flex: none; }
+.v5 .set .sv:hover { color: var(--sh1); text-decoration: underline dotted; text-underline-offset: 3px; }
+.v5 .set .sv.mod { color: var(--sh1); } .v5 .set .sv.mod::before { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--action); margin-right: 4px; vertical-align: 2px; }
+.v5 .set .sv.open { color: var(--action); text-decoration: underline; text-underline-offset: 3px; }
+.v5 .bd { margin-top: auto; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.v5 .bd.row { flex-direction: row; align-items: center; gap: 12px; }
+.v5 .bd.row > div { min-width: 0; }
+.v5 .out { height: 24px; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; }
+.v5 .out .r { font-size: 16px; font-weight: 600; line-height: 24px; color: var(--sh1); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.v5 .out .q { font-size: 13px; line-height: 20px; color: var(--sh3); flex: none; }
+.v5 .now { height: 16px; font-size: 13px; line-height: 16px; color: var(--sh1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v5 .now.meta { color: var(--sh3); }
+.v5 .now.act { height: 20px; display: flex; align-items: center; gap: 8px; }
+.v5 .badge { display: inline-block; height: 16px; padding: 0 4px; border-radius: 4px; background: var(--bg); font-size: 12px; font-weight: 500; line-height: 16px; color: var(--sh2); }
+.v5 .thumb { width: 48px; height: 48px; border-radius: 4px; flex: none; }
+.v5 .pic { height: 8px; display: flex; gap: 2px; align-items: stretch; }
+.v5 .pic i { flex: 1 1 0; min-width: 0; border-radius: 2px; background: var(--line); }
+.v5 .pic i.prog { background: var(--busy); }
+.v5 .pic.spark { align-items: flex-end; } .v5 .pic.spark i { flex: 1; opacity: .8; }
+.v5 .pic.sect { position: relative; background: var(--line); border-radius: 2px; display: block; }
+.v5 .pic.sect i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--c-read); opacity: .55; border-radius: 2px; }
+.v5 .pic.sect b { position: absolute; top: -1px; bottom: -1px; width: 2px; background: var(--bad); }
+.v5 .spin { animation: spin 1.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .v5 .spin { animation: none; } }
+
+.v5 .bd { height: 56px; flex: none; display: grid; grid-template-rows: 24px 16px 8px; row-gap: 4px; }
+.v5 .bd.row { display: flex; }
+.v5 .now.act { height: 16px; }
+.v5 .tbtn { height: 16px; padding: 0 8px; font-size: 12px; line-height: 16px; }
+.v5 .pic.sect i { background: var(--faint); opacity: 1; }
+.v5 .pic.spark i { opacity: 1; }
+
+/* ==== v6: 288 × 192, 3:2, a 16 px module, thirds at x 96 / 192 and y 64 / 128 ==== */
+.tile.v6 { width: 288px; height: 192px; padding: 0; overflow: hidden; display: block; }
+.v6 > * { position: absolute; left: 16px; right: 16px; }
+.v6 .z-id { top: 16px; height: 16px; line-height: 16px; font-size: 13px; font-weight: 500; color: var(--sh2); gap: 8px; padding-right: 24px; display: flex; align-items: center; }
+.v6 .z-id svg { width: 14px; height: 14px; stroke-width: 1.6; }
+.v6 .st { left: auto; right: 16px; top: 17px; width: 14px; height: 14px; }
+.v6 .set { top: 32px; height: 32px; font-size: 13px; font-weight: 400; line-height: 16px; color: var(--sh3); overflow: hidden; display: block; white-space: normal; cursor: pointer; }
+.v6 .set svg { width: 10px; height: 10px; stroke-width: 2.2; margin-right: 4px; vertical-align: -1px; }
+.v6 .set .sv { white-space: nowrap; display: inline; }
+.v6 .set .sv:hover { color: var(--sh1); text-decoration: underline dotted; text-underline-offset: 3px; }
+.v6 .set .sv.mod { color: var(--sh1); } .v6 .set .sv.mod::before { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--action); margin-right: 4px; vertical-align: 2px; }
+.v6 .set .sv.open { color: var(--action); text-decoration: underline; text-underline-offset: 3px; }
+.v6 .set .sep { white-space: normal; }
+/* the outcome sits on the lower third line (y 128), up to two lines */
+.v6 .out { top: 80px; height: 48px; display: flex; align-items: flex-end; }
+.v6 .out > span { display: inline; }
+.v6 .out .r { font-size: 20px; font-weight: 600; line-height: 24px; color: var(--sh1); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.v6 .out .q { font-size: 13px; line-height: 20px; color: var(--sh3); margin-left: 8px; white-space: nowrap; flex: none; padding-bottom: 2px; }
+.v6 .la { top: 136px; height: 16px; font-size: 13px; line-height: 16px; color: var(--sh2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v6 .la.now { color: var(--sh1); }
+.v6 .la.act { display: flex; align-items: center; gap: 8px; }
+.v6 .lb { top: 152px; height: 16px; font-size: 13px; line-height: 16px; color: var(--sh3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v6 .pic { top: 168px; height: 8px; display: flex; gap: 2px; align-items: stretch; }
+.v6 .pic i { flex: 1 1 0; min-width: 0; border-radius: 2px; background: var(--line); }
+.v6 .pic.spark { align-items: flex-end; }
+.v6 .pic.sect { position: absolute; display: block; background: var(--line); border-radius: 2px; }
+.v6 .pic.sect i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--faint); border-radius: 2px; }
+.v6 .pic.sect b { position: absolute; top: -1px; bottom: -1px; width: 2px; background: var(--bad); }
+.v6 .tbtn { height: 16px; padding: 0 8px; font-size: 12px; line-height: 16px; }
+/* Cover art: the cover fills the lower-left cell, 96 × 96 */
+.v6 .thumb { left: 16px; right: auto; top: 80px; width: 96px; height: 96px; border-radius: 4px; }
+.v6.art .out, .v6.art .la, .v6.art .lb { left: 128px; }
+.v6 .spin { animation: spin 1.6s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .v6 .spin { animation: none; } }
+.tile.new.v6.busy, .tile.new.v6.needs, .tile.new.v6.bad { outline-offset: -2px; }
+/* Show grid: thirds (pink), margins (teal) on every proposed card; the canvas rhythm */
+body.grid-on .tile.v6::after { content: ""; position: absolute; inset: 0; pointer-events: none; left: 0; right: 0;
+  background:
+    linear-gradient(#d6338499, #d6338499) 0 64px / 100% 1px no-repeat,
+    linear-gradient(#d6338499, #d6338499) 0 128px / 100% 1px no-repeat,
+    linear-gradient(#d6338499, #d6338499) 96px 0 / 1px 100% no-repeat,
+    linear-gradient(#d6338499, #d6338499) 192px 0 / 1px 100% no-repeat,
+    linear-gradient(#0aa2c099, #0aa2c099) 16px 0 / 1px 100% no-repeat,
+    linear-gradient(#0aa2c099, #0aa2c099) 272px 0 / 1px 100% no-repeat,
+    linear-gradient(#0aa2c099, #0aa2c099) 0 16px / 100% 1px no-repeat,
+    linear-gradient(#0aa2c099, #0aa2c099) 0 176px / 100% 1px no-repeat,
+    repeating-linear-gradient(to bottom, transparent 0 15px, #0aa2c022 15px 16px); }
+.canvas svg.wires .rhythm rect { fill: transparent; }
+body.grid-on .canvas svg.wires .rhythm rect { fill: #d6338418; stroke: #d6338466; stroke-dasharray: 4 4; }
+.gridbtn { font: inherit; font-size: 13px; color: var(--muted); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; margin-right: 8px; }
+/* drawers: 2/5 of the space under the header; rail two-thirds of a card */
+.drawer.new-d { height: 268px; }
+.new-d .rail { width: 192px; }
+
+/* ==== v7: five slots on every card; settings as label and value; one item strip ==== */
+.v7 .set { top: 32px; height: 32px; cursor: default; }
+.v7 .set.A .kv { display: flex; height: 16px; line-height: 16px; font-size: 13px; white-space: nowrap; }
+.v7 .set.A .k { width: 80px; flex: none; color: var(--sh3); }
+.v7 .set.A .v { color: var(--sh1); overflow: hidden; text-overflow: ellipsis; }
+.v7 .set.A .v.mod::before, .v7 .set.B .tag.mod::before { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--action); margin-right: 4px; vertical-align: 2px; }
+.v7 .set .lk { width: 10px; height: 10px; stroke-width: 2.2; margin-right: 4px; vertical-align: -1px; color: var(--sh3); }
+.v7 .set.B { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; padding-top: 2px; }
+.v7 .set.B .tag { height: 20px; line-height: 20px; padding: 0 8px; border-radius: 10px; background: var(--bg); color: var(--sh2); font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.v7 .set.B .tag:hover { background: var(--line-soft); color: var(--sh1); }
+.v7 .la { top: 136px; }
+.v7 .strip { top: 168px; height: 8px; display: flex; gap: 2px; }
+.v7.art .strip { left: 128px; }
+.v7 .strip i { flex: 1 1 0; min-width: 0; border-radius: 2px; }
+.v7 .strip .c-wait { background: var(--line); }
+.v7 .strip .c-busy { background: var(--busy); }
+.v7 .strip .c-done { background: var(--sh3); }
+.v7 .strip .c-ok { background: var(--ok); }
+.v7 .strip .c-warn { background: var(--warn); }
+.v7 .strip .c-bad { background: var(--bad); }
+.v7 .strip .c-out { background: transparent; box-shadow: inset 0 0 0 1px var(--faint); }
+.v7.editing { box-shadow: 0 0 0 2px var(--action) inset; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 24px; height: 8px; border-radius: 2px; display: inline-block; }
+.cmp .sheet { zoom: .75; }
+.cmp h3 { font-size: 14px; margin: 16px 0 4px; } .cmp h3:first-child { margin-top: 0; }
+.cmp p.pick { margin: 12px 0 0; font-size: 13px; }
+
+.v7 .set.A .k { display: flex; align-items: center; }
+.v7 .set.A .k .lk { margin: 0 8px 0 auto; }
+.v7 .set.B { padding-top: 0; }
+.v7 .set.B .tag { height: 14px; line-height: 14px; padding: 0 6px; border-radius: 7px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="page">
+<header class="top">
+  <h1>Cards and drawers, before and after</h1>
+  <span><button class="gridbtn" id="grid" type="button">Show grid</button><button class="theme" id="theme" type="button">Dark</button></span>
+</header>
+<div class="intro"><p style="margin:0 0 4px">Revised after the owner's review. Spec: <code>docs/ux/cards.md</code>.</p><ul style="margin:0;padding-left:18px">
+<li><b>Version 7.</b> Every card has the same five slots, each with one meaning: name, settings, outcome, one detail line, and one item strip. Every card is 288 × 192: a 3:2 card on a 16 px module, with 16 px margins and thirds on whole modules. <b>Show grid</b>, top right, draws the grid on every proposed card and the rhythm on the recipe.</li>
+<li>The eye goes outline → outcome (20 px, the only large text, on the lower third line) → name → the rest.</li>
+<li>Nothing short is cut: names, outcomes, settings values. Only long titles and deep paths shorten, with a tooltip.</li>
+<li>Settings show as label and value (treatment A, compared below). They're not links; a click on the card opens its drawer.</li>
+<li>The state is shown by the outline and the glyph.</li>
+<li>The item strip is the same on every card, with one cell per item and one legend, and it's the only progress bar. Cover art also shows its cover.</li>
+<li>Proposed drawers are shown at their default height: 2/5 of a 720 px window (268 px), with the canvas keeping 3/5. Today's are at half (330 px).</li>
+<li>Each step shows only what came in on its wires, its own settings, and what it gave.</li></ul></div>
+<nav>
+  <a href="#recipe">The CD recipe</a><a href="#states">Rip, every state</a><a href="#all">Every step, done</a><a href="#cdtext">CD-Text</a><a href="#choose">Choose</a><a href="#rip">Rip</a><a href="#flac">FLAC</a><a href="#folder">Folder</a><a href="#settings3">Settings, three ways</a>
+</nav>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="drive" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h6"/></symbol>
+  <symbol id="cd" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="look" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+  <symbol id="text" viewBox="0 0 24 24"><path d="M5 6h14M12 6v13"/></symbol>
+  <symbol id="choose" viewBox="0 0 24 24"><path d="M4 7h10M4 12h10M4 17h6M15 16l2.5 2.5L22 14"/></symbol>
+  <symbol id="art" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9.5" r="1.6"/><path d="M5 18l5-5 4 4 2-2 3 3"/></symbol>
+  <symbol id="rip" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
+  <symbol id="wave" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></symbol>
+  <symbol id="lib" viewBox="0 0 24 24"><path d="M5 5v14M9 5v14M13 6l4 13"/></symbol>
+  <symbol id="hold" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+  <symbol id="next" viewBox="0 0 24 24"><path d="M5 15l7-8 7 8zM5 19h14"/></symbol>
+  <symbol id="game" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="9" rx="4"/><path d="M8 11v3M6.5 12.5h3M15.5 12h.5M17.5 13.5h.5"/></symbol>
+  <symbol id="film" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 5v14M16 5v14M4 9.5h4M4 14.5h4M16 9.5h4M16 14.5h4"/></symbol>
+  <symbol id="shield" viewBox="0 0 24 24"><path d="M12 4l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V7z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="box" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="4" rx="1"/><path d="M5 9v10h14V9M10 13h4"/></symbol>
+  <symbol id="list" viewBox="0 0 24 24"><path d="M4 7h11M4 12h11M4 17h7M17 14l4 3-4 3z"/></symbol>
+  <symbol id="swap" viewBox="0 0 24 24"><path d="M5 9h13l-3-3M19 15H6l3 3"/></symbol>
+  <symbol id="bell" viewBox="0 0 24 24"><path d="M6 17h12l-1.5-2v-4a4.5 4.5 0 0 0-9 0v4zM10 20h4"/></symbol>
+  <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></symbol>
+  <symbol id="gauge" viewBox="0 0 24 24"><path d="M6 6v12M12 4v16M18 8v8M4 9h4M10 15h4M16 11h4"/></symbol>
+  <symbol id="doc" viewBox="0 0 24 24"><path d="M7 4h7l4 4v12H7zM14 4v4h4"/></symbol>
+  <symbol id="tick" viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></symbol>
+  <symbol id="cross" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></symbol>
+  <symbol id="bang" viewBox="0 0 24 24"><path d="M12 6v8M12 18v.5"/></symbol>
+  <symbol id="clock" viewBox="0 0 24 24"><path d="M12 6v6l4 3"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+</svg>
+
+<!-- The CD recipe ------------------------------------------------------------------------- -->
+<section class="case" id="recipe">
+  <h2>The CD recipe, end to end, mid-rip</h2>
+  <p>Track 6 of 17 is being read. Both canvases are at 100 %; scroll sideways.</p>
+  <ul class="notes" style="margin:0 0 12px">
+    <li><b>Today</b> every tile is 152 × 112 px. Its status sits at the bottom, coloured by state.</li>
+    <li><b>Proposed</b>, every tile is 288 × 192, in three bands:
+      <ul>
+        <li>the top third holds the name and settings;</li>
+        <li>the middle third holds the outcome, sitting on the lower third line;</li>
+        <li>the bottom third holds two detail lines and the picture on the bottom margin.</li>
+      </ul>
+      Strips are a third of a card apart (64 px), and stacked branches a sixth (32 px).</li>
+  </ul>
+  <div class="scroll"><p class="cap2">Today</p><div class="canvas" id="cv-old"></div></div>
+  <div class="scroll"><p class="cap2 new">Proposed</p><div class="canvas" id="cv-new"></div></div>
+  <ul class="notes">
+    <li>The eye lands first on the <b>outcome</b> (20 px, 600, ink), then the name (13 px, 500, grey), then the detail, and last the settings and the strip.</li>
+    <li>The strips side by side show where each track is in the pipeline: Rip has five verified and one reading, FLAC four done and one encoding, Review four filed.</li>
+    <li>No source lines (<i>from the disc</i>, <i>by disc ID</i>): they describe what a step always does, which is the + picker's job.</li>
+    <li>The state is shown only by the glyph and the outline. Text is never coloured by state.</li>
+    <li>Hold, Library and Next disc wait with a clock and no outline, because nothing needs you. The Drive's disc turns while it reads.</li>
+  </ul>
+</section>
+
+<!-- Rip, every state ------------------------------------------------------------------------ -->
+<section class="case" id="states">
+  <h2>One tile, every state: Rip</h2>
+  <p>The slots never move. Before a run the card is its name and its settings, with one waiting cell. Once it runs, the outcome leads. The detail line says what it's on, and the strip shows which track is where: green verified, blue reading, orange to retry, red failed.</p>
+  <div class="side"><div class="sheet" id="sheet-states"></div></div>
+</section>
+
+<!-- Every step, done ------------------------------------------------------------------------ -->
+<section class="case" id="all">
+  <h2>Every step, done</h2>
+  <p>Every built-in step's tile after a disc. Each outcome is in its job's own unit, with a qualifier only where it changes what you'd think. Every card has the same five slots, and the strip uses one legend. A step that handles the disc as a whole shows a single cell.</p>
+  <div class="legend"><span><i style="background:var(--line)"></i>waiting</span><span><i style="background:var(--busy)"></i>working</span><span><i style="background:var(--sh3)"></i>done</span><span><i style="background:var(--ok)"></i>verified</span><span><i style="background:var(--warn)"></i>needs you</span><span><i style="background:var(--bad)"></i>failed</span><span><i style="box-shadow:inset 0 0 0 1px var(--faint)"></i>left out</span></div>
+  <div class="side"><div class="sheet" id="sheet-all"></div></div>
+</section>
+
+
+<!-- Settings, three ways ----------------------------------------------------------------- -->
+<section class="case cmp" id="settings3">
+  <h2>Settings on the card: three ways</h2>
+  <p>FLAC, MP3, Rip, Library and Transcode are each shown idle, changed by you, and locked while ripping. The settings slot doesn't move, so the card's grid is the same in all three.</p>
+  <div class="side">
+    <h3>A. Label and value <span class="mut">(picked)</span></h3>
+    <div class="sheet" id="cmp-a"></div>
+    <h3>B. Quiet tags <span class="mut">(two rows of tags fit the slot only at 14 px, so they're small and fiddly to click)</span></h3>
+    <div class="sheet" id="cmp-b"></div>
+    <h3>C. Edit mode only: not editing, then editing (as A, with the editing outline)</h3>
+    <div class="sheet" id="cmp-c"></div>
+    <div class="sheet" id="cmp-c2" style="margin-top:12px"></div>
+    <p class="pick"><b>Picked: A.</b> It reads as facts, not links, and so promises nothing it doesn't do. The label says what a bare <i>8</i> or <i>slow</i> means. The values sit on the first third line. C would hide configuration the design puts on the tile on purpose, and B brings back the chips you moved away from. A click on the card opens its drawer, where settings are edited.</p>
+  </div>
+</section>
+
+<!-- 1. CD-Text ---------------------------------------------------------------------------- -->
+<section class="case" id="cdtext">
+  <h2>1 · CD-Text, done</h2>
+  <p>Its job is to offer the disc's own titles as one candidate. Whether Choose took it is Choose's business. Today the first title starts about 170 px down the drawer; proposed, at 96.</p>
+  <div class="pair">
+    <div class="side before"><p class="label">Today</p>
+      <div class="stage" data-tile="cdtext-old"></div>
+      <div class="drawer old-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-look"><use href="#text"/></svg>CD-Text</span><span class="pill ok">✓ Done</span><span class="say">17 titles read from the disc.</span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="rail"><p class="h">Read from</p><p class="v">The disc</p></div>
+          <div class="work">
+            <div class="tabs"><span class="on">Found</span><span>Log</span><span class="flow">In 1 disc from Audio CD · Out 1 disc → Choose</span></div>
+            <div class="capt">Offered</div>
+            <div class="li cand"><span class="nm">From the disc (CD-Text)<small>CD-Text · THE WHITE STRIPES, 17 titles</small></span><span class="len">100%</span></div>
+            <div class="capt">Facts</div>
+            <div class="thead"><span style="width:52px"></span>Title</div>
+            <div data-rows="cdtext-old"></div>
+          </div>
+        </div>
+        <span class="h330">330 px</span>
+      </div>
+      <ul class="notes"><li><span class="x">Generic</span> subtitle <i>lookup</i>. "From the disc" appears three times: the tile, the sentence and the rail.</li><li><span class="x">Chrome:</span> two captions, a column header and the In/Out line before the first title.</li></ul>
+    </div>
+    <div class="side after"><p class="label">Proposed</p>
+      <div class="stage" data-tile="cdtext-new"></div>
+      <div class="drawer new-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-look"><use href="#text"/></svg>CD-Text</span><span class="pill ok">✓ Done</span><span class="say"></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="work">
+            <div class="tabs"><span class="on">Offered</span><span>Log</span></div>
+            <div class="li disc"><span class="n"></span><span class="nm">THE WHITE STRIPES · THE WHITE STRIPES</span><span class="len">43:45</span></div>
+            <div data-rows="cdtext-new"></div>
+          </div>
+        </div>
+        <span class="h330">268 px · 2/5</span>
+      </div>
+      <ul class="notes"><li>The tile is its outcome alone. <i>From the disc</i> described the step, so it went.</li><li>No rail, because it has no settings. No captions: the tab is called <i>Offered</i>. The disc's row comes first, then a title per row, with lengths from the disc item.</li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Choose ----------------------------------------------------------------------------- -->
+<section class="case" id="choose">
+  <h2>2 · Choose, asking</h2>
+  <p>Its job is to settle which of the candidates that reached it the disc is. When it asks, the only useful thing is what tells them apart. The cards no longer show a cover, because Cover art runs after Choose.</p>
+  <div class="pair">
+    <div class="side before"><p class="label">Today</p>
+      <div class="stage" data-tile="choose-old"></div>
+      <div class="drawer old-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-chk"><use href="#choose"/></svg>Choose</span><span class="pill warn">! Which release?</span><span class="say">2 releases fit this disc. The first is most likely.</span><span class="acts"><button class="btn quiet">Skip</button><button class="btn primary">Use this one</button></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="rail"><p class="h">Found by</p><p class="v">MusicBrainz, 2 releases<br>CD-Text, 17 titles</p></div>
+          <div class="work" style="padding-top:10px">
+            <div class="split">
+              <div class="cards">
+                <div class="card on"><span class="ph"><svg class="i"><use href="#cd"/></svg></span><span><b>The White Stripes</b><span class="d">1999, US, Sympathy for the Record Industry, SFTRI 577</span><br><span class="w">✓ disc ID ✓ 17 titles</span></span></div>
+                <div class="card"><span class="ph"><svg class="i"><use href="#cd"/></svg></span><span><b>The White Stripes</b><span class="d">2002, UK, XL Recordings, XLCD 151</span><br><span class="w">✓ disc ID ✓ 17 titles</span></span></div>
+              </div>
+              <div class="col"><div class="capt">Tracks, against the disc</div><div data-rows="choose-old"></div></div>
+            </div>
+          </div>
+        </div>
+        <span class="h330">330 px</span>
+      </div>
+      <ul class="notes"><li><i>Which release?</i> appears three times: the tile, the pill and the header chip. The rail repeats the lookup tiles.</li><li>Both cards carry the same ticks. Each card is 92 px tall to leave room for a cover that can't exist yet.</li></ul>
+    </div>
+    <div class="side after"><p class="label">Proposed</p>
+      <div class="stage" data-tile="choose-new"></div>
+      <div class="drawer new-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-chk"><use href="#choose"/></svg>Choose</span><span class="pill warn">! Needs you</span><span class="say">They differ by year, country and label.</span><span class="acts"><button class="btn quiet">Skip</button><button class="btn primary">Use this one</button></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="work">
+            <div class="split">
+              <div class="cards">
+                <div class="card on"><span class="rad"></span><span><b>The White Stripes</b><span class="d"><span class="diff">1999 US</span> <span class="diff">Sympathy</span> SFTRI 577</span></span></div>
+                <div class="card"><span class="rad"></span><span><b>The White Stripes</b><span class="d"><span class="diff">2002 UK</span> <span class="diff">XL</span> XLCD 151</span></span></div>
+                <div class="card"><span class="rad"></span><span><b>From the disc</b><span class="d">CD-Text, in capitals</span></span></div>
+                <div class="card"><span class="rad"></span><span class="d">Enter details…</span></div>
+              </div>
+              <div class="col"><div class="tabs"><span class="on">Tracks against the disc</span><span class="flt"><b>17 match</b></span></div><div data-rows="choose-new"></div></div>
+            </div>
+          </div>
+        </div>
+        <span class="h330">268 px · 2/5</span>
+      </div>
+      <ul class="notes"><li>The pill states the state; the <b>sentence</b> says what you're choosing between, and the cards mark it. Each candidate is one 36 px line, so all four options fit.</li><li>Every option that reached it is offered, CD-Text's included. There's no cover and no rail.</li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- 3. Rip -------------------------------------------------------------------------------- -->
+<section class="case" id="rip">
+  <h2>3 · Rip, one track to decide</h2>
+  <p>Its job is to read every track so it matches AccurateRip. A track that doesn't is a decision, so it's orange and leads the drawer, with its retries one click away.</p>
+  <div class="pair">
+    <div class="side before"><p class="label">Today</p>
+      <div class="stage" data-tile="rip-old"></div>
+      <div class="drawer old-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-read"><use href="#rip"/></svg>Rip</span><span class="pill bad">✕ 1 to retry</span><span class="say">16 verified</span><span class="acts"><button class="btn quiet">Working folder</button></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="rail"><p class="h">Locked while ripping</p><p class="h">AccurateRip</p><p class="v">On</p><p class="h">First read</p><p class="v">Fast</p></div>
+          <div class="work">
+            <div class="tabs"><span class="on">Items</span><span>Found</span><span>Log</span><span class="flow">In 1 disc from Cover art · Out 16 tracks → FLAC, MP3, Next disc</span></div>
+            <div class="chips"><span>Needs you 1</span><span>Verified 16</span><span class="on">All 17</span><span class="fact">offset +103, Blu-ray drive</span></div>
+            <div data-rows="rip-old"></div>
+          </div>
+        </div>
+        <span class="h330">330 px</span>
+      </div>
+      <ul class="notes"><li>One state in five wordings: <i>16 ✓ 1 ✕</i>, <i>1 to retry</i>, <i>Needs you 1</i>, <i>Doesn't match</i>, <i>No match in AccurateRip</i>.</li><li>Two rows of tabs, and four rows of tracks visible.</li></ul>
+    </div>
+    <div class="side after"><p class="label">Proposed</p>
+      <div class="stage" data-tile="rip-new"></div>
+      <div class="drawer new-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-read"><use href="#rip"/></svg>Rip</span><span class="pill warn">! Needs you</span><span class="say">Track 9 doesn't match AccurateRip.</span><span class="acts"><button class="btn quiet">Keep</button><button class="btn">Combine reads</button><button class="btn primary">Read again</button></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="work">
+            <div class="tabs"><span class="on">Items</span><span>Log</span><span class="flt"><b>Needs you 1</b><b class="on">All 17</b></span></div>
+            <div data-rows="rip-new"></div>
+          </div>
+        </div>
+        <span class="h330">268 px · 2/5</span>
+      </div>
+      <ul class="notes"><li>No rail: the first read is the one setting, on the tile, locked while it runs. AccurateRip is always checked. The header holds the retries, and the drawer holds the tracks.</li><li>The offset and drive aren't repeated: the offset arrives on the disc, and it is shown on Drive.</li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- 4. FLAC ------------------------------------------------------------------------------- -->
+<section class="case" id="flac">
+  <h2>4 · FLAC, done</h2>
+  <p>Its job is to turn each track into a FLAC file. Once it's done, what matters is how much it wrote and how well it packed. Its one setting, the level, is on the tile; the cover and the tags are whatever arrived, and every file is checked against the rip, so the drawer's rail keeps only <i>Advanced</i>.</p>
+  <div class="pair">
+    <div class="side before"><p class="label">Today</p>
+      <div class="stage" data-tile="flac-old"></div>
+      <div class="drawer old-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-make"><use href="#wave"/></svg>FLAC</span><span class="pill ok">✓ Done</span><span class="say">17 of 17 encoded.</span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="rail"><p class="h">Compression</p><p class="v">▬▬▬▬▬▬▬○ &nbsp;8</p><p class="h">Verify</p><p class="v"><span class="seg"><span class="on">On</span><span>Off</span></span></p><p class="h">Tags and art</p><p class="h">Embed the cover</p><p class="v"><span class="seg"><span class="on">On</span><span>Off</span></span></p><p class="h">Cover size</p></div>
+          <div class="work">
+            <div class="tabs"><span class="on">Items</span><span>Found</span><span>Log</span><span class="flow">In 17 tracks from Rip · Out 17 files, 294 MB → Review</span></div>
+            <div class="chips"><span>Encoding 0</span><span>Done 17</span><span class="on">All 17</span></div>
+            <div data-rows="flac-old"></div>
+          </div>
+        </div>
+        <span class="h330">330 px</span>
+      </div>
+      <ul class="notes"><li>"17 of 17" appears on the tile, in the sentence and in the chip, then 17 identical <i>Encoded</i> rows.</li><li>The size is only in the In/Out line. Each setting takes about 60 px of rail.</li></ul>
+    </div>
+    <div class="side after"><p class="label">Proposed</p>
+      <div class="stage" data-tile="flac-new"></div>
+      <div class="drawer new-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-make"><use href="#wave"/></svg>FLAC</span><span class="pill ok">✓ Done</span><span class="say"></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="rail">
+            <div class="rr fold">› Advanced</div>
+          </div>
+          <div class="work">
+            <div class="tabs"><span class="on">Files</span><span>Log</span></div>
+            <div data-rows="flac-new"></div>
+          </div>
+        </div>
+        <span class="h330">268 px · 2/5</span>
+      </div>
+      <ul class="notes"><li>The <b>settings line</b> shows how it's set and the <b>outcome</b> what it made. With nothing to add, the sentence is empty.</li><li>The rail keeps only <i>Advanced</i>. <b>Files</b> is one list, with sizes.</li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5. Folder ----------------------------------------------------------------------------- -->
+<section class="case" id="folder">
+  <h2>5 · Folder (Library), done</h2>
+  <p>Its job is to file each file at a path made from its template. Today the drawer gives the path five times and two lists that disagree. The tile is wide enough for the whole folder and naming pattern, so the drawer needs no rail.</p>
+  <div class="pair">
+    <div class="side before"><p class="label">Today</p>
+      <div class="stage" data-tile="lib-old"></div>
+      <div class="drawer old-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-put"><use href="#lib"/></svg>Library</span><span class="pill ok">✓ Done</span><span class="say">17 of 17 filed in ~/Music/FLAC.</span><span class="acts"><button class="btn quiet">Open folder</button></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="rail"><p class="h">Folder</p><p class="f">~/Music/FLAC</p><p class="prov"><b>yours</b>, 19 Nov <a href="#">Reset</a></p><p class="h">Names</p><p class="f">Artist / Album / 01 - Title</p><p class="f" style="font-size:11.5px">{albumartist}/{album}/{track} - {t…</p><p class="prov">Unknown artist/The White Stripes/01 - Jimmy the Exploder.flac</p></div>
+          <div class="work">
+            <div class="tabs"><span class="on">Items</span><span>Found</span><span class="flow">In 17 files from Hold · Out 17 files, 294 MB</span></div>
+            <div class="chips"><span>To file 0</span><span>Filed 17</span><span class="on">All 17</span><span class="fact">Unknown artist / The White Stripes /</span></div>
+            <div data-rows="lib-old"></div>
+          </div>
+        </div>
+        <span class="h330">330 px</span>
+      </div>
+      <ul class="notes"><li>The path appears five times. The Items list says <i>Unknown artist</i> while Found says <i>The White Stripes</i>, and the rows are in arrival order: 1, 5, 6, 2.</li><li>A built-in value is marked <i>yours</i>.</li></ul>
+    </div>
+    <div class="side after"><p class="label">Proposed</p>
+      <div class="stage" data-tile="lib-new"></div>
+      <div class="drawer new-d">
+        <div class="grip"><i></i></div>
+        <div class="dh"><span class="t"><svg class="i i-put"><use href="#lib"/></svg>Library</span><span class="pill ok">✓ Done</span><span class="say">In <a href="#">The White Stripes / The White Stripes</a></span><span class="acts"><button class="btn quiet">Open folder</button></span><span class="xx">✕</span></div>
+        <div class="db">
+          <div class="work">
+            <div class="tabs"><span class="on">Files</span><span>Log</span></div>
+            <div data-rows="lib-new"></div>
+          </div>
+        </div>
+        <span class="h330">268 px · 2/5</span>
+      </div>
+      <ul class="notes"><li>The folder and the naming pattern are the settings line. Clicking the pattern opens a wide popover (case 6), so the rail goes. The tile shows the folder it made, as a breadcrumb.</li><li>The sentence holds the one new fact, the folder it made, as a link. <b>Files</b> is one list in track order, from the same code that files them.</li></ul>
+    </div>
+  </div>
+</section>
+
+
+</div>
+
+<script>
+(function () {
+  // ---- tiles -------------------------------------------------------------------------------
+  var ICON = { drive: ['drive','i-src'], next: ['next','i-src'], cd: ['cd','i-read'], data: ['cd','i-read'], game: ['game','i-read'], video: ['film','i-read'],
+    rip: ['rip','i-read'], image: ['copy','i-read'], mb: ['look','i-look'], cdtext: ['text','i-look'], look: ['look','i-look'], art: ['art','i-look'],
+    lyr: ['doc','i-look'], choose: ['choose','i-chk'], hold: ['hold','i-chk'], check: ['shield','i-chk'], flac: ['wave','i-make'], mp3: ['wave','i-make'],
+    rg: ['gauge','i-make'], cue: ['doc','i-make'], chd: ['box','i-make'], keep: ['box','i-make'], sbi: ['lock','i-make'], m3u: ['list','i-make'],
+    tc: ['swap','i-make'], lib: ['lib','i-put'], tell: ['bell','i-put'] };
+  var ST = { ok: '<svg><use href="#tick"/></svg>', needs: '<svg><use href="#bang"/></svg>', bad: '<svg><use href="#cross"/></svg>', skip: '<svg><use href="#cross"/></svg>',
+    wait: '<svg><use href="#clock"/></svg>', hold: '<svg><use href="#hold"/></svg>', busy: '', idle: '' };
+  function glyph(s) { return '<span class="st ' + s + '">' + ST[s] + '</span>'; }
+  function icon(k) { var ic = ICON[k]; return '<svg class="i ' + ic[1] + '"><use href="#' + ic[0] + '"/></svg>'; }
+  function chip(c) {
+    var cls = 'chip' + (c.mod ? ' mod' : '') + (c.lock ? ' lock' : '') + (c.unset ? ' unset' : '') + (c.open ? ' open' : '');
+    return '<span class="' + cls + '">' + (c.lock ? '<svg class="i"><use href="#lock"/></svg>' : '') + c.t + '</span>';
+  }
+  function bar(f) { return '<div class="bar"><i style="width:' + Math.round(f * 100) + '%"></i></div>'; }
+  function pos(o) { return o.x != null ? 'left:' + o.x + 'px;top:' + o.y + 'px;' : ''; }
+
+  // Today: 152 × 112, the status at the bottom, coloured by state.
+  function tileOld(o, strip) {
+    var st = o.s === 'hold' ? 'needs' : o.s;
+    var cls = 'tile old ' + st + ' ' + (strip || 'alone');
+    var extra = o.s === 'hold' ? 'background:var(--raised);box-shadow:none' : '';
+    return '<div class="' + cls + '" style="' + pos(o) + extra + '"><div class="nm">' + icon(o.k) + o.name + '</div>' + glyph(o.s) +
+      '<div class="sub">' + o.sub + '</div><div class="foot"><div class="main' + (o.amber ? ' amber' : '') + '">' + (o.main || '&nbsp;') + '</div><div class="det">' + (o.det || '&nbsp;') + '</div>' + (o.bar != null ? bar(o.bar) : '') + '</div></div>';
+  }
+  // Proposed (v5): today's shape, a little bigger. Head at the top (name, settings line);
+  // body at the bottom (outcome, now, picture). 176 × 128, always.
+  var TRL = [150, 140, 149, 201, 175, 133, 151, 162, 111, 114, 185, 194, 194, 142, 91, 144, 189];
+  // Done cells are neutral: colour is kept for state (Rip's verified, reading, to retry).
+  var KIND = { make: 'var(--sh3)', put: 'var(--sh3)', look: 'var(--sh3)', read: 'var(--sh3)', chk: 'var(--sh3)' };
+  function cells(states, done) {
+    return '<div class="pic">' + states.map(function (st) {
+      var bg = st === 'ok' ? 'var(--ok)' : st === 'busy' ? 'var(--busy)' : st === 'warn' ? 'var(--warn)' : st === 'done' ? done : st === 'kept' ? 'var(--faint)' : st === 'none' ? 'transparent' : 'var(--line)';
+      return '<i style="background:' + bg + (st === 'none' ? ';box-shadow:inset 0 0 0 1px var(--line)' : '') + '"></i>';
+    }).join('') + '</div>';
+  }
+  function run(n, a, total) { var r = []; for (var i = 0; i < total; i++) r.push(i < n ? a : 'wait'); return r; }
+  function shape(lengths, col, kept) {
+    return '<div class="pic">' + lengths.map(function (l, i) {
+      var k = !kept || kept[i];
+      return '<i style="flex-grow:' + l + ';background:' + (k ? col : 'transparent') + (k ? '' : ';box-shadow:inset 0 0 0 1px var(--line)') + '"></i>';
+    }).join('') + '</div>';
+  }
+  function spark(vals, col) {
+    return '<div class="pic spark">' + vals.map(function (v) { return '<i style="height:' + Math.round(v * 8) + 'px;background:' + col + '"></i>'; }).join('') + '</div>';
+  }
+  function sectors(f, bad) {
+    return '<div class="pic sect"><i style="width:' + Math.round(f * 100) + '%"></i>' + (bad || []).map(function (x) { return '<b style="left:' + x + '%"></b>'; }).join('') + '</div>';
+  }
+  function progress(f) { return '<div class="pic"><i class="prog" style="flex:none;width:' + Math.round(f * 100) + '%"></i></div>'; }
+  // Settings, three ways (v7). A: label and value, the pick. B: quiet tags. C: none outside edit mode.
+  var LOCK = '<svg class="i lk"><use href="#lock"/></svg>';
+  function setline(o) {
+    var mode = o.mode || 'A';
+    if (!o.set || mode === 'C') return '';
+    if (mode === 'B') {
+      return '<div class="set B">' + o.set.map(function (p) { return '<span class="tag' + (p.mod ? ' mod' : '') + '">' + (o.lock ? LOCK : '') + (p.tag || p.t) + '</span>'; }).join('') + '</div>';
+    }
+    return '<div class="set A">' + o.set.map(function (p, i) {
+      // The lock sits in the label column's gutter, so values stay on the x 96 line.
+      return '<div class="kv"><span class="k">' + p.l + (o.lock ? LOCK : '') + '</span><span class="v' + (p.mod ? ' mod' : '') + '"' + (p.full ? ' title="' + p.full + '"' : '') + '>' + p.t + '</span></div>';
+    }).join('') + '</div>';
+  }
+  // The item strip: one cell per item, one legend on every card.
+  function strip(items) { return '<div class="strip">' + items.map(function (c) { return '<i class="c-' + c + '"></i>'; }).join('') + '</div>'; }
+  function one(st) { return [st === 'busy' ? 'busy' : st === 'ok' ? 'done' : st === 'needs' ? 'warn' : st === 'bad' ? 'bad' : st === 'skip' ? 'out' : 'wait']; }
+  function run(n, a, total) { var r = []; for (var i = 0; i < total; i++) r.push(i < n ? a : 'wait'); return r; }
+  function at(arr, i, v) { arr = arr.slice(); arr[i] = v; return arr; }
+
+  // Proposed (v7): 288 × 192, five slots on every card, each with one meaning.
+  // 1 name and glyph · 2 settings (space kept) · 3 outcome (ends on the lower third) ·
+  // 4 detail (one line) · 5 item strip.
+  function tileNew(o, strip_) {
+    var st = o.s === 'skip' ? 'idle' : o.s;
+    var cls = 'tile new v6 v7 ' + st + ' ' + (strip_ || 'alone') + (o.thumb ? ' art' : '') + (o.editing ? ' editing' : '');
+    var ic = (o.k === 'drive' && o.s === 'busy') ? '<svg class="i i-read spin"><use href="#cd"/></svg>' : icon(o.k);
+    var out = o.out ? '<div class="out"' + (o.outFull ? ' title="' + o.outFull + '"' : '') + '><span class="r">' + o.out + '</span>' + (o.q ? '<span class="q">' + o.q + '</span>' : '') + '</div>' : '';
+    var det = o.btn ? '<div class="la act"><span>' + o.now + '</span><button class="tbtn">' + o.btn + '</button></div>'
+            : o.now ? '<div class="la now">' + o.now + '</div>'
+            : o.a ? '<div class="la"' + (o.aFull ? ' title="' + o.aFull + '"' : '') + '>' + o.a + '</div>' : '';
+    return '<div class="' + cls + '" style="' + pos(o) + '"><div class="z-id">' + ic + o.name + '</div>' + glyph(o.s) + setline(o) +
+      (o.thumb ? '<span class="thumb"></span>' : '') + out + det + strip(o.items || one(o.s)) + '</div>';
+  }
+  var S = function () { return Array.prototype.map.call(arguments, function (t) { return typeof t === 'string' ? { t: t } : t; }); };
+  var KV = function (l, t, extra) { return Object.assign({ l: l, t: t }, extra || {}); };
+
+  // ---- the CD recipe, mid-rip ----------------------------------------------------------------
+  var OLD = {
+    drive: { k: 'drive', name: 'Drive', s: 'busy', sub: 'Blu-ray drive', main: 'Reading', det: '8×, track 6' },
+    cd: { k: 'cd', name: 'Audio CD', s: 'ok', sub: 'table of contents', main: '17 tracks', det: '43:45' },
+    mb: { k: 'mb', name: 'MusicBrainz', s: 'ok', sub: 'lookup', main: '2 releases', det: 'by disc ID' },
+    cdtext: { k: 'cdtext', name: 'CD-Text', s: 'ok', sub: 'lookup', main: '17 titles', det: 'artist, album' },
+    choose: { k: 'choose', name: 'Choose', s: 'ok', sub: 'which release', main: 'The White Stripes', det: '1999' },
+    art: { k: 'art', name: 'Cover art', s: 'ok', sub: 'Cover Art Archive', main: 'Found', det: '1200 × 1200' },
+    rip: { k: 'rip', name: 'Rip', s: 'busy', sub: 'cyanrip, AccurateRip', main: '5 of 17', det: 'Wasting My Time', bar: .3 },
+    flac: { k: 'flac', name: 'FLAC', s: 'busy', sub: 'level 8, verified', main: '4 of 17', det: '1 encoding', bar: .24 },
+    review: { k: 'lib', name: 'Review', s: 'busy', sub: '~/Music/Review', main: '4 of 17', det: '', bar: .24 },
+    hold: { k: 'hold', name: 'Hold', s: 'hold', sub: 'until you let it through', main: 'Holds for you', det: '4 waiting', amber: 1 },
+    lib1: { k: 'lib', name: 'Library', s: 'wait', sub: '~/Music/FLAC', main: 'Waits for hold', det: '' },
+    mp3: { k: 'mp3', name: 'MP3', s: 'busy', sub: 'V0, joint stereo', main: '4 of 17', det: '1 encoding', bar: .24 },
+    lib2: { k: 'lib', name: 'Library', s: 'busy', sub: '~/Music/MP3', main: '4 of 17', det: '', bar: .24 },
+    next: { k: 'next', name: 'Next disc', s: 'busy', sub: 'eject, start again', main: '', det: '' }
+  };
+  var NAMES = 'Artist / Album / 01 - Title';
+  var T17 = function (a) { return run(17, a, 17); };
+  var NEW = {
+    drive: { k: 'drive', name: 'Drive', s: 'busy', lock: 1, set: [KV('Drive', 'Blu-ray drive'), KV('Offset', '+103')], out: 'CD in', now: 'Reading at 8×' },
+    cd: { k: 'cd', name: 'Audio CD', s: 'ok', out: '17 tracks', q: '43:45', items: T17('done') },
+    mb: { k: 'mb', name: 'MusicBrainz', s: 'ok', out: '2 releases' },
+    cdtext: { k: 'cdtext', name: 'CD-Text', s: 'ok', out: '17 titles', a: 'THE WHITE STRIPES' },
+    choose: { k: 'choose', name: 'Choose', s: 'ok', out: 'The White Stripes', q: '1999', a: 'SFTRI 577 · Sympathy for the Record Industry', aFull: 'SFTRI 577 · Sympathy for the Record Industry' },
+    art: { k: 'art', name: 'Cover art', s: 'ok', lock: 1, set: [KV('Largest', '1200 px')], thumb: 1, out: '1200 × 1200' },
+    rip: { k: 'rip', name: 'Rip', s: 'busy', lock: 1, set: [KV('First read', 'fast')], out: '5/17 verified', now: 'Track 6 · Wasting My Time', items: at(run(5, 'ok', 17), 5, 'busy') },
+    flac: { k: 'flac', name: 'FLAC', s: 'busy', lock: 1, set: [KV('Level', '8')], out: '72 MB', q: '58 %', now: 'Track 5 · Sugar Never Tasted So Good', items: at(run(4, 'done', 17), 4, 'busy') },
+    review: { k: 'lib', name: 'Review', s: 'busy', lock: 1, set: [KV('Folder', '~/Music/Review'), KV('Names', NAMES)], out: '4 filed', now: '04 - Suzy Lee.flac', items: run(4, 'done', 17) },
+    hold: { k: 'hold', name: 'Hold', s: 'wait', out: '4 held', items: run(4, 'done', 17) },
+    lib1: { k: 'lib', name: 'Library', s: 'wait', lock: 1, set: [KV('Folder', '~/Music/FLAC'), KV('Names', NAMES)], items: T17('wait') },
+    mp3: { k: 'mp3', name: 'MP3', s: 'busy', lock: 1, set: [KV('Quality', 'V0'), KV('Stereo', 'joint')], out: '19 MB', now: 'Track 5 · Sugar Never Tasted So Good', items: at(run(4, 'done', 17), 4, 'busy') },
+    lib2: { k: 'lib', name: 'Library', s: 'busy', lock: 1, set: [KV('Folder', '~/Music/MP3'), KV('Names', NAMES)], out: '4 filed', now: '04 - Suzy Lee.mp3', items: run(4, 'done', 17) },
+    next: { k: 'next', name: 'Next disc', s: 'wait' }
+  };
+  var STRIP = { drive: 'first', cd: 'last', mb: 'alone', cdtext: 'alone', choose: 'first', art: 'mid', rip: 'last', flac: 'first', review: 'mid', hold: 'mid', lib1: 'last', mp3: 'first', lib2: 'last', next: 'alone' };
+
+  // The canvas rhythm comes from the card: strips a third of its height apart, stacked
+  // branches a sixth.
+  function layout(tw, th, gap, vg) {
+    var colH = 2 * th + vg, brH = 3 * th + 2 * vg;
+    var total = Math.max(colH, brH), c = total / 2, p = {}, x = 0, gaps = [];
+    function put(id, y) { p[id] = { x: x, y: y, w: tw, h: th }; x += tw; }
+    put('drive', c - th / 2); put('cd', c - th / 2);
+    gaps.push([x, gap]); x += gap; var cx = x;
+    p.mb = { x: cx, y: c - colH / 2, w: tw, h: th }; p.cdtext = { x: cx, y: c - colH / 2 + th + vg, w: tw, h: th };
+    x = cx + tw; gaps.push([x, gap]); x += gap;
+    ['choose', 'art', 'rip'].forEach(function (id) { put(id, c - th / 2); });
+    gaps.push([x, gap]); x += gap; var bx = x, y0 = c - brH / 2;
+    ['flac', 'review', 'hold', 'lib1'].forEach(function (id) { put(id, y0); });
+    x = bx; ['mp3', 'lib2'].forEach(function (id) { put(id, y0 + th + vg); });
+    x = bx; put('next', y0 + 2 * (th + vg));
+    var width = 0; for (var k in p) width = Math.max(width, p[k].x + p[k].w);
+    return { p: p, width: width, height: total, gaps: gaps, vgaps: [[bx, y0 + th, vg], [bx, y0 + 2 * th + vg, vg]], gap: gap };
+  }
+  function wires(lay, isNew) {
+    var p = lay.p, R = function (id) { return [p[id].x + p[id].w, p[id].y + p[id].h / 2]; }, Lf = function (id) { return [p[id].x, p[id].y + p[id].h / 2]; };
+    var k = lay.gap / 2;
+    function cub(a, b, cls) { return '<path class="' + (cls || '') + '" d="M' + a + ' C' + (a[0] + k) + ',' + a[1] + ' ' + (b[0] - k) + ',' + b[1] + ' ' + b + '"/>'; }
+    var s = '';
+    if (isNew) {
+      s += '<g class="rhythm">' + lay.gaps.map(function (g) { return '<rect x="' + g[0] + '" y="0" width="' + g[1] + '" height="' + lay.height + '"/>'; }).join('') +
+        lay.vgaps.map(function (g) { return '<rect x="' + g[0] + '" y="' + g[1] + '" width="' + (lay.width - g[0]) + '" height="' + g[2] + '"/>'; }).join('') + '</g>';
+    }
+    s += cub(R('cd'), Lf('mb'), 'done') + cub(R('cd'), Lf('cdtext'), 'done') + cub(R('mb'), Lf('choose'), 'done') + cub(R('cdtext'), Lf('choose'), 'done') +
+      cub(R('rip'), Lf('flac'), 'busy') + cub(R('rip'), Lf('mp3'), 'busy') + cub(R('rip'), Lf('next'));
+    var n = p.next, d = p.drive, by = lay.height + 18;
+    s += '<path d="M' + (n.x + n.w / 2) + ',' + (n.y + n.h) + ' V' + by + ' H' + (d.x + d.w / 2) + ' V' + (d.y + d.h + 4) + '"/>';
+    return '<svg class="wires" width="' + lay.width + '" height="' + (lay.height + 24) + '">' + s + '</svg>';
+  }
+  function canvas(el, isNew) {
+    var src = isNew ? NEW : OLD, lay = isNew ? layout(288, 192, 64, 32) : layout(152, 112, 52, 16), html = wires(lay, isNew);
+    for (var k in src) {
+      var o = Object.assign({}, src[k], lay.p[k]);
+      html += isNew ? tileNew(o, STRIP[k]) : tileOld(o, STRIP[k]);
+    }
+    el.style.width = lay.width + 'px'; el.style.height = (lay.height + 28) + 'px';
+    el.innerHTML = html;
+  }
+  canvas(document.getElementById('cv-old'), false);
+  canvas(document.getElementById('cv-new'), true);
+
+  // ---- sheets --------------------------------------------------------------------------------
+  function sheet(id, list) {
+    var el = document.getElementById(id);
+    if (el) el.innerHTML = list.map(function (f) { return '<figure><figcaption>' + f[0] + '</figcaption>' + tileNew(f[1]) + '</figure>'; }).join('');
+  }
+  var rip = function (o) { return Object.assign({ k: 'rip', name: 'Rip', set: [KV('First read', 'fast')] }, o); };
+  sheet('sheet-states', [
+    ['Not run', rip({ s: 'idle' })],
+    ['Not run, set by you', rip({ s: 'idle', set: [KV('First read', 'careful', { mod: 1 })] })],
+    ['Waiting (Choose is asking)', rip({ s: 'wait', lock: 1, items: T17('wait') })],
+    ['Working', rip({ s: 'busy', lock: 1, out: '5/17 verified', now: 'Track 6 · Wasting My Time', items: at(run(5, 'ok', 17), 5, 'busy') })],
+    ['Needs you', rip({ s: 'needs', lock: 1, out: '16/17 verified', now: 'Track 9 doesn\'t match AccurateRip', items: at(T17('ok'), 8, 'warn') })],
+    ['Failed', rip({ s: 'bad', lock: 1, out: '12/17 verified', now: 'The drive stopped at track 13', items: at(run(12, 'ok', 17), 12, 'bad') })],
+    ['Done', rip({ s: 'ok', out: '17/17 verified', items: T17('ok') })],
+    ['Done, one kept', rip({ s: 'ok', out: '16/17 verified', q: '1 kept', a: 'track 9 kept unverified', items: at(T17('ok'), 8, 'done') })]
+  ]);
+  var D = function (k, name, o) { return Object.assign({ k: k, name: name, s: 'ok' }, o); };
+  sheet('sheet-all', [
+    ['Drive', D('drive', 'Drive', { set: [KV('Drive', 'Blu-ray drive'), KV('Offset', '+103')], out: 'CD in' })],
+    ['Audio CD', D('cd', 'Audio CD', { out: '17 tracks', q: '43:45', items: T17('done') })],
+    ['Data disc', D('data', 'Data disc', { out: 'ENCARTA98', a: 'ISO 9660 · 682 MB' })],
+    ['Game disc', D('game', 'Game disc', { out: 'SLES-00860', q: 'PlayStation', a: 'Europe' })],
+    ['Video disc', D('video', 'Video disc', { set: [KV('Shortest', '60 s')], out: '1 of 3 titles', a: 'Title 1 · 1:57:30', items: ['done', 'out', 'out'] })],
+    ['MusicBrainz, by layout', D('mb', 'MusicBrainz', { out: '2 releases', q: 'by layout' })],
+    ['CD-Text', D('cdtext', 'CD-Text', { out: '17 titles', a: 'THE WHITE STRIPES' })],
+    ['Discogs', D('look', 'Discogs', { out: '1 release' })],
+    ['GnuDB, skipped', D('look', 'GnuDB', { s: 'skip', out: 'No answer', a: 'after 10 s' })],
+    ['Cover art', D('art', 'Cover art', { set: [KV('Largest', '1200 px')], thumb: 1, out: '1200 × 1200' })],
+    ['Lyrics', D('lyr', 'Lyrics', { out: '14/17 synced', a: 'none for 3, 10, 15', items: at(at(at(T17('done'), 2, 'out'), 9, 'out'), 14, 'out') })],
+    ['TMDb', D('look', 'TMDb', { out: '3 films', q: '"blade runner"' })],
+    ['Redump', D('look', 'Redump', { out: '1 entry' })],
+    ['Choose (audio)', D('choose', 'Choose', { out: 'The White Stripes', q: '1999', a: 'SFTRI 577 · Sympathy for the Record Industry', aFull: 'SFTRI 577 · Sympathy for the Record Industry' })],
+    ['Choose, a long title', D('choose', 'Choose', { out: 'The Rise and Fall of Ziggy Stardust and the Spiders from Mars', outFull: 'The Rise and Fall of Ziggy Stardust and the Spiders from Mars', q: '1972', a: 'SF 8287 · RCA Victor' })],
+    ['Choose (game)', D('choose', 'Choose', { out: 'Colony Wars (Europe) (Disc 1)' })],
+    ['Choose (video)', D('choose', 'Choose', { out: 'Blade Runner', q: '1982' })],
+    ['Rip (audio)', rip({ s: 'ok', out: '17/17 verified', items: T17('ok') })],
+    ['Image', D('image', 'Image', { set: [KV('Retries', '20')], out: '682 MB' })],
+    ['Rip (game)', D('rip', 'Rip', { set: [KV('Retries', '20')], out: '458 MB', a: '3 sectors refined' })],
+    ['Rip (video)', D('rip', 'Rip', { out: '1 title', a: 'Blade Runner · 7.6 GB' })],
+    ['Check', D('check', 'Check', { set: [KV('Catalogues', 'PlayStation')], out: 'Matches Redump', a: 'Encarta 98 Encyclopedia (USA) (Disc 1)', items: ['ok'] })],
+    ['Hold', D('hold', 'Hold', { out: '17 let through', items: T17('done') })],
+    ['FLAC', D('flac', 'FLAC', { set: [KV('Level', '8')], out: '294 MB', q: '58 %', items: T17('done') })],
+    ['MP3', D('mp3', 'MP3', { set: [KV('Quality', 'V0'), KV('Stereo', 'joint')], out: '79 MB', items: T17('done') })],
+    ['Opus', D('mp3', 'Opus', { set: [KV('Bitrate', '160 kbps VBR')], out: '53 MB', items: T17('done') })],
+    ['ReplayGain', D('rg', 'ReplayGain', { set: [KV('Gain', 'track + album')], out: '−7.3 dB', a: 'tracks −9.1 to −5.2 dB', items: T17('done') })],
+    ['Cue sheet', D('cue', 'Cue sheet', { out: 'disc.cue, rip.log', items: ['done', 'done'] })],
+    ['Lyrics file', D('lyr', 'Lyrics file', { out: '14 .lrc files', items: run(14, 'done', 14) })],
+    ['CHD', D('chd', 'CHD', { set: [KV('Codecs', 'CD')], out: '412 MB', q: '60 %' })],
+    ['Keep as is', D('keep', 'Keep as is', { out: '682 MB', items: ['done', 'done', 'done'] })],
+    ['LibCrypt', D('sbi', 'LibCrypt', { out: 'SBI written' })],
+    ['M3U', D('m3u', 'M3U', { out: 'Colony Wars.m3u', q: '2 discs', items: ['done', 'done'] })],
+    ['Transcode', D('tc', 'Transcode', { set: [KV('Video', 'H.265 CRF 22'), KV('Preset', 'slow')], out: '2.1 GB', q: '28 %' })],
+    ['Folder', D('lib', 'Library', { set: [KV('Folder', '~/Music/FLAC'), KV('Names', NAMES)], out: '17 filed', a: 'The White Stripes / The White Stripes', items: T17('done') })],
+    ['Folder, a deep path', D('lib', 'NAS', { set: [KV('Folder', '/mnt/nas/…/FLAC', { full: '/mnt/nas/media/music/lossless/FLAC' }), KV('Names', NAMES)], out: '17 filed', a: 'David Bowie / The Rise and Fall of Ziggy Stardust and the Spiders from Mars', aFull: 'David Bowie / The Rise and Fall of Ziggy Stardust and the Spiders from Mars', items: T17('done') })],
+    ['Tell me', D('tell', 'Tell me', { set: [KV('When', 'always'), KV('Where', 'desktop + ntfy')], out: 'Told you', a: '17 tracks filed, all verified' })],
+    ['Next disc', D('next', 'Next disc', { out: 'Ejected' })]
+  ]);
+  // Settings, three ways, on the same cards: idle, changed by you, locked while ripping.
+  var CMP = [
+    function (m, st) { return D('flac', 'FLAC', { mode: m, s: st[0], lock: st[2], set: [KV('Level', st[1] ? '5' : '8', { mod: st[1], tag: 'level ' + (st[1] ? '5' : '8') })], out: st[0] === 'busy' ? '72 MB' : '', q: st[0] === 'busy' ? '58 %' : '', now: st[0] === 'busy' ? 'Track 5 · Sugar Never Tasted So Good' : '', items: st[0] === 'busy' ? at(run(4, 'done', 17), 4, 'busy') : null }); },
+    function (m, st) { return D('mp3', 'MP3', { mode: m, s: st[0], lock: st[2], set: [KV('Quality', st[1] ? 'V2' : 'V0', { mod: st[1] }), KV('Stereo', 'joint', { tag: 'joint stereo' })], out: st[0] === 'busy' ? '19 MB' : '', now: st[0] === 'busy' ? 'Track 5 · Sugar Never Tasted So Good' : '', items: st[0] === 'busy' ? at(run(4, 'done', 17), 4, 'busy') : null }); },
+    function (m, st) { return rip({ mode: m, s: st[0], lock: st[2], set: [KV('First read', st[1] ? 'careful' : 'fast', { mod: st[1], tag: (st[1] ? 'careful' : 'fast') + ' first' })], out: st[0] === 'busy' ? '5/17 verified' : '', now: st[0] === 'busy' ? 'Track 6 · Wasting My Time' : '', items: st[0] === 'busy' ? at(run(5, 'ok', 17), 5, 'busy') : null }); },
+    function (m, st) { return D('lib', 'Library', { mode: m, s: st[0] === 'busy' ? 'wait' : st[0], lock: st[2], set: [KV('Folder', st[1] ? '~/Music/Lossless' : '~/Music/FLAC', { mod: st[1] }), KV('Names', NAMES)], items: st[0] === 'busy' ? T17('wait') : null }); },
+    function (m, st) { return D('tc', 'Transcode', { mode: m, s: st[0] === 'busy' ? 'wait' : st[0], lock: st[2], set: [KV('Video', st[1] ? 'AV1 CRF 30' : 'H.265 CRF 22', { mod: st[1] }), KV('Preset', 'slow')], items: st[0] === 'busy' ? ['wait'] : null }); }
+  ];
+  var STATES = [['idle', 0, 0, 'idle'], ['idle', 1, 0, 'changed by you'], ['busy', 0, 1, 'locked while ripping']];
+  function cmp(id, m, states) {
+    var el = document.getElementById(id); if (!el) return;
+    el.innerHTML = CMP.map(function (f) { return states.map(function (st) { var o = f(m, st); if (st[4]) o.editing = 1; return '<figure><figcaption>' + o.name + ', ' + st[3] + '</figcaption>' + tileNew(o) + '</figure>'; }).join(''); }).join('');
+  }
+  cmp('cmp-a', 'A', STATES);
+  cmp('cmp-b', 'B', STATES);
+  cmp('cmp-c', 'C', [['idle', 0, 0, 'not editing']]);
+  cmp('cmp-c2', 'A', [['idle', 0, 0, 'editing', 1]]);
+
+  // ---- tiles in the cases ------------------------------------------------------------------
+  var T = {
+    'cdtext-old': tileOld({ k: 'cdtext', name: 'CD-Text', s: 'ok', sub: 'lookup', main: '17 titles', det: 'artist, album' }),
+    'cdtext-new': tileNew(NEW.cdtext),
+    'choose-old': tileOld({ k: 'choose', name: 'Choose', s: 'needs', sub: 'which release', main: 'Which release?', det: '2 candidates' }),
+    'choose-new': tileNew({ k: 'choose', name: 'Choose', s: 'needs', now: 'Which release? 3 fit' }),
+    'rip-old': tileOld({ k: 'rip', name: 'Rip', s: 'bad', sub: 'cyanrip, AccurateRip', main: '16 ✓ 1 ✕', det: 'track 9', bar: 1 }),
+    'rip-new': tileNew(rip({ s: 'needs', lock: 1, out: '16/17 verified', now: 'Track 9 doesn\'t match AccurateRip', items: at(T17('ok'), 8, 'warn') })),
+    'flac-old': tileOld({ k: 'flac', name: 'FLAC', s: 'ok', sub: 'level 8, verified', main: '17 of 17', det: '' }),
+    'flac-new': tileNew(D('flac', 'FLAC', { set: [KV('Level', '8')], out: '294 MB', q: '58 %', items: T17('done') })),
+    'lib-old': tileOld({ k: 'lib', name: 'Library', s: 'ok', sub: '~/Music/FLAC', main: '17 of 17', det: '' }),
+    'lib-new': tileNew(D('lib', 'Library', { set: [KV('Folder', '~/Music/FLAC'), KV('Names', NAMES)], out: '17 filed', a: 'The White Stripes / The White Stripes', items: T17('done') }))
+  };
+  document.querySelectorAll('[data-tile]').forEach(function (el) { if (T[el.dataset.tile]) el.innerHTML = T[el.dataset.tile]; });
+
+  // ---- Show grid -----------------------------------------------------------------------------
+  var g = document.getElementById('grid');
+  if (g) g.addEventListener('click', function () { document.body.classList.toggle('grid-on'); g.textContent = document.body.classList.contains('grid-on') ? 'Hide grid' : 'Show grid'; });
+
+  // ---- rows ----------------------------------------------------------------------------------
+  var TR = [['Jimmy the Exploder', '2:30', 17], ['Stop Breaking Down', '2:20', 16], ['The Big Three Killed My Baby', '2:29', 17], ['Suzy Lee', '3:21', 23],
+    ['Sugar Never Tasted So Good', '2:55', 20], ['Wasting My Time', '2:13', 15], ['Cannon', '2:31', 17], ['Astro', '2:42', 18], ['Broken Bricks', '1:51', 12],
+    ['When I Hear My Name', '1:54', 13], ['Do', '3:05', 21], ['Screwdriver', '3:14', 22], ['One More Cup of Coffee', '3:14', 22], ['Little People', '2:22', 16],
+    ['Slicker Drips', '1:31', 10], ['St. James Infirmary Blues', '2:24', 16], ['I Fought Piranhas', '3:09', 21]];
+  function li(n, nm, len, vd, extra) { return '<div class="li' + (extra || '') + '"><span class="n">' + n + '</span><span class="nm">' + nm + '</span>' + (len ? '<span class="len">' + len + '</span>' : '') + (vd || '') + '</div>'; }
+  var ROWS = {
+    'cdtext-old': TR.map(function (t, i) { return '<div class="li fact"><span class="n">' + (i + 1) + '</span><span class="nm" style="padding-left:24px">' + t[0].toUpperCase() + '</span></div>'; }),
+    'cdtext-new': TR.map(function (t, i) { return li(i + 1, t[0].toUpperCase(), t[1]); }),
+    'choose-old': TR.map(function (t, i) { return li(i + 1, t[0], t[1], '<span class="vd ok-t">✓</span>'); }),
+    'choose-new': TR.map(function (t, i) { return li(i + 1, t[0], t[1], '<span class="vd"><span class="ok-t">✓</span></span>'); }),
+    'rip-old': ['<div class="li attn"><span class="n">9</span><span class="nm"><b>Broken Bricks</b></span><span class="len">1:51</span><span class="vd bad-t">✕ Doesn\'t match</span><span class="why">No match in AccurateRip</span></div>']
+      .concat(TR.map(function (t, i) { return i === 8 ? '' : li(i + 1, t[0], t[1], '<span class="vd ok-t">✓ Verified <span class="mut">104</span></span>'); })),
+    'rip-new': ['<div class="li attn"><span class="n">9</span><span class="nm"><b>Broken Bricks</b></span><span class="len">1:51</span><span class="vd bad-t">Doesn\'t match</span><span class="why">AccurateRip has 528 results for this disc; none match this read</span></div>']
+      .concat(TR.map(function (t, i) { return i === 8 ? '' : li(i + 1, t[0], t[1], '<span class="vd"><span class="ok-t">✓</span> Verified <span class="mut">' + (103 + i % 2) + '</span></span>'); })),
+    'flac-old': TR.map(function (t, i) { return li(i + 1, t[0], t[1], '<span class="vd ok-t">✓ Encoded</span>'); }),
+    'flac-new': TR.map(function (t, i) { return li(i + 1, t[0], t[1], '<span class="sz">' + t[2] + ' MB</span>'); }),
+    'lib-old': [0, 4, 5, 1, 6, 7, 2, 3, 8].map(function (i) { var t = TR[i], n = (i < 9 ? '0' : '') + (i + 1); return li(i + 1, t[0], t[1], '<span class="vd mut">' + n + ' - ' + t[0] + '.flac</span>'); }),
+    'lib-new': TR.map(function (t, i) { var n = (i < 9 ? '0' : '') + (i + 1); return li('', n + ' - ' + t[0] + '.flac', t[1], '<span class="sz">' + t[2] + ' MB</span>'); })
+  };
+  document.querySelectorAll('[data-rows]').forEach(function (el) { el.outerHTML = ROWS[el.dataset.rows].join(''); });
+
+  // ---- what gives way: the qualifier goes whole before the result is cut -----------------
+  function fit() {
+    document.querySelectorAll('.new .z-out').forEach(function (z) {
+      var q = z.querySelector('.q');
+      if (q) q.style.display = '';
+      var need = 0;
+      Array.prototype.forEach.call(z.children, function (c) { need += (c.classList.contains('r') ? c.scrollWidth : c.offsetWidth) + 6; });
+      if (q && need - 6 > z.clientWidth) {
+        // On a v5 card, a qualifier that doesn't fit moves to the empty now line.
+        var below = z.nextElementSibling;
+        if (z.classList.contains('out') && below && !below.textContent) { below.className = 'now meta'; below.textContent = q.textContent; q.remove(); }
+        else q.style.display = 'none';
+      }
+    });
+  }
+  fit();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+
+  // ---- theme ---------------------------------------------------------------------------------
+  var b = document.getElementById('theme'), r = document.documentElement;
+  function dark() { return r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; }
+  function label() { b.textContent = dark() ? 'Light' : 'Dark'; }
+  b.addEventListener('click', function () { r.dataset.theme = dark() ? 'light' : 'dark'; label(); });
+  label();
+})();
+</script>
+</body>
+</html>

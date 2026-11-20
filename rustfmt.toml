@@ -1,0 +1,4 @@
+# The workspace's code is written wide: a statement on one line where it
+# fits. These keep rustfmt to that, rather than folding it into columns.
+max_width = 200
+use_small_heuristics = "Max"

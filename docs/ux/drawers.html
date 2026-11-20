@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drawer layout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* One anatomy for every drawer: a header that says the state and offers the
+   one thing to do, settings down the left, the step's items on the right. */
+:root {
+  --bg: #e9ecef; --surface: #f9fafb; --raised: #ffffff; --ink: #18202b; --muted: #5b6573; --faint: #8c95a1;
+  --line: #d3d9e0; --line-soft: #e8ecf0; --action: #2348b8; --action-ink: #ffffff;
+  --ok: #17784a; --ok-soft: #dcefe4; --warn: #a35a10; --warn-soft: #f6e6d2; --bad: #b02a22; --bad-soft: #f5dcd9;
+  --busy: #3b6fe0; --busy-soft: #e3ebfb;
+  --c-src: #6b7a8f; --c-read: #3b6fe0; --c-look: #8a5cd0; --c-make: #c27a1a; --c-put: #2f8a63; --c-chk: #17784a;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #a2acb8; --faint: #707b88; --line: #313a45; --line-soft: #2a313b;
+  --action: #7d9cf2; --action-ink: #0f1520; --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b;
+  --bad: #f07a70; --bad-soft: #3d2120; --busy: #7d9cf2; --busy-soft: #1f2a44; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #a2acb8; --faint: #707b88; --line: #313a45; --line-soft: #2a313b;
+  --action: #7d9cf2; --action-ink: #0f1520; --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b;
+  --bad: #f07a70; --bad-soft: #3d2120; --busy: #7d9cf2; --busy-soft: #1f2a44; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Schibsted Grotesk", system-ui, sans-serif; padding: 24px 16px 48px; }
+.page { max-width: 1048px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+.page > p { margin: 0 0 -18px; color: var(--muted); font-size: 13px; }
+.top { display: flex; justify-content: space-between; align-items: baseline; }
+.top h1 { font-size: 18px; margin: 0; }
+button { font: inherit; color: inherit; cursor: pointer; }
+svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* The drawer: as wide as the canvas (1280 window, 232 list). */
+.drawer { background: var(--raised); border: 1px solid var(--line); border-radius: 14px 14px 0 0; box-shadow: 0 -14px 36px rgba(0,0,0,.12); overflow: hidden; }
+.grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 7px auto 0; }
+
+/* Header: what this is, its state, one sentence, the one thing to do. */
+.dh { display: flex; align-items: center; gap: 12px; padding: 8px 16px 12px 20px; border-bottom: 1px solid var(--line-soft); }
+.dh .name { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; }
+.dh .name svg { width: 18px; height: 18px; color: var(--c); }
+.state { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; padding: 2px 9px 2px 7px; border-radius: 999px; }
+.state svg { width: 13px; height: 13px; stroke-width: 2.2; }
+.state.ok { background: var(--ok-soft); color: var(--ok); } .state.bad { background: var(--bad-soft); color: var(--bad); }
+.state.hold, .state.needs { background: var(--warn-soft); color: var(--warn); } .state.busy { background: var(--busy-soft); color: var(--busy); }
+.dh .say { color: var(--muted); font-size: 13.5px; }
+.dh .acts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--raised); border-radius: 7px; padding: 6px 14px; font-weight: 500; font-size: 13.5px; display: inline-flex; align-items: center; gap: 6px; }
+.btn.primary { background: var(--action); border-color: var(--action); color: var(--action-ink); }
+.btn.small { padding: 3px 10px; font-size: 12.5px; }
+.btn.quiet { border-color: transparent; background: none; color: var(--muted); }
+.x { border: 0; background: none; color: var(--faint); padding: 4px; border-radius: 6px; display: grid; place-items: center; }
+
+/* Body: settings on the left, items on the right. */
+.db { display: grid; grid-template-columns: 248px 1fr; min-height: 0; }
+.set { padding: 14px 18px 18px 20px; border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 14px; background: var(--surface); }
+.field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.field .ctl { display: flex; gap: 6px; align-items: center; }
+.field .from { font-size: 12px; color: var(--faint); margin-top: 3px; }
+.field .from b { font-weight: 500; color: var(--muted); }
+.inp, .sel { border: 1px solid var(--line); background: var(--raised); border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 13.5px; color: var(--ink); min-width: 0; }
+.inp { flex: 1; } .sel { flex: 1; display: flex; justify-content: space-between; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg span { padding: 4px 10px; font-size: 13px; color: var(--muted); }
+.seg span.on { background: var(--ink); color: var(--raised); }
+.icon-btn { border: 1px solid var(--line); background: var(--raised); border-radius: 7px; width: 30px; height: 30px; display: grid; place-items: center; color: var(--muted); }
+
+.items { padding: 10px 16px 14px 18px; min-width: 0; }
+.filter { display: flex; gap: 4px; margin-bottom: 6px; align-items: center; }
+.filter span { font-size: 12.5px; padding: 3px 10px; border-radius: 999px; color: var(--muted); }
+.filter span b { font-weight: 600; margin-left: 4px; color: var(--ink); }
+.filter span.on { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); }
+.filter .right { margin-left: auto; font-size: 12.5px; color: var(--faint); }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+td { padding: 6px 8px; border-top: 1px solid var(--line-soft); vertical-align: middle; white-space: nowrap; }
+tr:first-child td { border-top: 0; }
+td.n { width: 28px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; padding-left: 0; }
+td.t { width: 100%; max-width: 1px; overflow: hidden; text-overflow: ellipsis; }
+td.len { color: var(--faint); font-variant-numeric: tabular-nums; }
+td.v { color: var(--muted); }
+td.v .ic { display: inline-flex; align-items: center; gap: 5px; }
+td.v .ok { color: var(--ok); } td.v .bad { color: var(--bad); }
+td.v small { color: var(--faint); margin-left: 6px; }
+td.act { text-align: right; padding-right: 0; }
+tr.attn td { background: color-mix(in srgb, var(--bad-soft) 55%, transparent); }
+tr.attn td.t { font-weight: 600; white-space: normal; }
+.why-bad { display: block; font-weight: 400; font-size: 12.5px; color: var(--bad); }
+td.t { min-width: 140px; }
+tr.more td { color: var(--faint); font-size: 12.5px; text-align: center; border-top: 1px dashed var(--line); }
+.acts-row { display: inline-flex; gap: 6px; }
+.dest { color: var(--muted); font-size: 13px; }
+.dest i { font-style: normal; color: var(--faint); }
+
+/* Choose: candidates as a list, the picked one's tracks beside it. */
+.choose { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; padding: 12px 16px 14px 18px; }
+.cand { display: flex; gap: 11px; padding: 9px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; align-items: center; }
+.cand.on { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); }
+.cand .art { width: 54px; height: 54px; border-radius: 4px; background: linear-gradient(135deg, #b8392f 0 45%, #f2efe9 45% 70%, #18202b 70%); flex: none; }
+.cand b { display: block; font-size: 14px; }
+.cand small { display: block; color: var(--muted); font-size: 12.5px; }
+.cand .why { display: flex; gap: 10px; margin-top: 3px; font-size: 12px; color: var(--ok); }
+.radio { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--line); flex: none; }
+.cand.on .radio { border: 4.5px solid var(--action); }
+.cols { columns: 2; column-gap: 22px; font-size: 13px; }
+.cols div { display: flex; gap: 8px; padding: 3px 0; break-inside: avoid; border-bottom: 1px solid var(--line-soft); }
+.cols .n { width: 18px; text-align: right; color: var(--faint); }
+.cols .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cols .len { color: var(--faint); font-variant-numeric: tabular-nums; }
+.sub { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between; }
+
+/* Drive: the drives as rows. */
+.drv td.t b { font-weight: 600; }
+.drv tr.on td { background: color-mix(in srgb, var(--action) 7%, transparent); }
+.drv .radio { display: inline-block; vertical-align: middle; }
+.drv tr.on .radio { border: 4.5px solid var(--action); }
+.busy { color: var(--busy); display: inline-flex; gap: 5px; align-items: center; }
+.theme { border: 1px solid var(--line); background: var(--raised); border-radius: 999px; padding: 3px 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="page">
+<div class="top"><h1>One layout for every drawer</h1><button class="theme" id="theme">Light / dark</button></div>
+
+<p>Rip, with a damaged track</p>
+<section class="drawer c-read" style="--c: var(--c-read)">
+  <div class="grip"></div>
+  <div class="dh">
+    <span class="name"><svg viewBox="0 0 24 24"><path d="M12 3v11m-5-4 5 5 5-5M4 17v4h16v-4"/></svg>Rip</span>
+    <span class="state bad"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>1 needs you</span>
+    <span class="say">16 verified against AccurateRip</span>
+    <span class="acts"><button class="btn quiet"><svg viewBox="0 0 24 24"><path d="M3 6h4l2 2h12v11H3z"/></svg>Working folder</button><button class="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></span>
+  </div>
+  <div class="db">
+    <div class="set">
+      <div class="field"><label>First read</label><div class="ctl"><span class="seg"><span class="on">Fast</span><span>Careful</span></span></div><div class="from">default</div></div>
+      <div class="field"><label>Check with AccurateRip</label><div class="ctl"><span class="seg"><span class="on">On</span><span>Off</span></span></div><div class="from">default</div></div>
+      <div class="field"><label>Tracks</label><div class="ctl"><span class="inp">All 17</span></div><div class="from">default</div></div>
+    </div>
+    <div class="items">
+      <div class="filter"><span class="on">Needs you<b>1</b></span><span>Verified<b>16</b></span><span>All<b>17</b></span><span class="right">offset +103, MATSHITA UJ240AS</span></div>
+      <table>
+        <tr class="attn"><td class="n">9</td><td class="t">Broken Bricks<span class="why-bad">Reads disagree: 439 samples differ, 0:17–0:43</span></td><td class="len">1:51</td>
+          <td class="v"><span class="ic bad"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>Damaged</span></td>
+          <td class="act"><span class="acts-row"><button class="btn small">Read again</button><button class="btn small">Combine reads</button><button class="btn small quiet">Keep</button><button class="btn small quiet">Leave out</button></span></td></tr>
+        <tr><td class="n">8</td><td class="t">Astro</td><td class="len">2:42</td><td class="v"><span class="ic ok"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg>Verified</span><small>confidence 104</small></td><td class="act"></td></tr>
+        <tr><td class="n">10</td><td class="t">When I Hear My Name</td><td class="len">1:54</td><td class="v"><span class="ic ok"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg>Verified</span><small>confidence 103</small></td><td class="act"></td></tr>
+        <tr class="more"><td colspan="5">14 more verified</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<p>A held Library</p>
+<section class="drawer" style="--c: var(--c-put)">
+  <div class="grip"></div>
+  <div class="dh">
+    <span class="name"><svg viewBox="0 0 24 24"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16 5.5l3.8-1 3 15.5-3.8 1z"/></svg>Library</span>
+    <span class="state hold"><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg>Holds 17 for you</span>
+    <span class="say">All 17 are in Review. Listen there, then let them through.</span>
+    <span class="acts"><button class="btn quiet"><svg viewBox="0 0 24 24"><path d="M3 6h4l2 2h12v11H3z"/></svg>Open Review</button><button class="btn primary"><svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>Let 17 through</button><button class="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></span>
+  </div>
+  <div class="db">
+    <div class="set">
+      <div class="field"><label>Folder</label><div class="ctl"><span class="inp">~/Music/FLAC</span><button class="icon-btn" aria-label="Choose a folder"><svg viewBox="0 0 24 24"><path d="M3 6h4l2 2h12v11H3z"/></svg></button></div><div class="from"><b>yours</b>, 18 Nov</div></div>
+      <div class="field"><label>Names</label><div class="ctl"><span class="sel">Artist / Album / 01 - Title<span>▾</span></span></div><div class="from">default</div></div>
+      <div class="field"><label>Before filing</label><div class="ctl"><span class="seg"><span class="on">Hold for me</span><span>Go straight in</span></span></div><div class="from"><b>yours</b></div></div>
+    </div>
+    <div class="items">
+      <div class="filter"><span class="on">Waiting<b>17</b></span><span>Filed<b>0</b></span><span class="right">The White Stripes / The White Stripes /</span></div>
+      <table>
+        <tr><td class="n">1</td><td class="t">Jimmy the Exploder</td><td class="len">2:30</td><td class="dest">01 - Jimmy the Exploder<i>.flac</i></td></tr>
+        <tr><td class="n">2</td><td class="t">Stop Breaking Down</td><td class="len">2:20</td><td class="dest">02 - Stop Breaking Down<i>.flac</i></td></tr>
+        <tr><td class="n">3</td><td class="t">The Big Three Killed My Baby</td><td class="len">2:29</td><td class="dest">03 - The Big Three Killed My Baby<i>.flac</i></td></tr>
+        <tr class="more"><td colspan="4">14 more</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<p>Choose, asking</p>
+<section class="drawer" style="--c: var(--c-chk)">
+  <div class="grip"></div>
+  <div class="dh">
+    <span class="name"><svg viewBox="0 0 24 24"><path d="M3 6h11M3 12h11M3 18h7m8-2 2 2 4-4"/></svg>Choose</span>
+    <span class="state needs"><svg viewBox="0 0 24 24"><path d="M12 7v6M12 17h.01"/></svg>Which release?</span>
+    <span class="say">Two releases share this disc's ID. The first is most likely.</span>
+    <span class="acts"><button class="btn quiet">Search</button><button class="btn primary">Use this one</button><button class="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></span>
+  </div>
+  <div class="db">
+    <div class="set">
+      <div class="field"><label>Ask me</label><div class="ctl"><span class="seg"><span>Never</span><span class="on">When unsure</span><span>Always</span></span></div><div class="from">default</div></div>
+      <div class="field"><label>Found by</label><div class="ctl" style="flex-direction:column;align-items:flex-start;gap:2px;font-size:13px"><span>MusicBrainz, 2 releases</span><span>CD-Text, 17 titles</span></div></div>
+    </div>
+    <div class="choose">
+      <div>
+        <div class="cand on"><span class="radio"></span><span class="art"></span><span><b>The White Stripes</b><small>1999, US, Sympathy for the Record Industry, SFTRI 577</small><span class="why"><span>✓ disc ID</span><span>✓ 17 lengths</span></span></span></div>
+        <div class="cand"><span class="radio"></span><span class="art" style="filter:saturate(.4)"></span><span><b>The White Stripes</b><small>2002, UK, XL Recordings, XLCD 151</small><span class="why"><span>✓ disc ID</span><span>✓ 17 lengths</span></span></span></div>
+      </div>
+      <div>
+        <div class="sub"><span>Tracks, 1999 release</span><span>matches the disc</span></div>
+        <div class="cols">
+          <div><span class="n">1</span><span class="t">Jimmy the Exploder</span><span class="len">2:30</span></div>
+          <div><span class="n">2</span><span class="t">Stop Breaking Down</span><span class="len">2:20</span></div>
+          <div><span class="n">3</span><span class="t">The Big Three Killed My Baby</span><span class="len">2:29</span></div>
+          <div><span class="n">4</span><span class="t">Suzy Lee</span><span class="len">3:21</span></div>
+          <div><span class="n">5</span><span class="t">Sugar Never Tasted So Good</span><span class="len">2:55</span></div>
+          <div><span class="n">6</span><span class="t">Wasting My Time</span><span class="len">2:13</span></div>
+          <div><span class="n">7</span><span class="t">Cannon</span><span class="len">2:31</span></div>
+          <div><span class="n">8</span><span class="t">Astro</span><span class="len">2:42</span></div>
+          <div><span class="n">…</span><span class="t" style="color:var(--faint)">9 more</span><span class="len"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<p>Drive</p>
+<section class="drawer" style="--c: var(--c-src)">
+  <div class="grip"></div>
+  <div class="dh">
+    <span class="name"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h8M18 12h.01"/></svg>Drive</span>
+    <span class="state ok"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg>Ready</span>
+    <span class="say">The Goldberg Variations is in the MATSHITA.</span>
+    <span class="acts"><button class="btn quiet">Eject</button><button class="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></span>
+  </div>
+  <div class="db">
+    <div class="set">
+      <div class="field"><label>Read offset</label><div class="ctl"><span class="inp">+103</span><button class="btn small">Measure</button></div><div class="from"><b>AccurateRip</b>, 528 drives agree</div></div>
+      <div class="field"><label>Speed</label><div class="ctl"><span class="sel">As fast as it reads<span>▾</span></span></div><div class="from">default</div></div>
+    </div>
+    <div class="items drv">
+      <div class="filter"><span class="on">Drives<b>2</b></span></div>
+      <table>
+        <tr class="on"><td class="n"><span class="radio"></span></td><td class="t"><b>MATSHITA UJ240AS</b></td><td class="v">The Goldberg Variations</td><td class="act"><span class="busy">Free</span></td></tr>
+        <tr><td class="n"><span class="radio"></span></td><td class="t"><b>ATAPI eHAU324</b></td><td class="v">Empty</td><td class="act"><span class="busy"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/></svg>Busy</span></td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+</div>
+<script>
+document.getElementById('theme').onclick = () => { const r = document.documentElement;
+  const dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; r.dataset.theme = dark ? 'light' : 'dark'; };
+</script>
+</body>
+</html>

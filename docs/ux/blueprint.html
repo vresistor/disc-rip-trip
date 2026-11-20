@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blueprint cards</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Colours from app/src/theme.rs; cards as built (v7: 288 x 192, five slots). */
+:root {
+  --bg: #e9ecef; --surface: #f9fafb; --raised: #ffffff; --ink: #18202b; --muted: #4c5563; --subtle: #6b7480; --faint: #8c95a1;
+  --line: #d3d9e0; --ok: #17784a; --warn: #a35a10; --bad: #b02a22; --busy: #3b6fe0; --busy-soft: #e3ebfb;
+  --c-src: #6b7a8f; --c-read: #3b6fe0; --c-look: #8a5cd0; --c-make: #c27a1a; --c-put: #2f8a63; --c-chk: #17784a;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --ok: #5cc48e; --warn: #e3a35a; --bad: #f07a70; --busy: #7d9cf2; --busy-soft: #1f2a44;
+  --c-src: #8e9cb0; --c-read: #6f95f0; --c-look: #a983e6; --c-make: #dd9a45; --c-put: #4fb385; --c-chk: #5cc48e; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --ok: #5cc48e; --warn: #e3a35a; --bad: #f07a70; --busy: #7d9cf2; --busy-soft: #1f2a44;
+  --c-src: #8e9cb0; --c-read: #6f95f0; --c-look: #a983e6; --c-make: #dd9a45; --c-put: #4fb385; --c-chk: #5cc48e; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Schibsted Grotesk", system-ui, sans-serif; padding: 24px 16px 48px; }
+.page { max-width: 1400px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.intro { color: var(--muted); margin: 0 0 24px; max-width: 70ch; }
+h2 { font-size: 16px; margin: 0 0 2px; }
+section { margin-bottom: 32px; }
+section > p { color: var(--muted); margin: 0 0 10px; max-width: 80ch; font-size: 13.5px; }
+.scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+.canvas { position: relative; zoom: .8; background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 20px 20px; }
+svg.wires { position: absolute; inset: 0; overflow: visible; }
+svg.wires path { fill: none; stroke: var(--faint); stroke-width: 2; }
+svg.wires path.plan { stroke-dasharray: 6 6; opacity: .7; }
+svg.wires path.busy { stroke: var(--busy); stroke-dasharray: 6 6; }
+.card { position: absolute; width: 288px; height: 192px; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; }
+.card.first { border-radius: 10px 0 0 10px; } .card.mid { border-radius: 0; } .card.last { border-radius: 0 10px 10px 0; }
+/* The blueprint: not run yet. A dashed border on the card's ground, nothing but name and settings. */
+.card.plan { background: color-mix(in srgb, var(--raised) 55%, transparent); border: 1.5px dashed var(--faint); }
+.card.plan.mid, .card.plan.last { border-left-color: transparent; }
+.card.busy { outline: 2px solid var(--busy); outline-offset: -2px; }
+.card .nm { position: absolute; left: 16px; right: 40px; top: 16px; height: 16px; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.card .nm svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.card .st { position: absolute; right: 16px; top: 17px; width: 14px; height: 14px; border-radius: 50%; }
+.st.idle { border: 1.6px solid var(--faint); }
+.st.ok { background: var(--ok); }
+.st.busy { border: 2.2px solid var(--busy-soft); border-top-color: var(--busy); border-right-color: var(--busy); }
+.card .kv { position: absolute; left: 16px; right: 16px; font-size: 13px; line-height: 16px; display: flex; white-space: nowrap; }
+.card .kv .k { width: 80px; color: var(--subtle); flex: none; } .card .kv .v { color: var(--ink); }
+.card.plan .kv .v { color: var(--muted); }
+.card .out { position: absolute; left: 16px; right: 16px; top: 104px; height: 24px; font-size: 20px; font-weight: 600; line-height: 24px; white-space: nowrap; }
+.card .out small { font-size: 13px; font-weight: 400; color: var(--subtle); margin-left: 8px; }
+.card .det { position: absolute; left: 16px; right: 16px; top: 136px; font-size: 13px; line-height: 16px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .det.now { color: var(--ink); }
+.card .strip { position: absolute; left: 16px; right: 16px; top: 168px; height: 8px; display: flex; gap: 2px; }
+.card .strip i { flex: 1; border-radius: 2px; background: var(--line); }
+.strip i.ok { background: var(--ok); } .strip i.busy { background: var(--busy); } .strip i.done { background: var(--subtle); }
+.card .thumb { position: absolute; left: 16px; top: 80px; width: 96px; height: 96px; border-radius: 4px; background: linear-gradient(135deg, #c8312b 0 50%, #f1f1ee 50% 100%); }
+.card.art .out, .card.art .det, .card.art .strip { left: 128px; }
+.notes { font-size: 13px; color: var(--muted); margin: 10px 0 0; padding-left: 18px; }
+.notes b { color: var(--ink); }
+.theme { float: right; font: inherit; font-size: 13px; color: var(--muted); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="page">
+<button class="theme" id="theme" type="button">Dark</button>
+<h1>Blueprint cards</h1>
+<p class="intro">A step that hasn't run yet is drawn as a blueprint: a dashed border, a soft see-through ground, and only its name and settings. When it starts, it turns solid. The CD recipe in three moments, at 80 %.</p>
+
+<section>
+  <h2>1 · Ready, no disc</h2>
+  <p>The whole recipe is a plan. Drive is the one card with something to say before a run.</p>
+  <div class="scroll"><div class="canvas" id="c1"></div></div>
+</section>
+<section>
+  <h2>2 · A disc is in</h2>
+  <p>Drive has read the disc and turned solid; everything else is still the plan.</p>
+  <div class="scroll"><div class="canvas" id="c2"></div></div>
+</section>
+<section>
+  <h2>3 · Ripping</h2>
+  <p>What has run is solid, with its results. What hasn't reached yet stays a blueprint, so you see how far through the plan it is.</p>
+  <div class="scroll"><div class="canvas" id="c3"></div></div>
+  <ul class="notes">
+    <li><b>Plan:</b> dashed border, a soft see-through ground, idle ring, name and settings only. No empty strip, no cover placeholder.</li>
+    <li><b>Started:</b> solid card on its ground; then the outline for working, needing you or failed, as now.</li>
+    <li>Wires into steps that haven't run are dashed and faint too.</li>
+    <li>Starting a new disc turns every card back into the plan.</li>
+  </ul>
+</section>
+</div>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="drive" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h6"/></symbol>
+  <symbol id="cd" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="look" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+  <symbol id="text" viewBox="0 0 24 24"><path d="M5 6h14M12 6v13"/></symbol>
+  <symbol id="choose" viewBox="0 0 24 24"><path d="M4 7h10M4 12h10M4 17h6M15 16l2.5 2.5L22 14"/></symbol>
+  <symbol id="art" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9.5" r="1.6"/><path d="M5 18l5-5 4 4 2-2 3 3"/></symbol>
+  <symbol id="rip" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
+  <symbol id="wave" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></symbol>
+  <symbol id="lib" viewBox="0 0 24 24"><path d="M5 5v14M9 5v14M13 6l4 13"/></symbol>
+  <symbol id="next" viewBox="0 0 24 24"><path d="M5 15l7-8 7 8zM5 19h14"/></symbol>
+</svg>
+<script>
+(function () {
+  var COL = { drive: 'var(--c-src)', cd: 'var(--c-read)', mb: 'var(--c-look)', cdtext: 'var(--c-look)', choose: 'var(--c-chk)', art: 'var(--c-look)', rip: 'var(--c-read)', flac: 'var(--c-make)', mp3: 'var(--c-make)', lib1: 'var(--c-put)', lib2: 'var(--c-put)', next: 'var(--c-src)' };
+  var ICON = { drive: 'drive', cd: 'cd', mb: 'look', cdtext: 'text', choose: 'choose', art: 'art', rip: 'rip', flac: 'wave', mp3: 'wave', lib1: 'lib', lib2: 'lib', next: 'next' };
+  var NAME = { drive: 'Drive', cd: 'Audio CD', mb: 'MusicBrainz', cdtext: 'CD-Text', choose: 'Choose', art: 'Cover art', rip: 'Rip', flac: 'FLAC', mp3: 'MP3', lib1: 'Library', lib2: 'Library', next: 'Next disc' };
+  var SET = { drive: [['Drive', 'Blu-ray drive'], ['Offset', '+103']], art: [['Largest', '1200 px']], rip: [['First read', 'fast']], flac: [['Level', '8']], mp3: [['Quality', 'V0'], ['Stereo', 'joint']],
+    lib1: [['Folder', '~/Music/FLAC'], ['Names', 'Artist / Album / 01 - Title']], lib2: [['Folder', '~/Music/MP3'], ['Names', 'Artist / Album / 01 - Title']] };
+  var STRIP = { drive: 'first', cd: 'last', mb: '', cdtext: '', choose: 'first', art: 'mid', rip: 'last', flac: 'first', lib1: 'last', mp3: 'first', lib2: 'last', next: '' };
+  function strip(cells) { return '<div class="strip">' + cells.map(function (c) { return '<i class="' + c + '"></i>'; }).join('') + '</div>'; }
+  function n(k, a) { var r = []; for (var i = 0; i < 13; i++) r.push(i < k ? a : ''); return r; }
+  function card(id, x, y, o) {
+    o = o || {};
+    var plan = !o.state;
+    var cls = 'card ' + STRIP[id] + (plan ? ' plan' : '') + (o.state === 'busy' ? ' busy' : '') + (o.thumb ? ' art' : '');
+    var h = '<div class="' + cls + '" style="left:' + x + 'px;top:' + y + 'px">';
+    h += '<div class="nm"><svg style="color:' + COL[id] + '"><use href="#' + ICON[id] + '"/></svg>' + NAME[id] + '</div>';
+    h += '<span class="st ' + (o.state || 'idle') + '"></span>';
+    (SET[id] || []).forEach(function (kv, i) { h += '<div class="kv" style="top:' + (40 + i * 16) + 'px"><span class="k">' + kv[0] + '</span><span class="v">' + kv[1] + '</span></div>'; });
+    if (!plan) {
+      if (o.thumb) h += '<span class="thumb"></span>';
+      if (o.out) h += '<div class="out">' + o.out + (o.q ? '<small>' + o.q + '</small>' : '') + '</div>';
+      if (o.det) h += '<div class="det' + (o.now ? ' now' : '') + '">' + o.det + '</div>';
+      h += strip(o.cells || [o.state === 'busy' ? 'busy' : 'done']);
+    }
+    return h + '</div>';
+  }
+  var W = 288, H = 192, G = 64, VG = 32;
+  var P = {};
+  var x = 0, mid = (3 * H + 2 * VG) / 2;
+  P.drive = [x, mid - H / 2]; x += W; P.cd = [x, mid - H / 2]; x += W + G;
+  P.mb = [x, mid - H - VG / 2]; P.cdtext = [x, mid + VG / 2]; x += W + G;
+  P.choose = [x, mid - H / 2]; x += W; P.art = [x, mid - H / 2]; x += W; P.rip = [x, mid - H / 2]; x += W + G;
+  var bx = x;
+  P.flac = [bx, 0]; P.lib1 = [bx + W, 0]; P.mp3 = [bx, H + VG]; P.lib2 = [bx + W, H + VG]; P.next = [bx, 2 * (H + VG)];
+  var width = bx + 2 * W, height = 3 * H + 2 * VG;
+  function R(id) { return [P[id][0] + W, P[id][1] + H / 2]; } function L(id) { return [P[id][0], P[id][1] + H / 2]; }
+  function wire(a, b, cls) { var k = G / 2; return '<path class="' + cls + '" d="M' + a + ' C' + (a[0] + k) + ',' + a[1] + ' ' + (b[0] - k) + ',' + b[1] + ' ' + b + '"/>'; }
+  function draw(el, S, wires) {
+    var h = '<svg class="wires" width="' + width + '" height="' + (height + 30) + '">';
+    [['cd', 'mb'], ['cd', 'cdtext'], ['mb', 'choose'], ['cdtext', 'choose'], ['rip', 'flac'], ['rip', 'mp3'], ['rip', 'next']].forEach(function (w) { h += wire(R(w[0]), L(w[1]), wires[w[1]] || 'plan'); });
+    var n2 = P.next, d = P.drive;
+    h += '<path class="plan" d="M' + (n2[0] + W / 2) + ',' + (n2[1] + H) + ' V' + (height + 20) + ' H' + (d[0] + W / 2) + ' V' + (d[1] + H) + '"/></svg>';
+    for (var id in P) h += card(id, P[id][0], P[id][1], S[id]);
+    el.style.width = width + 'px'; el.style.height = (height + 30) + 'px'; el.innerHTML = h;
+  }
+  draw(document.getElementById('c1'), { drive: { state: 'idle', out: 'Insert a disc' } }, {});
+  draw(document.getElementById('c2'), { drive: { state: 'ok', out: 'Disc in', det: '13 tracks · 52:10' } }, {});
+  draw(document.getElementById('c3'), {
+    drive: { state: 'busy', out: 'Disc in', det: 'Reading at 8×', now: 1 },
+    cd: { state: 'ok', out: '13 tracks', q: '52:10', cells: n(13, 'done') },
+    mb: { state: 'ok', out: '1 release' }, cdtext: { state: 'ok', out: '13 titles' },
+    choose: { state: 'ok', out: 'Lost in the Dream', q: '2014', det: 'SC338 · Secretly Canadian' },
+    art: { state: 'ok', thumb: 1, out: '1200 × 1200' },
+    rip: { state: 'busy', out: '4/13 verified', det: 'Track 5 · Eyes to the Wind', now: 1, cells: n(4, 'ok').map(function (c, i) { return i === 4 ? 'busy' : c; }) },
+    flac: { state: 'busy', out: '96 MB', q: '57 %', det: 'Track 4 · Disappearing', now: 1, cells: n(3, 'done').map(function (c, i) { return i === 3 ? 'busy' : c; }) },
+    mp3: { state: 'busy', out: '31 MB', det: 'Track 4 · Disappearing', now: 1, cells: n(3, 'done').map(function (c, i) { return i === 3 ? 'busy' : c; }) }
+  }, { mb: '', cdtext: '', flac: 'busy', mp3: 'busy' });
+  var b = document.getElementById('theme'), r = document.documentElement;
+  function dark() { return r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; }
+  function label() { b.textContent = dark() ? 'Light' : 'Dark'; }
+  b.addEventListener('click', function () { r.dataset.theme = dark() ? 'light' : 'dark'; label(); });
+  label();
+})();
+</script>
+</body>
+</html>

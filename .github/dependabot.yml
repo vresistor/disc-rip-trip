@@ -1,0 +1,21 @@
+# Weekly pull requests for out-of-date dependencies. Security updates come
+# as soon as an advisory is published, once they're enabled in the
+# repository's settings (Code security, Dependabot security updates).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Patch and minor bumps in one pull request; a major on its own.
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

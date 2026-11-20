@@ -1,0 +1,54 @@
+# Flatpak manifest for Disc Rip Trip.
+#
+# It packages binaries scripts/build-flatpak.sh has already built inside the
+# GNOME SDK and put in payload/: disc-rip-trip, drt, and the tools they run
+# (ffmpeg, ffprobe, cyanrip, redumper). /app/bin is on PATH, which is where
+# the app finds them.
+#
+# The finish-args, each for a reason (reviewed for least privilege):
+#   --share=network         MusicBrainz, the Cover Art Archive, Discogs, GnuDB,
+#                           LRCLIB, AccurateRip, Redump, TMDb, ntfy
+#   --socket=wayland        the window
+#   --socket=fallback-x11   the window, only where there's no Wayland
+#   --share=ipc             X11's shared memory, for the fallback above
+#   --device=all            raw access to /dev/sr* (cyanrip, redumper and the
+#                           TOC and SG_IO reads open the drive itself, not
+#                           files), and the GPU. Flatpak has no narrower
+#                           permission that reaches an optical drive.
+#   --filesystem=host       libraries and staging live wherever you say,
+#                           including NAS mounts, external drives and paths
+#                           typed as ~/…, which the folder portal can't grant
+#                           to a recipe saved before
+#   --talk-name=org.freedesktop.Flatpak
+#                           MakeMKV is not bundled; it's run on the host, or
+#                           from its own flatpak, through `flatpak-spawn --host`.
+#                           This lets the app run anything on the host as you,
+#                           so the sandbox is no boundary while it's granted.
+# Notifications and the folder picker go through portals, which need nothing.
+id: io.github.vresistor.DiscRipTrip
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+command: disc-rip-trip
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=all
+  - --filesystem=host
+  - --talk-name=org.freedesktop.Flatpak
+
+modules:
+  - name: disc-rip-trip
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 -t /app/bin disc-rip-trip drt ffmpeg ffprobe cyanrip redumper
+      - install -Dm644 -t /app/share/doc/io.github.vresistor.DiscRipTrip PROVENANCE.txt
+      - install -Dm644 -t /app/share/applications io.github.vresistor.DiscRipTrip.desktop
+      - install -Dm644 -t /app/share/metainfo io.github.vresistor.DiscRipTrip.metainfo.xml
+      - for s in 512 128 64 32; do install -Dm644 ${s}x${s}.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.vresistor.DiscRipTrip.png; done
+    sources:
+      - type: dir
+        path: payload

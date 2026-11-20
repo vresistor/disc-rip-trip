@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rip's view</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Colours from app/src/theme.rs (Pal::light / Pal::dark). */
+:root {
+  --bg: #e9ecef; --surface: #f9fafb; --raised: #ffffff; --ink: #18202b; --muted: #4c5563; --subtle: #6b7480; --faint: #8c95a1;
+  --line: #d3d9e0; --line-soft: #e8ecf0; --action: #2348b8; --action-ink: #ffffff;
+  --ok: #17784a; --ok-soft: #dcefe4; --warn: #a35a10; --warn-soft: #f6e6d2; --bad: #b02a22; --bad-soft: #f5dcd9;
+  --busy: #3b6fe0; --busy-soft: #e3ebfb; --c-read: #3b6fe0;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --line-soft: #2a313b; --action: #7d9cf2; --action-ink: #0f1520;
+  --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b; --bad: #f07a70; --bad-soft: #3d2120;
+  --busy: #7d9cf2; --busy-soft: #1f2a44; --c-read: #6f95f0; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --line-soft: #2a313b; --action: #7d9cf2; --action-ink: #0f1520;
+  --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b; --bad: #f07a70; --bad-soft: #3d2120;
+  --busy: #7d9cf2; --busy-soft: #1f2a44; --c-read: #6f95f0; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 "Schibsted Grotesk", system-ui, sans-serif; padding: 24px 16px 64px; }
+.page { max-width: 1720px; margin: 0 auto; }
+header.top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 16px; margin: 32px 0 4px; }
+.intro { color: var(--muted); max-width: 860px; margin: 0 0 8px; }
+.intro ul { margin: 4px 0 0; padding-left: 18px; }
+.theme { font: inherit; color: var(--muted); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 8px; }
+nav a { font-size: 13px; font-weight: 500; color: var(--muted); text-decoration: none; background: var(--raised); border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; }
+.frame { overflow-x: auto; padding: 8px 0 4px; }
+.cap { font-size: 12px; color: var(--subtle); margin: 12px 0 4px; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* ---- the drawer: run only, full width, no rail ---- */
+.drawer { background: var(--raised); border: 1px solid var(--line); border-radius: 14px 14px 0 0; box-shadow: 0 -10px 28px rgba(0,0,0,.08); display: flex; flex-direction: column; overflow: hidden; flex: none; }
+.grip { height: 12px; display: grid; place-items: center; flex: none; } .grip i { width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
+.dh { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line-soft); }
+.dh .t { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; }
+.dh .t svg { color: var(--c-read); }
+.dh .say { flex: 1; min-width: 0; margin-left: 4px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dh .acts { display: flex; gap: 8px; align-items: center; }
+.dh .xx { width: 28px; height: 28px; display: grid; place-items: center; color: var(--subtle); }
+.pill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 13px; font-weight: 500; }
+.pill.busy { background: var(--busy-soft); color: var(--busy); } .pill.warn { background: var(--warn-soft); color: var(--warn); } .pill.ok { background: var(--ok-soft); color: var(--ok); }
+.btn { font: inherit; font-weight: 500; height: 28px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); }
+.btn.primary { background: var(--action); border-color: var(--action); color: var(--action-ink); }
+.btn.quiet { border-color: transparent; background: none; color: var(--muted); }
+.tabs { height: 32px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--line-soft); }
+.tabs span { font-weight: 500; color: var(--muted); padding: 6px 0; }
+.tabs span.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--action); }
+.tabs .flt { margin-left: auto; display: flex; gap: 4px; font-size: 13px; }
+.tabs .flt b { font-weight: 500; color: var(--muted); padding: 2px 8px; border-radius: 999px; }
+.tabs .flt b.on { color: var(--ink); background: var(--bg); }
+.body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 16px; }
+.band { flex: none; display: flex; align-items: center; gap: 24px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+.ring .small { font-size: 12px; }
+.disc { flex: none; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+
+/* the ring */
+.ring text { font-family: "Schibsted Grotesk", system-ui, sans-serif; }
+.ring .big { font-size: 16px; font-weight: 600; fill: var(--ink); }
+.ring .small { font-size: 13px; fill: var(--muted); }
+.ring .meta { font-size: 13px; fill: var(--subtle); }
+
+/* now */
+.now { flex: 1; min-width: 0; display: flex; gap: 24px; align-items: center; }
+.now .what { flex: 1; min-width: 0; }
+.now .l1 { display: flex; align-items: baseline; gap: 8px; height: 24px; }
+.now .l1 b { font-size: 16px; font-weight: 600; white-space: nowrap; }
+.now .l1 span { color: var(--subtle); white-space: nowrap; }
+.now .bar { height: 4px; border-radius: 2px; background: var(--busy-soft); margin: 4px 0 4px; }
+.now .bar i { display: block; height: 4px; border-radius: 2px; background: var(--busy); }
+.now .l2 { color: var(--muted); height: 16px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.now .trace { flex: none; width: 176px; }
+.now .trace .lab { display: flex; justify-content: space-between; color: var(--subtle); height: 16px; line-height: 16px; }
+.now .trace .lab b { color: var(--ink); font-weight: 500; }
+.trace polyline { fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-linejoin: round; }
+.trace .live polyline { stroke: var(--busy); }
+.trace line.tick { stroke: var(--line); stroke-width: 1; }
+.trace rect.dip { fill: var(--warn); opacity: .18; }
+
+/* the comparison of two reads */
+.cmp .reads { display: flex; gap: 24px; color: var(--muted); height: 16px; line-height: 16px; white-space: nowrap; }
+.cmp .reads .crc { font-variant-numeric: tabular-nums; color: var(--ink); letter-spacing: .02em; }
+.cmp .tl { position: relative; height: 8px; border-radius: 2px; background: var(--line); margin: 6px 0 4px; }
+.cmp .tl b { position: absolute; top: -2px; bottom: -2px; background: var(--bad); border-radius: 2px; min-width: 3px; }
+.cmp .ends { display: flex; justify-content: space-between; color: var(--subtle); font-size: 13px; height: 16px; line-height: 16px; }
+
+/* rows */
+.rows { flex: 1; min-height: 0; overflow: hidden; }
+.row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 56px 168px 96px 40px; gap: 12px; align-items: center; height: 24px; border-bottom: 1px solid var(--line-soft); font-variant-numeric: tabular-nums; }
+.row.head { color: var(--subtle); font-weight: 500; border-bottom-color: var(--line); }
+.row .n, .row .len, .row .crc, .row .rd { color: var(--subtle); }
+.row .n { text-align: right; } .row .len, .row .rd { text-align: right; }
+.row .crc { letter-spacing: .02em; }
+.row .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .ar { white-space: nowrap; color: var(--muted); }
+.row .ar .g { display: inline-block; width: 16px; }
+.row .ar .c { color: var(--subtle); margin-left: 4px; }
+.row.cur { background: var(--busy-soft); border-radius: 4px; }
+.row.attn { background: var(--warn-soft); border-radius: 4px; }
+.row.cur .ar { color: var(--busy); }
+.ok-g { color: var(--ok); } .warn-g { color: var(--warn); } .busy-g { color: var(--busy); } .kept-g { color: var(--faint); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--muted); margin: 8px 0 0; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 24px; height: 8px; border-radius: 2px; display: inline-block; }
+@media (max-width: 640px) { .intro { font-size: 13px; } }
+
+/* a track that needs you opens in its row: the two reads compared */
+.row.open { border-bottom: none; }
+.xp { padding: 4px 0 12px 36px; background: var(--warn-soft); border-radius: 0 0 4px 4px; margin-top: -2px; border-bottom: 1px solid var(--line-soft); }
+.xp .reads { display: flex; gap: 24px; color: var(--muted); height: 16px; line-height: 16px; white-space: nowrap; flex-wrap: wrap; }
+.xp .crc { font-variant-numeric: tabular-nums; color: var(--ink); letter-spacing: .02em; }
+.xp .tl { position: relative; height: 8px; border-radius: 2px; background: var(--line); margin: 8px 0 4px; max-width: 640px; }
+.xp .tl b { position: absolute; top: -2px; bottom: -2px; background: var(--bad); border-radius: 2px; min-width: 3px; }
+.xp .ends { display: flex; justify-content: space-between; color: var(--subtle); height: 16px; line-height: 16px; max-width: 640px; }
+.rows { overflow: hidden; }
+/* the Drive drawer, run only */
+.kv { display: grid; grid-template-columns: 96px 1fr; row-gap: 0; }
+.kv > span { height: 28px; line-height: 28px; white-space: nowrap; }
+.kv .k { color: var(--subtle); }
+.kv .src { color: var(--subtle); margin-left: 8px; }
+.sel { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); }
+.sel::after { content: "▾"; color: var(--subtle); font-size: 12px; }
+.spin { animation: spin 1.6s linear infinite; transform-origin: 50% 50%; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+<header class="top">
+  <h1>Rip's view</h1>
+  <button class="theme" id="theme" type="button">Dark</button>
+</header>
+<div class="intro">
+  <p style="margin:0">Rip's drawer during and after a run, at the real drawer size: half the canvas, run only, full width. Spec: <code>docs/ux/rip-view.md</code>.</p>
+  <ul>
+    <li><b>One full-width composition, no side column.</b> A band across the top holds the disc ring, the live readout and the read-speed trace. The track rows run below, at full width.</li>
+    <li><b>The disc:</b> one arc per track, sized by length, filling as it's read.</li>
+    <li><b>The read speed:</b> a scratch shows as a dip.</li>
+    <li><b>The rows:</b> each track's proof: AccurateRip confidence, CRC, and the number of reads.</li>
+    <li><b>A track that needs you</b> opens in its own row, with its two reads compared.</li>
+  </ul>
+</div>
+<div class="legend"><span><i style="background:var(--line)"></i>waiting</span><span><i style="background:var(--busy)"></i>reading</span><span><i style="background:var(--ok)"></i>verified</span><span><i style="background:var(--warn)"></i>to retry</span><span><i style="background:var(--faint)"></i>kept, unverified</span></div>
+<nav><a href="#s720">1280 × 720</a><a href="#s1080">1920 × 1080</a><a href="#sdrive">Drive</a></nav>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="drv" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h6"/></symbol>
+  <symbol id="rip" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
+</svg>
+
+<h2 id="s720">At 1280 × 720: the drawer is 1048 × 335</h2>
+<div id="f720"></div>
+<h2 id="s1080">At 1920 × 1080: the drawer is 1688 × 515</h2>
+<div id="f1080"></div>
+<h2 id="sdrive">The Drive drawer, redone the same way</h2>
+<p class="intro">Run only, full width: whether a disc is in, what it's reading and how fast. <i>Which drive</i> is a dropdown only when more than one is connected. The offset is read-only, with its source. Choosing a drive and measuring the offset belong to settings, not the run.</p>
+<div id="fdrive"></div>
+</div>
+
+<script>
+(function () {
+  var TR = [['Jimmy the Exploder', 150], ['Stop Breaking Down', 140], ['The Big Three Killed My Baby', 149], ['Suzy Lee', 201],
+    ['Sugar Never Tasted So Good', 175], ['Wasting My Time', 133], ['Cannon', 151], ['Astro', 162], ['Broken Bricks', 111],
+    ['When I Hear My Name', 114], ['Do', 185], ['Screwdriver', 194], ['One More Cup of Coffee', 194], ['Little People', 142],
+    ['Slicker Drips', 91], ['St. James Infirmary Blues', 144], ['I Fought Piranhas', 189]];
+  var CRC = ['9C4E2A71', '1F03B6D2', 'A7710C3E', '5D2E9F04', 'E83A1B67', '0B9D44C1', '72C6E0A9', 'C41F7B23', '4A7F12C0', '3E8805DA', 'B2D06F18', '61AC93E7', 'D9F2A50B', '08E7C4F6', '9AB31D72', 'F05C6E21', '2C74B9A8'];
+  function mmss(s) { return Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2); }
+  var COL = { wait: 'var(--line)', busy: 'var(--busy)', ok: 'var(--ok)', warn: 'var(--warn)', kept: 'var(--faint)' };
+
+  // The disc: one arc per track, sized by its length, in the strip's legend.
+  function ring(states, size, part, big, small, meta) {
+    var total = TR.reduce(function (a, t) { return a + t[1]; }, 0), cx = size / 2, cy = size / 2, w = Math.round(size * .075), r = size / 2 - w / 2 - 2;
+    var gap = 1.4, a = -90, arcs = '';
+    function arc(a0, a1, col) {
+      var p = function (deg) { var t = deg * Math.PI / 180; return [cx + r * Math.cos(t), cy + r * Math.sin(t)]; };
+      var s = p(a0), e = p(a1), large = a1 - a0 > 180 ? 1 : 0;
+      return '<path d="M' + s[0].toFixed(1) + ',' + s[1].toFixed(1) + ' A' + r + ',' + r + ' 0 ' + large + ' 1 ' + e[0].toFixed(1) + ',' + e[1].toFixed(1) + '" stroke="' + col + '" stroke-width="' + w + '" fill="none"/>';
+    }
+    TR.forEach(function (t, i) {
+      var sweep = t[1] / total * 360, a0 = a + gap / 2, a1 = a + sweep - gap / 2;
+      var st = states[i];
+      if (st === 'busy') { arcs += arc(a0, a1, COL.wait) + arc(a0, a0 + (a1 - a0) * part, COL.busy); }
+      else arcs += arc(a0, a1, COL[st]);
+      a += sweep;
+    });
+    // The read head: a small tick where the laser is, while reading.
+    var txt = '<text class="big" x="' + cx + '" y="' + (cy + 2) + '" text-anchor="middle">' + big + '</text>' +
+      '<text class="small" x="' + cx + '" y="' + (cy + 22) + '" text-anchor="middle">' + small + '</text>' +
+      (meta ? '<text class="meta" x="' + cx + '" y="' + (cy + 40) + '" text-anchor="middle">' + meta + '</text>' : '');
+    return '<svg class="ring" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' + arcs + txt + '</svg>';
+  }
+  // The read speed: a dip is a scratch.
+  function trace(vals, w, h, live, ticks, dip) {
+    var max = 10, pts = vals.map(function (v, i) { return (i / (vals.length - 1) * w).toFixed(1) + ',' + (h - 2 - v / max * (h - 4)).toFixed(1); }).join(' ');
+    var tk = (ticks || []).map(function (x) { return '<line class="tick" x1="' + (x * w).toFixed(1) + '" y1="' + (h - 4) + '" x2="' + (x * w).toFixed(1) + '" y2="' + h + '"/>'; }).join('');
+    var dp = dip ? '<rect class="dip" x="' + (dip[0] * w).toFixed(1) + '" y="0" width="' + ((dip[1] - dip[0]) * w).toFixed(1) + '" height="' + h + '"/>' : '';
+    return '<svg class="' + (live ? 'live' : '') + '" width="' + w + '" height="' + h + '">' + dp + tk + '<polyline points="' + pts + '"/></svg>';
+  }
+  function speeds(n, dipAt, base) {
+    var v = []; for (var i = 0; i < n; i++) { var x = (base || 8) + Math.sin(i * .9) * .25 + Math.cos(i * 2.3) * .15; if (dipAt && i >= dipAt[0] && i <= dipAt[1]) x = 2.4 + (i % 2) * .4; v.push(x); } return v;
+  }
+
+  function rowsHtml(states, opts) {
+    var head = '<div class="row head"><span class="n">#</span><span>Track</span><span class="len">Length</span><span>AccurateRip</span><span>CRC</span><span class="rd">Reads</span></div>';
+    var order = TR.map(function (_, i) { return i; });
+    if (opts.first != null) order = [opts.first].concat(order.filter(function (i) { return i !== opts.first; }));
+    var rows = order.map(function (i) {
+      var st = states[i], ar = '', crc = '', rd = '', cls = '';
+      if (st === 'ok') { ar = '<span class="g ok-g">✓</span>Verified<span class="c">' + (103 + i % 2) + '</span>'; crc = CRC[i]; rd = i === 3 && opts.reread ? '×2' : ''; }
+      else if (st === 'busy') { ar = '<span class="g busy-g">◌</span>Reading ' + Math.round(opts.part * 100) + ' %'; cls = ' cur'; }
+      else if (st === 'warn') { ar = '<span class="g warn-g">!</span>Doesn\'t match'; crc = '9B03E6A1'; rd = '×2'; cls = ' attn open'; }
+      else if (st === 'kept') { ar = '<span class="g kept-g">–</span>Kept, unverified'; crc = '9B03E6A1'; rd = '×3'; }
+      else { ar = '<span class="g"></span><span style="color:var(--subtle)">Waiting</span>'; }
+      var row = '<div class="row' + cls + '"><span class="n">' + (i + 1) + '</span><span class="nm">' + TR[i][0] + '</span><span class="len">' + mmss(TR[i][1]) + '</span><span class="ar">' + ar + '</span><span class="crc">' + crc + '</span><span class="rd">' + rd + '</span></div>';
+      if (st === 'warn') row += '<div class="xp"><div class="reads"><span>Read 1, fast <span class="crc">4A7F12C0</span></span><span>Read 2, careful <span class="crc">9B03E6A1</span></span><span>312 samples differ, 1:02–1:04</span></div>' +
+        '<div class="tl"><b style="left:' + (62 / 111 * 100).toFixed(1) + '%;width:' + (2 / 111 * 100).toFixed(1) + '%"></b></div><div class="ends"><span>0:00</span><span>1:51</span></div></div>';
+      return row;
+    }).join('');
+    return '<div class="rows">' + head + rows + '</div>';
+  }
+
+  var STATES = {
+    reading: (function () { var s = TR.map(function (_, i) { return i < 5 ? 'ok' : i === 5 ? 'busy' : 'wait'; }); return s; })(),
+    retry: TR.map(function (_, i) { return i === 8 ? 'warn' : 'ok'; }),
+    done: TR.map(function () { return 'ok'; }),
+    kept: TR.map(function (_, i) { return i === 8 ? 'kept' : 'ok'; })
+  };
+  // Where each track starts, as a fraction of the disc: the ticks on the disc's speed trace.
+  var TOTAL = TR.reduce(function (a, t) { return a + t[1]; }, 0), STARTS = [], acc = 0;
+  TR.forEach(function (t) { STARTS.push(acc / TOTAL); acc += t[1]; });
+  var DIP = [STARTS[8] + (62 / TOTAL), STARTS[8] + (64 / TOTAL)];
+
+  function frame(kind, W, H) {
+    // The band is a ring with the live readout beside it; the rows take the full width below.
+    var ringSize = H > 400 ? 128 : 88, tw = Math.min(Math.round(W * .32), 480);
+    var st = STATES[kind], pill, say, acts = '', big, small, meta, now, opts = {};
+    if (kind === 'reading') {
+      pill = '<span class="pill busy">◌ Reading</span>'; say = 'about 23 min left';
+      big = '6/17'; small = 'read'; opts = { part: .58 };
+      now = '<div class="now"><div class="what"><div class="l1"><b>Track 6 · Wasting My Time</b><span>2:13</span></div><div class="bar"><i style="width:58%"></i></div><div class="l2">1:17 of 2:13 · 56 s left</div></div>' +
+        '<div class="trace" style="width:' + tw + 'px"><div class="lab"><span>Read speed, this track</span><b>8.2×</b></div>' + trace(speeds(24), tw, 32, true) + '</div></div>';
+    } else if (kind === 'retry') {
+      pill = '<span class="pill warn">! Needs you</span>'; say = 'Track 9 doesn\'t match AccurateRip.';
+      acts = '<button class="btn quiet">Leave out</button><button class="btn quiet">Keep</button><button class="btn">Combine reads</button><button class="btn primary">Read again</button>';
+      big = '16/17'; small = 'verified'; opts = { first: 8, reread: 1 };
+      now = '<div class="now"><div class="what"><div class="l1"><b>All 17 read</b><span>in 24:51</span></div><div class="l2" style="margin-top:8px">Track 9 below: its two reads, compared</div></div>' +
+        '<div class="trace" style="width:' + tw + 'px"><div class="lab"><span>Read speed, the whole disc</span><b>a dip in track 9</b></div>' +
+        trace(speeds(120, [Math.round(DIP[0] * 119), Math.round(DIP[1] * 119) + 1]), tw, 32, false, STARTS.slice(1), DIP) + '</div></div>';
+    } else {
+      pill = '<span class="pill ok">✓ Done</span>';
+      say = kind === 'kept' ? 'Track 9 kept unverified: two reads disagree at 1:02–1:04.' : '';
+      big = kind === 'kept' ? '16/17' : '17/17'; small = kind === 'kept' ? '1 kept' : 'verified';
+      now = '<div class="now"><div class="what"><div class="l1"><b>Read in 24:51</b><span>8.1× average</span></div><div class="l2" style="margin-top:8px">AccurateRip confidence 103–104 of 104 · offset +103</div></div>' +
+        '<div class="trace" style="width:' + tw + 'px"><div class="lab"><span>Read speed, the whole disc</span><b>' + (kind === 'kept' ? 'a dip in track 9' : 'steady') + '</b></div>' +
+        trace(speeds(120, kind === 'kept' ? [Math.round(DIP[0] * 119), Math.round(DIP[1] * 119) + 1] : null), tw, 32, false, STARTS.slice(1), kind === 'kept' ? DIP : null) + '</div></div>';
+    }
+    return '<p class="cap">' + { reading: 'Reading', retry: 'One to retry', done: 'Done, all verified', kept: 'Done, one kept' }[kind] + '</p>' +
+      '<div class="frame"><div class="drawer" style="width:' + W + 'px;height:' + H + 'px">' +
+      '<div class="grip"><i></i></div>' +
+      '<div class="dh"><span class="t"><svg class="i"><use href="#rip"/></svg>Rip</span>' + pill + '<span class="say">' + say + '</span><span class="acts">' + acts + '</span><span class="xx">✕</span></div>' +
+      '<div class="tabs"><span class="on">Items</span><span>Found</span><span>Log</span>' + (kind === 'retry' ? '<span class="flt"><b>Needs you 1</b><b class="on">All 17</b></span>' : '') + '</div>' +
+      '<div class="body"><div class="band"><div class="disc">' + ring(st, ringSize, opts.part || 0, big, small, meta) + '</div>' + now + '</div>' + rowsHtml(st, opts) + '</div>' +
+      '</div></div>';
+  }
+  // The Drive drawer, redone the same way: run only, full width.
+  function driveFrame(two) {
+    var W = 1048, H = 335;
+    var which = two ? '<span class="sel">Blu-ray drive</span>' : 'Blu-ray drive';
+    return '<p class="cap">Drive, while Rip reads' + (two ? ', with two drives connected' : ', with one drive') + '</p>' +
+      '<div class="frame"><div class="drawer" style="width:' + W + 'px;height:' + H + 'px">' +
+      '<div class="grip"><i></i></div>' +
+      '<div class="dh"><span class="t"><svg class="i" style="color:var(--subtle)"><use href="#drv"/></svg>Drive</span><span class="pill busy">◌ Reading</span><span class="say">A CD is in, and Rip is reading it.</span><span class="acts"></span><span class="xx">✕</span></div>' +
+      '<div class="tabs"><span class="on">Drive</span><span>Log</span></div>' +
+      '<div class="body"><div class="band">' +
+      '<svg class="spin" width="88" height="88" viewBox="0 0 88 88"><circle cx="44" cy="44" r="40" fill="none" stroke="var(--line)" stroke-width="2"/><circle cx="44" cy="44" r="31" fill="none" stroke="var(--line-soft)" stroke-width="16"/><circle cx="44" cy="44" r="8" fill="none" stroke="var(--line)" stroke-width="2"/><path d="M44 13 A31 31 0 0 1 75 44" stroke="var(--busy)" stroke-width="4" fill="none" stroke-linecap="round"/></svg>' +
+      '<div class="now"><div class="what"><div class="l1"><b>CD in</b><span>reading for Rip, track 6</span></div><div class="l2" style="margin-top:8px">8.2× · the tray is closed</div></div>' +
+      '<div class="trace" style="width:336px"><div class="lab"><span>Read speed</span><b>8.2×</b></div>' + trace(speeds(24), 336, 32, true) + '</div></div></div>' +
+      '<div class="kv" style="padding-top:12px">' +
+      '<span class="k">Drive</span><span>' + which + (two ? '' : '<span class="src">the only drive connected</span>') + '</span>' +
+      '<span class="k">Model</span><span>ASUS BW-16D1HT · /dev/sr0</span>' +
+      '<span class="k">Offset</span><span>+103<span class="src">from AccurateRip, 528 agree</span></span>' +
+      '</div></div></div></div>';
+  }
+  ['reading', 'retry', 'done', 'kept'].forEach(function (k) {
+    document.getElementById('f720').insertAdjacentHTML('beforeend', frame(k, 1048, 335));
+    document.getElementById('f1080').insertAdjacentHTML('beforeend', frame(k, 1688, 515));
+  });
+  document.getElementById('fdrive').insertAdjacentHTML('beforeend', driveFrame(false) + driveFrame(true));
+
+  var b = document.getElementById('theme'), r = document.documentElement;
+  function dark() { return r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; }
+  function label() { b.textContent = dark() ? 'Light' : 'Dark'; }
+  b.addEventListener('click', function () { r.dataset.theme = dark() ? 'light' : 'dark'; label(); });
+  label();
+})();
+</script>
+</body>
+</html>

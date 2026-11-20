@@ -1,0 +1,30 @@
+[package]
+name = "drt-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "The window: the list of recipes, the canvas, live tiles and the sidebar"
+
+[[bin]]
+name = "disc-rip-trip"
+path = "src/main.rs"
+
+[dependencies]
+drt-engine = { path = "../crates/engine" }
+drt-steps = { path = "../crates/steps" }
+drt-layout = { path = "../crates/layout" }
+anyhow.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+egui = "0.37"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "x11", "accesskit", "clipboard", "system_fonts"] }
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal", "wayland"] }
+opener = "0.9"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu", "eframe"] }
+tempfile = "3"
+async-trait.workspace = true

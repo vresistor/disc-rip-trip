@@ -1,0 +1,175 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+  # Weekly, so an advisory published against a dependency is caught even
+  # when nothing here has changed. Runs the checks, not the flatpak.
+  schedule:
+    - cron: '17 6 * * 1'
+
+# Read-only unless a job says otherwise: only `release` writes.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Actions are pinned to a full commit, with the version it is in a comment;
+# Dependabot keeps them current (.github/dependabot.yml).
+jobs:
+  # The window tests draw real frames through wgpu with no display, so Mesa's
+  # software Vulkan (lavapipe) stands in for a GPU. ffmpeg is for the tests
+  # that encode real files.
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-deny,cargo-audit
+
+      # Licences, sources, banned and duplicated crates, and RustSec
+      # advisories, as deny.toml allows them.
+      - name: Dependencies (cargo deny)
+        run: cargo deny check --hide-inclusion-graph
+
+      # RustSec's own client: the same database, read independently.
+      # Accepted advisories are the ones deny.toml lists, with reasons.
+      - name: Advisories (cargo audit)
+        run: >-
+          cargo audit
+          --ignore RUSTSEC-2024-0436
+          --ignore RUSTSEC-2026-0370
+          --ignore RUSTSEC-2026-0371
+          --ignore RUSTSEC-2026-0372
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg
+
+      - name: Tests
+        env:
+          # Animations off, so the window tests are steady.
+          DRT_REDUCED_MOTION: "1"
+        run: cargo test --workspace
+
+  # Linux x86_64 only: the app doesn't build for Windows or macOS yet
+  # (docs/portability.md).
+  flatpak:
+    needs: check
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: flatpak and Flathub's builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak
+          # Ubuntu 24.04 stops bubblewrap making the namespaces flatpak runs in.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.flatpak.Builder
+
+      # cyanrip is built from source, so the tools are kept until the scripts
+      # that make them change.
+      - name: Cache the tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/flatpak/tools
+          key: tools-${{ hashFiles('scripts/fetch-tools.sh', 'scripts/build-cyanrip.sh') }}
+
+      - name: Cache cargo's downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/flatpak/cargo
+          key: flatpak-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build the bundle
+        run: ./scripts/build-flatpak.sh
+
+      # MakeMKV decrypts CSS, and distributing circumvention software is a
+      # different act from distributing something that drives it (CDPA
+      # s.296ZB, DMCA 1201). It must never reach an artifact. See THIRD-PARTY.md.
+      - name: Assert nothing we must not distribute was bundled
+        run: |
+          found=$(find target/flatpak/tools target/flatpak/build \
+            \( -iname '*makemkv*' -o -iname '*dvdcss*' -o -iname '*libmmbd*' \) 2>/dev/null || true)
+          if [ -n "$found" ]; then
+            echo "::error::The bundle contains software this project must not redistribute:"
+            echo "$found"
+            exit 1
+          fi
+
+      # The bundled tools are GPL and LGPL; PROVENANCE.txt says which source
+      # each came from, so it goes beside the bundle.
+      - name: Put the provenance beside the bundle
+        run: cp target/flatpak/tools/PROVENANCE.txt dist/tools-provenance.txt
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: disc-rip-trip-flatpak
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            dist/*.flatpak
+            dist/tools-provenance.txt
+
+  # A tag makes a draft release from the bundle the flatpak job built. The
+  # only job that can write to the repository, and it runs no build.
+  release:
+    needs: flatpak
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: disc-rip-trip-flatpak
+          path: dist
+
+      - name: Make the draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release create "$TAG" --repo "$REPO" --draft \
+            --title "Disc Rip Trip $TAG" \
+            --notes-file - dist/*.flatpak dist/tools-provenance.txt <<'EOF'
+          **Installing.** Download the `.flatpak` and run
+          `flatpak install --user ./disc-rip-trip-*.flatpak`. It brings
+          cyanrip, redumper, ffmpeg and ffprobe with it.
+
+          **MakeMKV is a separate install** and is not bundled; the app tells
+          you where to get it.
+
+          Licensing, and the source of the bundled GPL and LGPL tools, are in
+          [THIRD-PARTY.md](https://github.com/vresistor/disc-rip-trip/blob/master/THIRD-PARTY.md)
+          and `tools-provenance.txt`.
+          EOF

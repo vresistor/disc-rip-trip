@@ -1,0 +1,667 @@
+//! Data discs: an image (DESIGN-UX.md, "Other kinds of disc", 1).
+//!
+//! `Drive, Data disc, Image, Check, then CHD, Library; and Next disc`.
+//! Each step's `StepInfo` is here once and shared by the real and the
+//! simulated step, so a recipe runs on either.
+
+use super::{chd, device, hash, media, redump, redumper};
+use crate::template;
+use anyhow::{anyhow, bail, Result};
+use async_trait::async_trait;
+use drt_engine::setting::ParamKind;
+use drt_engine::{Context, Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Step, StepInfo, StepState, Subject};
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+/// The id of the one item a data disc becomes: its dump, then the files
+/// made from it. Place files an item with this id as a set, in a folder.
+pub const DUMP: &str = "dump";
+
+pub const SPEEDS: &[&str] = &["Drive's best", "1×", "2×", "4×", "8×", "16×", "24×", "48×"];
+
+type Get<'a> = &'a dyn Fn(&str) -> Option<Value>;
+
+fn s(get: Get, k: &str) -> String {
+    match get(k) {
+        Some(Value::String(v)) => v,
+        Some(v) => v.to_string(),
+        None => String::new(),
+    }
+}
+
+// ---- what each step is ------------------------------------------------------------------------
+
+pub fn data_disc_info() -> StepInfo {
+    StepInfo::new("data-disc", "Data disc", Group::Kind, ItemKind::Disc, ItemKind::DataDisc).gives(&["label"]).from("read the disc's name and size")
+}
+
+/// Bad sectors: the dump re-reads each up to *Retries* times, then a
+/// refine pass goes back over whatever is still bad, always, since a
+/// clean image is the job. If any remain after that, the dump needs you:
+/// *Re-read bad parts* again, *Keep it anyway* or *Skip this disc*.
+pub fn image_info() -> StepInfo {
+    StepInfo::new("image", "Rip", Group::Read, ItemKind::DataDisc, ItemKind::Dump)
+        .gives(&["read"])
+        .from("copy the whole disc to an image")
+        .param(ParamSpec::new("retries", "Retries on a bad spot", ParamKind::Range { min: 0, max: 50 }).default(20).on_card("Retries"))
+        .param(ParamSpec::new("speed", "Read speed", ParamKind::Choice(SPEEDS)).default(SPEEDS[0]))
+        .summary(|g| {
+            let retries = g("retries").and_then(|v| v.as_i64()).unwrap_or(0);
+            let speed = s(g, "speed");
+            let speed = if speed == SPEEDS[0] || speed.is_empty() { String::new() } else { format!(", {speed}") };
+            format!("{retries} retries{speed}")
+        })
+        .retry("refine", "Re-read bad parts", "")
+        .retry("keep", "Keep it anyway", "")
+        .retry("leave_out", "Skip this disc", "")
+}
+
+pub fn check_info() -> StepInfo {
+    StepInfo::new("check", "Check", Group::Check, ItemKind::Dump, ItemKind::Dump)
+        .gives(&["hashes", "name"])
+        .from("compare with Redump's known-good copies")
+        .param(ParamSpec::new("systems", "Compare with Redump's list for", ParamKind::Choice(redump::CHOICES)).default(redump::ALL).on_card("Look in").labels(redump::LABELS))
+        // For a game whose serial Redump knows but whose hash it doesn't.
+        .retry("refine", "Re-read bad parts", "")
+        .retry("keep", "Keep it anyway", "")
+        .retry("leave_out", "Skip this disc", "")
+}
+
+pub fn chd_info() -> StepInfo {
+    StepInfo::new("chd", "CHD", Group::Make, ItemKind::Dump, ItemKind::ImageFile)
+        .from("compressed image for emulators")
+        .param(ParamSpec::new("codecs", "Compression", ParamKind::Choice(chd::CODECS)).default(chd::CODECS[0]).on_card("Method").labels(&[
+            "Standard, works in every emulator",
+            "zstd, loads faster, needs a recent emulator",
+            "lzma",
+            "zlib, bigger files",
+        ]))
+        .param(ParamSpec::new("hunk", "Block size", ParamKind::Choice(chd::HUNKS)).default(chd::HUNKS[0]).section("Advanced"))
+        .summary(|g| {
+            let c = s(g, "codecs");
+            if c == chd::CODECS[0] || c.is_empty() {
+                "standard compression".to_owned()
+            } else {
+                c
+            }
+        })
+}
+
+pub fn keep_info() -> StepInfo {
+    StepInfo::new("keep", "Plain image", Group::Make, ItemKind::Dump, ItemKind::ImageFile).from("uncompressed image, with its log")
+}
+
+/// Folder and Library: one step for tracks and for disc images. Takes any
+/// file and hands on the same kind, filed: what LibCrypt and M3U need.
+pub fn place_info(kind: &'static str, name: &'static str) -> StepInfo {
+    StepInfo::new(kind, name, Group::Place, ItemKind::AnyFile, ItemKind::AnyFile)
+        .repeatable()
+        .passes_through()
+        .gives(&["filed"])
+        .from_param("folder")
+        .param(ParamSpec::new("folder", "Folder", ParamKind::Folder).on_card("Folder"))
+        .param(ParamSpec::new("names", "Names", ParamKind::Template(template::LIBRARY_PRESETS)).default(template::DEFAULT).on_card_as("Names", &[], |g| {
+            // A preset by its name (*Artist / Album / 01 - Title*); your own, as you wrote it.
+            let t = template::renamed(&s(g, "names")).to_owned();
+            template::LIBRARY_PRESETS.iter().find(|(n, p)| *p == t || *n == t).map_or(t, |(n, _)| (*n).to_owned())
+        }))
+}
+
+/// The template a Place uses for a dump: its own, unless it's still the
+/// music default, which would file an image under "Unknown artist".
+pub fn dump_template(names: &str) -> &str {
+    if names.is_empty() || template::resolve(names) == template::DEFAULT {
+        template::DUMP_DEFAULT
+    } else {
+        names
+    }
+}
+
+/// What a dump's template can use, from what the dump knows.
+pub fn dump_fields(c: &Context) -> template::DumpFields {
+    let get = |k| c.get(Subject::Disc, k).unwrap_or("").to_owned();
+    let label = get("label");
+    let name = c.get(Subject::Disc, "name").map(str::to_owned).filter(|n| !n.is_empty()).unwrap_or_else(|| if label.is_empty() { "Disc".into() } else { label.clone() });
+    let bytes = get("bytes").parse().unwrap_or(0);
+    template::DumpFields { name, label, system: get("system"), date: template::today(), size: if bytes > 0 { media::size(bytes) } else { String::new() } }
+}
+
+/// The folder a dump is filed in, relative, from a Place's template.
+pub fn dump_folder(c: &Context, names: &str) -> PathBuf {
+    template::render_game(dump_template(names), &dump_fields(c), &super::game::game_fields(c))
+}
+
+/// The disc's label as an item label.
+fn label_of(c: &Context) -> String {
+    c.get(Subject::Disc, "label").map(str::to_owned).filter(|l| !l.is_empty()).unwrap_or_else(|| "Disc".into())
+}
+
+// ---- Data disc --------------------------------------------------------------------------------
+
+pub struct DataDisc;
+
+#[async_trait]
+impl Step for DataDisc {
+    fn info(&self) -> StepInfo {
+        data_disc_info()
+    }
+
+    async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        while let Some(disc) = inlet.recv().await {
+            let dev = device(disc.context())?;
+            cx.status("", "Reading the disc");
+            let found = {
+                let _drive = cx.lane(LaneKind::Drive).await;
+                tokio::task::spawn_blocking(move || media::read(&dev)).await?
+            };
+            if found.bytes == 0 {
+                bail!("the disc has no size: is it in?");
+            }
+            let mut d = disc.becomes(ItemKind::DataDisc, None);
+            {
+                let c = d.context_mut();
+                let d = "the disc";
+                c.add(Subject::Disc, "label", found.label.clone(), d);
+                c.add(Subject::Disc, "filesystem", found.filesystem.clone(), d);
+                c.add(Subject::Disc, "media", found.media.clone(), d);
+                c.add(Subject::Disc, "bytes", found.bytes.to_string(), d);
+                c.add(Subject::Disc, "parts", "1", d);
+                c.add(Subject::Disc, "audio_tracks", found.audio_tracks.to_string(), d);
+            }
+            let label = if found.label.is_empty() { "No label".to_owned() } else { found.label.clone() };
+            cx.status(label, [found.filesystem.as_str(), &media::size(found.bytes)].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · "));
+            cx.log(format!("{} of {}, {}, label {:?}, {} track(s), {} audio", found.media, media::size(found.bytes), found.filesystem, found.label, found.tracks, found.audio_tracks));
+            if found.tracks > 0 && found.audio_tracks == found.tracks {
+                cx.log("every track is audio: this is an audio CD, imaged as one");
+            }
+            d.label = label_of(d.context());
+            outlet.send(d).await;
+        }
+        Ok(())
+    }
+}
+
+// ---- Image ------------------------------------------------------------------------------------
+
+pub struct Image;
+
+/// How a dump came out: its note when it's good, or what's wrong with it.
+type Outcome = std::result::Result<String, String>;
+
+impl Image {
+    /// Runs one redumper command, showing its phase and progress on the tile
+    /// and keeping its findings in the log.
+    pub(crate) async fn phase(&self, cx: &Cx, item: &Item, t: &redumper::Target, args: Vec<String>, out: &mut String) -> Result<bool> {
+        cx.log(format!("redumper {}", args.join(" ")));
+        let (text, ok) = redumper::run(&args, t, cx.cancelled(), |line| {
+            if let Some(p) = redumper::phase(line) {
+                cx.status("", p);
+                cx.drive_says(StepState::Busy, p, "");
+            }
+            if let Some(p) = redumper::parse_progress(line) {
+                cx.progress(Some(p.fraction));
+                let errors = match p.errors {
+                    0 => String::new(),
+                    1 => ", 1 error".into(),
+                    n => format!(", {n} errors"),
+                };
+                cx.item(item, ItemState::Busy, format!("{}%, {}{errors}", (p.fraction * 100.0) as u32, p.detail));
+            }
+            if redumper::worth_logging(line) {
+                cx.log(line.trim());
+            }
+        })
+        .await?;
+        out.push_str(&text);
+        Ok(ok)
+    }
+
+    /// Makes the image from what's been read: splits a CD into its tracks
+    /// (forcing past unreadable sectors with `force`), or takes a DVD's
+    /// ISO; then has redumper check every sector of it. Gives the note for
+    /// a good image, or what's still wrong.
+    pub(crate) async fn settle(&self, cx: &Cx, item: &Item, t: &redumper::Target, out: &mut String, force: bool, refined: bool) -> Result<Outcome> {
+        let unreadable = if t.is_cd() {
+            let mut split = String::new();
+            let ok = self.phase(cx, item, t, redumper::split_args(t, force), &mut split).await?;
+            out.push_str(&split);
+            let skipped: u64 = split.lines().filter_map(redumper::parse_skipped).sum();
+            match (ok, t.main()) {
+                (true, Some(_)) => skipped,
+                _ if redumper::split_needs_force(&split) => return Ok(Err(plural(skipped.max(1), "unreadable sector"))),
+                _ => bail!("{}", redumper::reason(&split)),
+            }
+        } else {
+            if t.main().is_none() {
+                bail!("{}", redumper::reason(out));
+            }
+            match redumper::errors_left(out) {
+                0 => 0,
+                n if force => n,
+                n => return Ok(Err(plural(n, "unreadable sector"))),
+            }
+        };
+        // Sectors the drive read wrong without saying so: only an inspection
+        // of the image finds them (redumper's `info`, which `disc` runs).
+        let mut info = String::new();
+        self.phase(cx, item, t, vec!["info".into(), format!("--image-path={}", t.dir.display()), format!("--image-name={}", t.name)], &mut info).await?;
+        out.push_str(&info);
+        let size = t.main().and_then(|m| std::fs::metadata(m).ok()).map(|m| media::size(m.len())).unwrap_or_default();
+        let problems = redumper::sector_problems(&info);
+        // The error codes go to the log; the note says it in words.
+        let detail = problems.iter().filter(|p| p.1 > 0).map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ");
+        if !detail.is_empty() {
+            cx.log(format!("sectors read wrong: {detail}"));
+        }
+        Ok(Ok(image_note(&size, force, unreadable, refined, &problems)))
+    }
+}
+
+fn plural(n: u64, what: &str) -> String {
+    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
+}
+
+/// What Image says about an image it made.
+pub fn image_note(size: &str, forced: bool, unreadable: u64, refined: bool, problems: &[(&'static str, u64)]) -> String {
+    let wrong: u64 = problems.iter().map(|p| p.1).max().unwrap_or(0);
+    match (forced, unreadable, wrong) {
+        (true, 0, 0) => format!("kept anyway, {size}"),
+        (true, n, 0) => format!("kept anyway, {} left blank", plural(n, "unreadable sector")),
+        (true, n, w) => format!("kept anyway, {} left blank, {} came back wrong", plural(n, "unreadable sector"), plural(w, "sector")),
+        (false, _, 0) if refined => format!("✓ {size}, bad parts re-read"),
+        (false, _, 0) => format!("✓ {size}, read cleanly"),
+        // The drive didn't know: re-reading here won't help; another drive might.
+        (false, _, w) => format!("read, but {} came back wrong", plural(w, "sector")),
+    }
+}
+
+#[async_trait]
+impl Step for Image {
+    fn info(&self) -> StepInfo {
+        image_info()
+    }
+
+    async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        let Some(disc) = inlet.recv().await else { return Ok(()) };
+        let dev = match redumper::drive_access(&device(disc.context())?) {
+            Ok(d) => d,
+            Err(e) => {
+                cx.drive_says(StepState::Bad, "Can't open", &e.to_string());
+                return Err(e);
+            }
+        };
+        let label = label_of(disc.context());
+        let name = redumper::image_name(disc.context().get(Subject::Disc, "label").unwrap_or(""));
+        let t = redumper::Target { dir: cx.work()?.join("image"), name };
+        let speed = cx.text("speed").trim_end_matches('×').parse().ok();
+        let opts = redumper::Options { drive: dev, retries: cx.param("retries").and_then(|v| v.as_u64()).unwrap_or(20) as u32, speed };
+        let item = Item::new(DUMP, ItemKind::Dump, label, None, None).knowing(&disc);
+        cx.item(&item, ItemState::Busy, "reading");
+        let mut out = String::new();
+        let mut outcome = {
+            let _drive = cx.lane(LaneKind::Drive).await;
+            if !self.phase(&cx, &item, &t, redumper::dump_args(&opts, &t), &mut out).await? {
+                bail!("{}", redumper::reason(&out));
+            }
+            let refine = redumper::errors_left(&out) > 0;
+            if refine {
+                self.phase(&cx, &item, &t, redumper::refine_args(&opts, &t), &mut out).await?;
+            }
+            let o = self.settle(&cx, &item, &t, &mut out, false, refine).await?;
+            cx.drive_says(StepState::Idle, "Waiting", "");
+            o
+        };
+        cx.progress(None);
+        loop {
+            match outcome {
+                Ok(note) => {
+                    let main = t.main().ok_or_else(|| anyhow!("redumper made no image"))?;
+                    cx.item(&item, ItemState::Ok, note.clone());
+                    cx.state(StepState::Busy);
+                    cx.status(image_size(&main), if note.contains("re-read") || note.contains("refined") { note.trim_start_matches("✓ ").to_owned() } else { String::new() });
+                    outlet.send(item.becomes(ItemKind::Dump, Some(main))).await;
+                    return Ok(());
+                }
+                Err(bad) => {
+                    cx.log(format!("image: {bad}"));
+                    cx.item(&item, ItemState::Bad, bad.clone());
+                    cx.state(StepState::Bad);
+                    cx.status("", cap(&bad));
+                }
+            }
+            let req = loop {
+                match cx.next_retry().await {
+                    None => return Ok(()),
+                    Some(r) if r.item == item.id => break r,
+                    Some(_) => {}
+                }
+            };
+            cx.state(StepState::Busy);
+            outcome = match req.option.as_str() {
+                "leave_out" => {
+                    cx.item(&item, ItemState::Skipped, "skipped");
+                    cx.status("Skipped", "");
+                    return Ok(());
+                }
+                "keep" => {
+                    cx.item(&item, ItemState::Busy, "keeping anyway");
+                    self.settle(&cx, &item, &t, &mut out, true, false).await?
+                }
+                _ => {
+                    cx.item(&item, ItemState::Busy, "re-reading bad parts");
+                    let _drive = cx.lane(LaneKind::Drive).await;
+                    self.phase(&cx, &item, &t, redumper::refine_args(&opts, &t), &mut out).await?;
+                    let o = self.settle(&cx, &item, &t, &mut out, false, true).await?;
+                    cx.drive_says(StepState::Idle, "Waiting", "");
+                    o
+                }
+            };
+        }
+    }
+}
+
+// ---- Check ------------------------------------------------------------------------------------
+
+pub struct Check;
+
+/// The data files of a dump, the ones Redump catalogues: its tracks or its
+/// ISO, and its cue sheet. Not the log.
+pub fn data_files(main: &Path) -> Vec<PathBuf> {
+    redumper::dump_files(main).into_iter().filter(|f| !f.extension().is_some_and(|e| e.eq_ignore_ascii_case("log"))).collect()
+}
+
+/// The image's own data: its tracks in the cue's order, or its ISO.
+pub fn image_files(main: &Path) -> Vec<PathBuf> {
+    data_files(main).into_iter().filter(|f| !f.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue"))).collect()
+}
+
+/// The cache folder beside the runs: `…/disc-rip-trip/cache/redump`.
+pub fn redump_cache(work: &Path) -> PathBuf {
+    work.parent().and_then(Path::parent).unwrap_or(work).join("cache/redump")
+}
+
+/// What Check says about a dump and its catalogue lookups.
+/// A dump's size on disk, all its files: *682 MB*.
+pub fn image_size(main: &Path) -> String {
+    let bytes: u64 = redumper::dump_files(main).iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+    let bytes = if bytes == 0 { std::fs::metadata(main).map(|m| m.len()).unwrap_or(0) } else { bytes };
+    media::size(bytes)
+}
+
+fn cap(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+pub fn verdict(found: Option<(&str, &str)>, looked: usize, failed: &[&str]) -> (String, String, String) {
+    match found {
+        Some((name, _)) => (format!("Verified: {name}"), "Matches Redump".into(), name.into()),
+        None if looked == 0 => ("Couldn't check: nowhere to look".into(), "Couldn't check".into(), failed.join(", ")),
+        None if !failed.is_empty() => ("Not in Redump".into(), "Not in Redump".into(), format!("{failed} not reached", failed = failed.join(", "))),
+        None => ("Not in Redump".into(), "Not in Redump".into(), format!("looked in {looked} system{}", if looked == 1 { "" } else { "s" })),
+    }
+}
+
+#[async_trait]
+impl Step for Check {
+    fn info(&self) -> StepInfo {
+        check_info()
+    }
+
+    async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        while let Some(mut dump) = inlet.recv().await {
+            let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+            let files = data_files(&main);
+            cx.item(&dump, ItemState::Busy, "checking");
+            cx.status("", format!("Checking {} file{}", files.len(), if files.len() == 1 { "" } else { "s" }));
+            let roms = {
+                let cx2 = cx.clone();
+                let d = dump.clone();
+                tokio::task::spawn_blocking(move || {
+                    let refs: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
+                    hash::hash_files(
+                        &refs,
+                        |p| {
+                            cx2.progress(Some(p));
+                            cx2.item(&d, ItemState::Busy, format!("checking {}%", (p * 100.0) as u32));
+                        },
+                        || cx2.stopped(),
+                    )
+                })
+                .await??
+            };
+            cx.progress(None);
+            for r in &roms {
+                dump.context_mut().add(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
+            }
+            for r in &roms {
+                cx.log(format!("<rom name=\"{}\" size=\"{}\" crc=\"{}\" md5=\"{}\" sha1=\"{}\" />", r.name, r.size, r.crc, r.md5, r.sha1));
+            }
+            let media = dump.context().get(Subject::Disc, "media").unwrap_or("").to_owned();
+            let systems = super::game::catalogues(dump.context(), &cx.text("systems"), &media);
+            let cache = redump_cache(&cx.work()?);
+            let (mut found, mut looked, mut failed) = (None, 0, vec![]);
+            for sys in &systems {
+                cx.status("", format!("Looking up {}", sys.name));
+                cx.item(&dump, ItemState::Busy, format!("in {}", sys.name));
+                let cat = {
+                    let _net = cx.lane(LaneKind::Network("Redump".into())).await;
+                    redump::catalogue(&cache, sys.slug, redump::download).await
+                };
+                match cat {
+                    Ok(c) => {
+                        looked += 1;
+                        if let Some(g) = c.by_hashes(&roms) {
+                            found = Some((g.name.clone(), sys.name));
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        cx.log(format!("the {} catalogue: {e}", sys.name));
+                        failed.push(sys.name);
+                    }
+                }
+            }
+            if let Some((name, system)) = &found {
+                let c = dump.context_mut();
+                c.add(Subject::Disc, "name", name.clone(), "Redump");
+                c.add(Subject::Disc, "system", *system, "Redump");
+            }
+            let (note, status, detail) = verdict(found.as_ref().map(|(n, s)| (n.as_str(), *s)), looked, &failed);
+            cx.log(&note);
+            // Not being in Redump isn't a bad dump: most data discs aren't.
+            // Found, it's verified: the catalogue's hashes are independent.
+            if found.is_some() {
+                cx.verified(&dump, note);
+            } else {
+                cx.item(&dump, ItemState::Ok, note);
+            }
+            cx.status(status, detail);
+            // A game Redump has under its serial, but not with this hash: suspect, held for you.
+            let dump = if found.is_none() { super::game::hold_if_suspect(&cx, dump, &roms).await? } else { Some(dump) };
+            if let Some(dump) = dump {
+                outlet.send(dump).await;
+            }
+        }
+        Ok(())
+    }
+}
+
+// ---- CHD and Plain image -------------------------------------------------------------------------
+
+pub struct Chd;
+
+#[async_trait]
+impl Step for Chd {
+    fn info(&self) -> StepInfo {
+        chd_info()
+    }
+
+    async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        while let Some(dump) = inlet.recv().await {
+            let src = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+            // Named for what Check found, else the label.
+            let name = super::safe(&dump_fields(dump.context()).name);
+            let dest = cx.work()?.join("chd").join(format!("{name}.chd"));
+            let (codec, hunk) = (cx.text("codecs"), cx.text("hunk"));
+            let _core = cx.lane(LaneKind::Encode).await;
+            cx.item(&dump, ItemState::Busy, "compressing");
+            cx.status("", "Compressing");
+            cx.log(format!("compressing, {}", chd::describe(&chd::codecs(&codec, chd::is_cd(&src)))));
+            let made = {
+                let (cx2, d, src, dest) = (cx.clone(), dump.clone(), src.clone(), dest.clone());
+                tokio::task::spawn_blocking(move || {
+                    chd::create(
+                        &src,
+                        &dest,
+                        &codec,
+                        &hunk,
+                        |p| {
+                            cx2.progress(Some(p));
+                            cx2.item(&d, ItemState::Busy, format!("compressing {}%", (p * 100.0) as u32));
+                        },
+                        &|| cx2.stopped(),
+                    )
+                })
+                .await?
+            };
+            if let Err(e) = made {
+                if cx.stopped() {
+                    return Err(e);
+                }
+                cx.item(&dump, ItemState::Bad, format!("Couldn't make the file: {e}"));
+                cx.log(format!("CHD: {e}"));
+                continue;
+            }
+            let tracks = image_files(&src);
+            let made_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+            let image_size: u64 = tracks.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+            let mut note = format!("{}, {}% of the image", media::size(made_size), (made_size * 100).checked_div(image_size).unwrap_or(0));
+            // Always: the CHD must give back exactly the image.
+            {
+                cx.status("", "Verifying");
+                let (cx2, d, src, made, files) = (cx.clone(), dump.clone(), src.clone(), dest.clone(), tracks);
+                let checked = tokio::task::spawn_blocking(move || {
+                    let known = |name: &str| d.context().get(Subject::Disc, &format!("sha1 {name}")).map(str::to_owned);
+                    chd::verify(
+                        &made,
+                        &src,
+                        &files,
+                        &known,
+                        |p| {
+                            cx2.progress(Some(p));
+                            cx2.item(&d, ItemState::Busy, format!("verifying {}%", (p * 100.0) as u32));
+                        },
+                        &|| cx2.stopped(),
+                    )
+                })
+                .await?;
+                match checked {
+                    Ok(v) => note = format!("{note}, {v}"),
+                    Err(e) => {
+                        if cx.stopped() {
+                            return Err(e);
+                        }
+                        cx.item(&dump, ItemState::Bad, format!("Couldn't make the file: {e}"));
+                        cx.log(format!("CHD verify: {e}"));
+                        let _ = std::fs::remove_file(&dest);
+                        continue;
+                    }
+                }
+            }
+            cx.progress(None);
+            cx.log(format!("CHD: {} ({note})", dest.display()));
+            cx.item(&dump, ItemState::Ok, note.clone());
+            cx.outcome(media::size(made_size), (made_size * 100).checked_div(image_size).map(|p| format!("{p} %")).unwrap_or_default(), "");
+            outlet.send(dump.becomes(ItemKind::ImageFile, Some(dest))).await;
+        }
+        Ok(())
+    }
+}
+
+pub struct Keep;
+
+#[async_trait]
+impl Step for Keep {
+    fn info(&self) -> StepInfo {
+        keep_info()
+    }
+
+    async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        while let Some(dump) = inlet.recv().await {
+            let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+            let n = redumper::dump_files(&main).len();
+            cx.item(&dump, ItemState::Ok, format!("{n} files"));
+            cx.status(image_size(&main), "");
+            outlet.send(dump.becomes(ItemKind::ImageFile, Some(main))).await;
+        }
+        Ok(())
+    }
+}
+
+/// Copies a dump's files into `dir`, each under a temporary name first, so
+/// a half-copied file never sits there under its real one. Gives where the
+/// main file went.
+pub async fn place_dump(main: &Path, dir: &Path) -> Result<PathBuf> {
+    let files = if main.extension().is_some_and(|e| e.eq_ignore_ascii_case("chd")) { vec![main.to_path_buf()] } else { redumper::dump_files(main) };
+    tokio::fs::create_dir_all(dir).await?;
+    for f in &files {
+        let name = f.file_name().ok_or_else(|| anyhow!("{} has no name", f.display()))?;
+        super::place::copy(f, &dir.join(name)).await?;
+    }
+    Ok(dir.join(main.file_name().unwrap_or_default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn what_check_says() {
+        assert_eq!(verdict(Some(("Encarta 98 (USA)", "IBM PC")), 1, &[]).0, "Verified: Encarta 98 (USA)");
+        assert_eq!(verdict(None, 3, &[]), ("Not in Redump".into(), "Not in Redump".into(), "looked in 3 systems".into()));
+        assert_eq!(verdict(None, 0, &["IBM PC"]).1, "Couldn't check");
+    }
+
+    #[test]
+    fn what_image_says_about_an_image() {
+        assert_eq!(image_note("682 MB", false, 0, false, &[]), "✓ 682 MB, read cleanly");
+        assert_eq!(image_note("682 MB", false, 0, true, &[("EDC", 0)]), "✓ 682 MB, bad parts re-read");
+        // Silent Hill: no read the drive admitted to, 18 sectors wrong on inspection.
+        let silent_hill = [("invalid sync", 0), ("MSF", 70), ("ECC", 6), ("EDC", 18)];
+        assert_eq!(image_note("630 MB", false, 0, false, &silent_hill), "read, but 70 sectors came back wrong");
+        assert_eq!(image_note("630 MB", true, 1, false, &[]), "kept anyway, 1 unreadable sector left blank");
+        assert_eq!(image_note("630 MB", true, 0, false, &[]), "kept anyway, 630 MB", "forcing nothing isn't reading cleanly either");
+    }
+
+    #[test]
+    fn the_cache_is_beside_the_runs() {
+        assert_eq!(redump_cache(Path::new("/home/u/.cache/disc-rip-trip/runs/data-discs-1")), PathBuf::from("/home/u/.cache/disc-rip-trip/cache/redump"));
+    }
+
+    #[test]
+    fn an_image_left_on_the_music_default_is_filed_by_name() {
+        assert_eq!(dump_template(template::DEFAULT), template::DUMP_DEFAULT);
+        assert_eq!(dump_template("Artist / Album / 01 - Title"), template::DUMP_DEFAULT);
+        assert_eq!(dump_template("System / Name"), "System / Name");
+    }
+
+    #[tokio::test]
+    async fn a_dump_set_is_filed_together() {
+        let base = std::env::current_dir().unwrap().join("../../target/drt-test/place-dump");
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("work");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("D.cue"), "FILE \"D (Track 1).bin\" BINARY\n  TRACK 01 MODE1/2352\nFILE \"D (Track 2).bin\" BINARY\n  TRACK 02 AUDIO\n").unwrap();
+        for f in ["D (Track 1).bin", "D (Track 2).bin", "D.log", "D.scram", "D.state"] {
+            std::fs::write(src.join(f), f).unwrap();
+        }
+        let lib = base.join("lib/Disc");
+        let placed = place_dump(&src.join("D.cue"), &lib).await.unwrap();
+        assert_eq!(placed, lib.join("D.cue"));
+        let mut there: Vec<String> = std::fs::read_dir(&lib).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        there.sort();
+        assert_eq!(there, ["D (Track 1).bin", "D (Track 2).bin", "D.cue", "D.log"], "redumper's working files stay behind");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+}

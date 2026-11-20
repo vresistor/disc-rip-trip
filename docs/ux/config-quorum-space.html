@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where settings live</title>
+<style>
+
+
+
+
+
+
+/* Colours from app/src/theme.rs (Pal::light / Pal::dark). */
+:root {
+  --bg: #e9ecef; --surface: #f9fafb; --raised: #ffffff; --ink: #18202b; --muted: #4c5563; --subtle: #6b7480; --faint: #8c95a1;
+  --line: #d3d9e0; --line-soft: #e8ecf0; --action: #2348b8; --action-ink: #ffffff;
+  --ok: #17784a; --ok-soft: #dcefe4; --warn: #a35a10; --warn-soft: #f6e6d2; --bad: #b02a22; --bad-soft: #f5dcd9;
+  --busy: #3b6fe0; --busy-soft: #e3ebfb; --pending: #8a939f;
+  --c-src: #6b7a8f; --c-read: #3b6fe0; --c-look: #8a5cd0; --c-make: #c27a1a; --c-put: #2f8a63; --c-chk: #17784a;
+  --done-cell: #6b7480; --wait-cell: #d3d9e0; --dot: #d3d9e0; --shadow: rgba(16,24,40,.10);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --line-soft: #2a313b; --action: #7d9cf2; --action-ink: #0f1520;
+  --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b; --bad: #f07a70; --bad-soft: #3d2120;
+  --busy: #7d9cf2; --busy-soft: #1f2a44; --pending: #707b88;
+  --c-src: #8e9cb0; --c-read: #6f95f0; --c-look: #a983e6; --c-make: #dd9a45; --c-put: #4fb385; --c-chk: #5cc48e;
+  --done-cell: #8693a0; --wait-cell: #313a45; --dot: #2a313b; --shadow: rgba(0,0,0,.35);
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15191f; --surface: #1c2129; --raised: #232a33; --ink: #e6eaef; --muted: #b3bcc7; --subtle: #8693a0; --faint: #707b88;
+  --line: #313a45; --line-soft: #2a313b; --action: #7d9cf2; --action-ink: #0f1520;
+  --ok: #5cc48e; --ok-soft: #1d3428; --warn: #e3a35a; --warn-soft: #3a2c1b; --bad: #f07a70; --bad-soft: #3d2120;
+  --busy: #7d9cf2; --busy-soft: #1f2a44; --pending: #707b88;
+  --c-src: #8e9cb0; --c-read: #6f95f0; --c-look: #a983e6; --c-make: #dd9a45; --c-put: #4fb385; --c-chk: #5cc48e;
+  --done-cell: #8693a0; --wait-cell: #313a45; --dot: #2a313b; --shadow: rgba(0,0,0,.35);
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/16px "Schibsted Grotesk", system-ui, sans-serif; padding: 24px 16px 64px; }
+.page { max-width: 1312px; margin: 0 auto; }
+.top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+h1 { font-size: 20px; line-height: 24px; font-weight: 600; margin: 0 0 8px; }
+.intro { color: var(--muted); max-width: 820px; margin: 0 0 24px; padding-left: 18px; }
+.intro li { margin: 2px 0; }
+.theme { font: inherit; color: var(--muted); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+section.opt { margin: 0 0 48px; }
+section.opt h2 { font-size: 16px; line-height: 24px; font-weight: 600; margin: 0; }
+section.opt h2 .tag { font-size: 13px; font-weight: 500; color: var(--action); margin-left: 8px; }
+section.opt > p { color: var(--muted); margin: 0 0 12px; max-width: 900px; }
+.cap { font-weight: 500; color: var(--subtle); margin: 16px 0 6px; }
+.scroll { overflow-x: auto; padding-bottom: 4px; }
+
+/* ---- the window, 1280 × 720 ---- */
+.win { position: relative; width: 1280px; height: 720px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; flex: none; }
+.side { position: absolute; left: 0; top: 0; bottom: 0; width: 232px; border-right: 1px solid var(--line); background: var(--surface); padding: 16px 8px; }
+.side .h { display: flex; justify-content: space-between; align-items: center; padding: 0 9px 0 9px; height: 24px; font-size: 16px; font-weight: 600; }
+.side .plus { width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 6px; display: grid; place-items: center; background: var(--raised); color: var(--ink); font-size: 18px; }
+.side .r { position: relative; padding: 9px 10px 9px 36px; border-radius: 8px; margin-top: 4px; }
+.side .r.on { background: var(--raised); border: 1px solid var(--line); margin-top: 10px; }
+.side .r b { display: block; font-weight: 600; font-size: 14px; line-height: 20px; }
+.side .r span { display: block; color: var(--muted); }
+.side .r span.s { color: var(--subtle); font-size: 12px; }
+.side .r .ri { position: absolute; left: 10px; top: 11px; color: var(--ink); }
+.side .r .rs { position: absolute; right: 10px; top: 26px; width: 15px; height: 15px; border-radius: 50%; border: 1.7px solid var(--pending); }
+.side .r .rs.busy { border: 2.4px solid var(--busy-soft); border-top-color: var(--busy); border-right-color: var(--busy); }
+.side .r span.blue { color: var(--busy); }
+.side .dk { position: absolute; left: 19px; bottom: 16px; color: var(--muted); }
+.hdr { position: absolute; left: 232px; right: 0; top: 0; height: 50px; border-bottom: 1px solid var(--line); background: var(--surface); display: flex; align-items: center; gap: 12px; padding: 0 16px 0 18px; }
+.hdr .t { font-size: 17px; font-weight: 700; }
+.hdr .d { color: var(--muted); }
+.hdr .pill { margin-left: 2px; }
+.hdr .sp { flex: 1; }
+.btn { height: 30px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--ink); font-size: 14px; }
+.btn.pri { background: var(--action); border-color: var(--action); color: var(--action-ink); }
+.btn.stop { color: var(--bad); }
+.wc { color: var(--muted); font-size: 16px; display: flex; gap: 22px; margin-left: 10px; }
+.pill { height: 20px; padding: 0 8px; border-radius: 10px; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; background: var(--line-soft); color: var(--muted); }
+.pill.busy { background: var(--busy-soft); color: var(--busy); }
+.pill i { width: 10px; height: 10px; border-radius: 50%; border: 1.6px solid currentColor; }
+.pill.busy i { border-color: var(--busy-soft); border-top-color: var(--busy); border-right-color: var(--busy); border-width: 2px; }
+
+.view { position: absolute; left: 232px; top: 50px; height: 670px; overflow: hidden; background-color: var(--surface);
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.2px); background-size: 16px 16px; }
+.world { position: absolute; left: 0; top: 0; }
+.world svg.w { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.world svg.w path { fill: none; stroke: var(--faint); stroke-width: 2; }
+.world svg.w path.done { stroke: color-mix(in srgb, var(--ok) 45%, var(--faint)); }
+.world svg.w path.busy { stroke: var(--busy); stroke-dasharray: 6 6; opacity: .75; }
+.world svg.w path.sel { fill: none; stroke: var(--action); stroke-width: 2; }
+.zoom { position: absolute; left: 12px; bottom: 12px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; }
+
+/* ---- cards: 288 × 192, five slots ---- */
+.card { position: absolute; width: 288px; height: 192px; background: var(--raised); border: 1px solid var(--line); color: var(--ink); }
+.card.first { border-radius: 10px 0 0 10px; } .card.last { border-radius: 0 10px 10px 0; } .card.alone { border-radius: 10px; } .card.mid { border-radius: 0; }
+.card.busy { box-shadow: inset 0 0 0 2px var(--busy); }
+.card .nm { position: absolute; left: 16px; top: 16px; height: 16px; display: flex; gap: 6px; align-items: center; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.card .nm svg { color: var(--k); }
+.card .st { position: absolute; right: 15px; top: 17px; width: 14px; height: 14px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+.st.idle { border: 1.6px solid var(--pending); }
+.st.ok { background: var(--ok); } .st.ok svg { width: 9px; height: 9px; stroke-width: 2.8; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+.st.busy { border: 2.2px solid var(--busy-soft); border-top-color: var(--busy); border-right-color: var(--busy); }
+.st.wait { border: 1.6px solid var(--muted); color: var(--muted); } .st.wait svg { width: 8px; height: 8px; stroke-width: 2; fill: none; stroke: currentColor; stroke-linecap: round; }
+.card .set { position: absolute; left: 16px; right: 16px; top: 32px; }
+.card .set div { display: flex; height: 16px; white-space: nowrap; }
+.card .set .l { width: 80px; color: var(--subtle); display: flex; align-items: center; gap: 4px; }
+.card .set .l svg { width: 10px; height: 10px; stroke-width: 2; }
+.card .set .v { color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.card .out { position: absolute; left: 16px; right: 16px; top: 100px; height: 28px; display: flex; align-items: flex-end; gap: 8px; white-space: nowrap; }
+.card .out b { font-size: 20px; line-height: 24px; font-weight: 600; }
+.card .out span { color: var(--subtle); line-height: 20px; }
+.card .det { position: absolute; left: 16px; right: 16px; top: 136px; height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.card.busy .det { color: var(--ink); }
+.card .strip { position: absolute; left: 16px; right: 16px; top: 168px; height: 8px; display: flex; gap: 2px; }
+.strip i { flex: 1; height: 8px; border-radius: 2px; background: var(--wait-cell); }
+.strip i.d { background: var(--done-cell); } .strip i.v { background: var(--ok); } .strip i.b { background: var(--busy); }
+.card .cover { position: absolute; left: 16px; top: 80px; width: 96px; height: 96px; border-radius: 3px; overflow: hidden; box-shadow: 0 0 0 1px var(--line);
+  background: linear-gradient(135deg, #b8322a 0 49.5%, #f1efe9 49.5% 72%, #161b24 72% 100%); }
+.card.art .out, .card.art .det, .card.art .strip { left: 128px; }
+.card .notch { position: absolute; right: -6px; top: 89px; width: 10px; height: 14px; z-index: 2; }
+
+/* ---- controls ---- */
+.f-row { display: flex; align-items: center; height: 28px; }
+.f-row .fl { width: 80px; flex: none; color: var(--subtle); }
+.seg { display: inline-flex; height: 28px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--raised); }
+.seg span { padding: 0 10px; display: grid; place-items: center; color: var(--muted); border-left: 1px solid var(--line); min-width: 0; }
+.seg span:first-child { border-left: none; }
+.seg span.on { background: var(--ink); color: var(--surface); font-weight: 500; }
+.seg.n span { padding: 0; width: 19px; }
+.seg.lk { opacity: .55; }
+.fld { height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); display: flex; align-items: center; padding: 0 8px; gap: 6px; color: var(--ink); white-space: nowrap; overflow: hidden; flex: 1; min-width: 0; }
+.fld.mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.fld .ch { margin-left: auto; color: var(--muted); }
+.ib { width: 28px; height: 28px; flex: none; border: 1px solid var(--line); border-radius: 6px; display: grid; place-items: center; color: var(--muted); background: var(--raised); margin-left: 6px; }
+.ex { color: var(--subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toks { display: flex; gap: 4px; flex-wrap: wrap; }
+.toks span { height: 20px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; background: var(--raised); }
+
+/* A. the leaf: the card's settings, folded out below it */
+.leaf { position: absolute; background: var(--surface); border: 1px solid var(--line); border-top: none; border-radius: 0 0 10px 10px; padding: 16px; box-shadow: 0 10px 22px -12px var(--shadow); z-index: 3; }
+.leaf.wide { border-top: 1px solid var(--line); border-radius: 0 10px 10px 10px; }
+.gap8 { height: 8px; } .gap4 { height: 4px; }
+.ind { padding-left: 80px; }
+
+/* B. the inspector */
+.insp { position: absolute; right: 0; top: 50px; width: 352px; height: 670px; background: var(--raised); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+.insp .ih { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line-soft); }
+.insp .ih b { font-size: 16px; line-height: 24px; font-weight: 600; }
+.insp .ih .x { margin-left: auto; color: var(--muted); font-size: 15px; }
+.insp .ib2 { padding: 16px; }
+.insp .sec { color: var(--subtle); font-weight: 500; margin: 0 0 8px; }
+.insp .stk .fl { color: var(--subtle); margin: 0 0 4px; }
+
+/* the drawer, run detail only */
+.drawer { position: absolute; left: 232px; right: 0; bottom: 0; background: var(--raised); border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; box-shadow: 0 -10px 28px var(--shadow); display: flex; flex-direction: column; z-index: 5; }
+.drawer .grip { height: 12px; display: grid; place-items: center; } .drawer .grip i { width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
+.dh { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line-soft); }
+.dh b { font-size: 16px; font-weight: 600; } .dh .say { margin-left: 4px; } .dh .sp { flex: 1; } .dh .a { color: var(--muted); }
+.tabs { height: 32px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; color: var(--muted); font-weight: 500; }
+.tabs .on { color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--action); height: 32px; display: flex; align-items: center; }
+.rows { padding: 0 16px; overflow: hidden; flex: 1; }
+.row { height: 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+.row .n { width: 18px; text-align: right; color: var(--subtle); font-variant-numeric: tabular-nums; }
+.row .nm2 { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.row .len { color: var(--subtle); font-variant-numeric: tabular-nums; }
+.row .vd { width: 84px; color: var(--muted); font-weight: 500; display: flex; gap: 5px; align-items: center; }
+.row .vd i { width: 8px; height: 8px; border-radius: 2px; background: var(--wait-cell); }
+.row .vd i.v { background: var(--ok); } .row .vd i.b { background: var(--busy); }
+
+svg.i { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.note { color: var(--muted); max-width: 1280px; margin: 8px 0 0; padding-left: 18px; }
+.note li { margin: 2px 0; }
+.note b { color: var(--ink); font-weight: 600; }
+
+body.solo { padding: 0; } body.solo .page > :not(#soloslot) { display: none; } body.solo .win { border-radius: 0; border: none; }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap">
+</head>
+<body>
+<div class="page">
+  <div class="top"><h1>Where a step's settings are edited</h1><button class="theme" onclick="tg()">Dark</button></div>
+  <ul class="intro">
+    <li>Space and form. Every frame is the CD recipe at 100 %, at 1280 × 720. Notes: <code>config-quorum-space.md</code>.</li>
+    <li>Each option is shown with FLAC (one setting), Rip (one setting) and Library (a folder and a name template) selected before a run; A and B also show Rip mid-rip (C is the same as A there).</li>
+    <li><b>A</b> is the recommendation: the settings fold out under the card, and the drawer keeps run detail only.</li>
+  </ul>
+  <div id="soloslot"></div>
+  <div id="opts"></div>
+</div>
+<script>
+const I = {
+  drive: '<rect x="2" y="5" width="12" height="6" rx="1.5"/><path d="M5 8h1"/>',
+  disc: '<circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="1.6"/>',
+  look: '<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/>',
+  text: '<path d="M3 3.5h10M8 3.5V13"/>',
+  choose: '<path d="M2 4h8M2 8h8M2 12h5M10 11.5l1.6 1.6L14.5 10"/>',
+  art: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="m2.5 12 4-4 3 3 1.5-1.5 2.5 2.5"/>',
+  rip: '<path d="M8 2v8M4.5 6.8 8 10.3l3.5-3.5M3 13.5h10"/>',
+  wave: '<path d="M2 7v2M4.5 5v6M7 3v10M9.5 5v6M12 6.5v3M14 7.5v1"/>',
+  lib: '<path d="M3 3v10M6 3v10M9 3.5l3 9.5M2 13h12"/>',
+  hold: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
+  eject: '<path d="M8 3 3 9h10zM3 12.5h10"/>',
+  lock: '<rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>',
+  folder: '<path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/>',
+  check: '<path d="m3.5 8.5 3 3 6-7"/>',
+  clock: '<circle cx="8" cy="8" r="6"/><path d="M8 5v3.2l2 1.3"/>',
+};
+const svg = (k, cls = 'i') => `<svg class="${cls}" viewBox="0 0 16 16">${I[k]}</svg>`;
+const K = { src: 'var(--c-src)', read: 'var(--c-read)', look: 'var(--c-look)', chk: 'var(--c-chk)', make: 'var(--c-make)', put: 'var(--c-put)' };
+
+/* The CD recipe (crates/steps/src/recipes.rs), laid out: chains abut, 64 between strips, 32 between branches. */
+const NAMES = 'Artist / Album / 01 - Title';
+const N = {
+  drive:  { x: 0,    y: 224, n: 'Drive', ic: 'drive', k: 'src', pos: 'first', set: [['Drive', 'Blu-ray drive'], ['Offset', '+103']] },
+  cd:     { x: 288,  y: 224, n: 'Audio CD', ic: 'disc', k: 'read', pos: 'last' },
+  mb:     { x: 640,  y: 112, n: 'MusicBrainz', ic: 'look', k: 'look', pos: 'alone' },
+  cdtext: { x: 640,  y: 336, n: 'CD-Text', ic: 'text', k: 'look', pos: 'alone' },
+  choose: { x: 992,  y: 224, n: 'Choose', ic: 'choose', k: 'chk', pos: 'first' },
+  art:    { x: 1280, y: 224, n: 'Cover art', ic: 'art', k: 'look', pos: 'mid', set: [['Largest', '1200 px']] },
+  rip:    { x: 1568, y: 224, n: 'Rip', ic: 'rip', k: 'read', pos: 'last', set: [['First read', 'fast']] },
+  flac:   { x: 1920, y: 0,   n: 'FLAC', ic: 'wave', k: 'make', pos: 'first', set: [['Level', '8']], br: 0 },
+  review: { x: 2208, y: 0,   n: 'Review', ic: 'lib', k: 'put', pos: 'mid', set: [['Folder', '~/Music/Review'], ['Names', NAMES]], br: 0 },
+  hold:   { x: 2496, y: 0,   n: 'Hold', ic: 'hold', k: 'chk', pos: 'mid', br: 0 },
+  lib1:   { x: 2784, y: 0,   n: 'Library', ic: 'lib', k: 'put', pos: 'last', set: [['Folder', '~/Music/FLAC'], ['Names', NAMES]], br: 0 },
+  mp3:    { x: 1920, y: 224, n: 'MP3', ic: 'wave', k: 'make', pos: 'first', set: [['Quality', 'V0'], ['Stereo', 'joint']], br: 1 },
+  lib2:   { x: 2208, y: 224, n: 'Library', ic: 'lib', k: 'put', pos: 'last', set: [['Folder', '~/Music/MP3'], ['Names', NAMES]], br: 1 },
+  next:   { x: 1920, y: 448, n: 'Next disc', ic: 'eject', k: 'src', pos: 'alone', br: 2 },
+};
+const WIRES = [['cd', 'mb'], ['cd', 'cdtext'], ['mb', 'choose'], ['cdtext', 'choose'], ['rip', 'flac'], ['rip', 'mp3'], ['rip', 'next']];
+const CHAIN = { drive: 'cd', choose: 'art', art: 'rip', flac: 'review', review: 'hold', hold: 'lib1', mp3: 'lib2' };
+
+/* Mid-rip: track 7 of 17 is being read. */
+const cells = (v, d, b, n = 17) => Array.from({ length: n }, (_, i) => i < v ? 'v' : i < v + d ? 'd' : i < v + d + b ? 'b' : '');
+const RUN = {
+  drive: { st: 'busy', out: ['CD in'], det: 'Reading at 8×', strip: ['b'] },
+  cd: { st: 'ok', out: ['17 tracks', '43:45'], strip: ['d'] },
+  mb: { st: 'ok', out: ['2 releases'], strip: ['d'] },
+  cdtext: { st: 'ok', out: ['17 titles'], det: 'THE WHITE STRIPES', strip: ['d'] },
+  choose: { st: 'ok', out: ['The White Stripes', '1999'], det: 'SFTRI 577 · Sympathy for the Record Ind…', strip: ['d'] },
+  art: { st: 'ok', out: ['1200 × 1200'], strip: ['d'] },
+  rip: { st: 'busy', out: ['6/17 verified'], det: 'Track 7 · Cannon · 3 min left', strip: cells(6, 0, 1) },
+  flac: { st: 'busy', out: ['88 MB', '58 %'], det: 'Track 6 · Wasting My Time', strip: cells(0, 5, 1) },
+  review: { st: 'busy', out: ['5 filed'], det: '05 - Sugar Never Tasted So Good.flac', strip: cells(0, 5, 0) },
+  hold: { st: 'wait', strip: cells(0, 0, 0) },
+  lib1: { st: 'wait', strip: [''] },
+  mp3: { st: 'busy', out: ['21 MB'], det: 'Track 6 · Wasting My Time', strip: cells(0, 5, 1) },
+  lib2: { st: 'busy', out: ['5 filed'], det: '05 - Sugar Never Tasted So Good.mp3', strip: cells(0, 5, 0) },
+  next: { st: 'wait', strip: [''] },
+};
+const TRACKS = [['Jimmy the Exploder', '2:30'], ['Stop Breaking Down', '2:20'], ['The Big Three Killed My Baby', '2:29'], ['Suzy Lee', '3:21'],
+  ['Sugar Never Tasted So Good', '2:55'], ['Wasting My Time', '2:13'], ['Cannon', '2:31'], ['Astro', '2:42'], ['Broken Bricks', '1:51'],
+  ['When I Hear My Name', '1:54'], ['Do', '3:05'], ['Screwdriver', '3:14']];
+
+function card(id, p, o) {
+  const c = N[id], run = o.run ? RUN[id] : null, sel = o.sel === id;
+  const st = run ? run.st : 'idle';
+  const glyph = st === 'ok' ? svg('check', '') : st === 'wait' ? svg('clock', '') : '';
+  let h = `<div class="card ${c.pos} ${st === 'busy' ? 'busy' : ''} ${id === 'art' && run ? 'art' : ''}" style="left:${p.x}px;top:${p.y}px;--k:${K[c.k]}">`;
+  h += `<div class="nm">${svg(c.ic)}${c.n}</div><span class="st ${st}">${glyph}</span>`;
+  const face = o.face && sel ? o.face(id) : null;
+  if (face) return h + face + '</div>';
+  if (c.set) {
+    const locked = run && (st === 'busy');
+    h += '<div class="set">' + c.set.map(([l, v]) => `<div><span class="l">${l}${locked ? svg('lock') : ''}</span><span class="v">${v}</span></div>`).join('') + '</div>';
+  }
+  if (run && id === 'art') h += '<div class="cover"></div>';
+  if (run && run.out) h += `<div class="out"><b>${run.out[0]}</b>${run.out[1] ? `<span>${run.out[1]}</span>` : ''}</div>`;
+  if (run && run.det) h += `<div class="det">${run.det}</div>`;
+  const s = run ? run.strip : [''];
+  h += '<div class="strip">' + s.map(x => `<i class="${x}"></i>`).join('') + '</div>';
+  return h + '</div>';
+}
+
+/* Positions, with branches below a selected branch pushed down by `push`. */
+function place(o) {
+  const P = {};
+  const sb = o.sel && N[o.sel].br !== undefined ? N[o.sel].br : null;
+  for (const [id, c] of Object.entries(N)) {
+    let y = c.y;
+    if (o.push && sb !== null && c.br !== undefined && c.br > sb) y += o.push;
+    P[id] = { x: c.x, y };
+  }
+  return P;
+}
+function wire(a, b, cls) {
+  const x1 = a.x + 288, y1 = a.y + 96, x2 = b.x, y2 = b.y + 96;
+  return `<path class="${cls}" d="M${x1} ${y1} C${x1 + 32} ${y1} ${x2 - 32} ${y2} ${x2} ${y2}"/>`;
+}
+function world(o) {
+  const P = place(o);
+  let w = '<svg class="w" width="1" height="1">';
+  for (const [a, b] of WIRES) {
+    const ca = o.run ? RUN[a].st : '', cb = o.run ? RUN[b].st : '';
+    w += wire(P[a], P[b], cb === 'busy' ? 'busy' : ca === 'ok' && cb === 'ok' ? 'done' : (o.run && ca === 'ok') ? 'done' : '');
+  }
+  // the Drive-to-Audio CD and other chain joins have no wire; Audio CD to lookups drawn above.
+  // Rip's single exit wire from the main chain was drawn above. Selection outline (A): around card and leaf as one shape.
+  w += '</svg>';
+  if (o.outline) w += `<svg class="w" width="1" height="1" style="z-index:4"><path class="sel" d="${o.outline(P)}"/></svg>`;
+  let h = w;
+  for (const id of Object.keys(N)) h += card(id, P[id], o);
+  // notches where a chain passes its items on
+  for (const [a] of Object.entries(CHAIN)) {
+    const p = P[a];
+    h += `<svg class="notch" style="position:absolute;left:${p.x + 283}px;top:${p.y + 89}px;width:10px;height:14px;z-index:2" viewBox="0 0 10 14"><path d="M0 0 L7 7 L0 14" fill="var(--raised)" stroke="var(--line)"/></svg>`;
+  }
+  if (o.extra) h += o.extra(P);
+  return h;
+}
+
+function sidebar(run) {
+  const r = (ic, b, s1, s2, on, rs, blue) => `<div class="r ${on ? 'on' : ''}"><span class="ri">${svg(ic)}</span><b>${b}</b><span class="${blue ? 'blue' : ''}">${s1}</span><span class="s">${s2}</span><span class="rs ${rs || ''}"></span></div>`;
+  return `<div class="side"><div class="h">Recipes<span class="plus">+</span></div>
+    ${r('disc', 'CDs', run ? '6 of 17' : 'Ready', 'Blu-ray drive', true, run ? 'busy' : '', run)}
+    ${r('disc', 'Archive everything', 'Ready', 'DVD drive')}
+    ${r('drive', 'Data discs', run ? 'Drive busy' : 'Ready', 'Blu-ray drive')}
+    ${r('drive', 'Games', run ? 'Drive busy' : 'Ready', 'Blu-ray drive')}
+    ${r('drive', 'Films and TV', 'Ready', 'Blu-ray drive')}
+    <div class="dk">Dark</div></div>`;
+}
+function header(run) {
+  return run
+    ? `<div class="hdr"><span class="t">CDs</span><span class="d">The White Stripes, in Blu-ray drive</span><span class="pill busy"><i></i>Running</span><span class="sp"></span><span class="btn">Edit</span><span class="btn stop">Stop</span><span class="wc"><span>–</span><span>▢</span><span>✕</span></span></div>`
+    : `<div class="hdr"><span class="t">CDs</span><span class="d">Blu-ray drive</span><span class="sp"></span><span class="btn">Edit</span><span class="btn pri">▷ Start</span><span class="wc"><span>–</span><span>▢</span><span>✕</span></span></div>`;
+}
+function drawerRun(h) {
+  const rows = TRACKS.map((t, i) => {
+    const v = i < 6 ? ['v', 'Verified'] : i === 6 ? ['b', 'Reading'] : ['', 'Waiting'];
+    return `<div class="row"><span class="n">${i + 1}</span><span class="nm2">${t[0]}</span><span class="len">${t[1]}</span><span class="vd"><i class="${v[0]}"></i>${v[1]}</span></div>`;
+  }).join('');
+  return `<div class="drawer" style="height:${h}px"><div class="grip"><i></i></div>
+    <div class="dh"><span style="color:var(--c-read)">${svg('rip')}</span><b>Rip</b><span class="pill busy"><i></i>Reading</span><span class="say">Track 7 · Cannon, 3 min left.</span><span class="sp"></span><span class="a">${svg('folder')} Working folder</span><span class="a" style="margin-left:12px">✕</span></div>
+    <div class="tabs"><span class="on">Items</span><span>Found</span><span>Log</span></div><div class="rows">${rows}</div></div>`;
+}
+
+function frame(o) {
+  const vw = o.viewW || 1048;
+  let h = `<div class="win" id="${o.id}">${sidebar(o.run)}${header(o.run)}`;
+  h += `<div class="view" style="width:${vw}px"><div class="world" style="transform:translate(${-o.cam[0]}px,${-o.cam[1]}px)">${world(o)}</div>`;
+  h += `<div class="zoom" style="bottom:${(o.drawer || 0) + 12}px">−&nbsp; 100 % &nbsp;+ &nbsp; Fit</div></div>`;
+  if (o.panel) h += o.panel;
+  if (o.drawer) h += drawerRun(o.drawer);
+  return h + '</div>';
+}
+
+/* ---- the controls for each step ---- */
+const segN = (on) => '<span class="seg n">' + [0, 1, 2, 3, 4, 5, 6, 7, 8].map(n => `<span class="${n === on ? 'on' : ''}">${n}</span>`).join('') + '</span>';
+const segFC = (lk) => `<span class="seg ${lk ? 'lk' : ''}"><span class="on">fast</span><span>careful</span></span>`;
+const F = {
+  flac: () => `<div class="f-row"><span class="fl">Level</span>${segN(8)}</div>`,
+  rip: (lk) => `<div class="f-row"><span class="fl">First read</span>${segFC(lk)}</div>`,
+  lib: (w) => `<div class="f-row"><span class="fl">Folder</span><span class="fld">~/Music/FLAC</span><span class="ib">${svg('folder')}</span></div><div class="gap8"></div>
+    <div class="f-row"><span class="fl">Names</span><span class="fld">${NAMES}<span class="ch">⌄</span></span></div><div class="gap8"></div>
+    <div class="ind"><div class="f-row"><span class="fld mono">{albumartist}/{album}/{track} - {title}</span></div><div class="gap4"></div>
+    <div class="ex">The White Stripes/The White Stripes/01 - Jimmy the Exploder.flac</div><div class="gap8"></div>
+    <div class="toks">${['albumartist', 'album', 'artist', 'title', 'track', 'tracktotal', 'year', 'disc', 'label'].map(t => `<span>{${t}}</span>`).join('')}</div></div>`,
+};
+
+/* A. the leaf */
+function leafOpts(id, w, h, inner, cam) {
+  return {
+    sel: id, push: N[id].br !== undefined ? h : 0, cam,
+    extra: P => `<div class="leaf ${w > 288 ? 'wide' : ''}" style="left:${P[id].x}px;top:${P[id].y + 192}px;width:${w}px;height:${h}px">${inner}</div>`,
+    outline: P => {
+      const x = P[id].x + 1, y = P[id].y + 1, cw = 286, bot = P[id].y + 192 + h - 1, r = 10;
+      if (w <= 288) return `M${x} ${y} H${x + cw} V${bot - r} Q${x + cw} ${bot} ${x + cw - r} ${bot} H${x + r} Q${x} ${bot} ${x} ${bot - r} Z`;
+      const xr = P[id].x + w - 1, mid = P[id].y + 192;
+      return `M${x} ${y} H${x + cw} V${mid} H${xr - r} Q${xr} ${mid} ${xr} ${mid + r} V${bot - r} Q${xr} ${bot} ${xr - r} ${bot} H${x + r} Q${x} ${bot} ${x} ${bot - r} Z`;
+    },
+  };
+}
+/* B. the inspector */
+function inspector(id, body, run) {
+  const c = N[id];
+  const pill = run ? '<span class="pill busy"><i></i>Reading</span>' : '<span class="pill"><i></i>Ready</span>';
+  return `<div class="insp"><div class="ih"><span style="color:${K[c.k]}">${svg(c.ic)}</span><b>${c.n}</b>${pill}<span class="x">✕</span></div><div class="ib2">${body}</div>${run || ''}</div>`;
+}
+const inspRun = () => {
+  const rows = TRACKS.slice(0, 12).map((t, i) => {
+    const v = i < 6 ? ['v', 'Verified'] : i === 6 ? ['b', 'Reading'] : ['', 'Waiting'];
+    return `<div class="row"><span class="n">${i + 1}</span><span class="nm2">${t[0]}</span><span class="len">${t[1]}</span><span class="vd" style="width:72px"><i class="${v[0]}"></i>${v[1]}</span></div>`;
+  }).join('');
+  return `<div style="border-top:1px solid var(--line-soft)"><div class="tabs"><span class="on">Items</span><span>Found</span><span>Log</span></div><div class="rows">${rows}</div></div>`;
+};
+const libStack = `<div class="stk"><div class="fl">Folder</div><div class="f-row"><span class="fld">~/Music/FLAC</span><span class="ib">${svg('folder')}</span></div><div style="height:16px"></div>
+  <div class="fl">Names</div><div class="f-row"><span class="fld">${NAMES}<span class="ch">⌄</span></span></div><div style="height:8px"></div>
+  <div class="f-row"><span class="fld mono">{albumartist}/{album}/{track} - {title}</span></div><div style="height:4px"></div>
+  <div class="ex">The White Stripes/The White Stripes/01 - Jimmy…</div><div style="height:8px"></div>
+  <div class="toks">${['albumartist', 'album', 'artist', 'title', 'track', 'tracktotal', 'year', 'disc', 'label'].map(t => `<span>{${t}}</span>`).join('')}</div></div>`;
+
+/* C. the card is the form: its face becomes the fields, and grows only when they need it */
+function faceOpts(id, inner, cam, grow) {
+  return {
+    sel: id, cam, push: grow ? grow[1] - 192 : 0,
+    face: () => `<div style="position:absolute;left:16px;right:16px;top:40px">${inner}</div>`,
+    extra: P => '',
+    outline: P => {
+      const w = grow ? grow[0] : 288, hh = grow ? grow[1] : 192, x = P[id].x + 1, y = P[id].y + 1;
+      return `M${x} ${y} H${x + w - 2} V${y + hh - 2} H${x} Z`;
+    },
+    grow,
+  };
+}
+
+const OPTS = [
+  { key: 'a', title: 'A. The settings fold out under the card', tag: 'recommended',
+    blurb: 'Click a card: a leaf of the card\'s own width folds out beneath it, with the controls on the card\'s grid (labels at 16, controls at 96). Branches below move down to make room; nothing moves sideways. The card above shows each change as you make it. A wide setting (the name template) makes the leaf two cards wide. The drawer holds run detail only, full width.',
+    frames: [
+      ['FLAC selected: one setting, a 64 px leaf', leafOpts('flac', 288, 64, F.flac(), [1736, -48])],
+      ['Rip selected, before a run', leafOpts('rip', 288, 64, F.rip(), [1220, 112])],
+      ['Library selected: a two-card leaf, 576 × 208, at the recipe\'s right edge; the MP3 strip moves down 208', leafOpts('lib1', 576, 208, F.lib(), [2392, -48])],
+      ['Rip mid-rip: its setting is locked, so no leaf; the drawer holds the run, full width, no rail', { sel: 'rip', run: true, cam: [1220, 192], drawer: 335,
+        outline: P => `M${P.rip.x + 1} ${P.rip.y + 1} h286 v190 h-286 Z` }],
+    ] },
+  { key: 'b', title: 'B. An inspector on the right', tag: 'runner-up',
+    blurb: 'The canvas narrows to 696 px for a 352 px panel: settings on top, the run beneath. One skeleton for every step, any number of settings, and the template fits stacked. The cost is 2.4 cards of canvas instead of 3.6, and 400 to 500 px between a value on the card and its control.',
+    frames: [
+      ['FLAC selected', { sel: 'flac', cam: [1856, -48], viewW: 696, outline: P => `M${P.flac.x + 1} ${P.flac.y + 1} h286 v190 h-286 Z`, panel: inspector('flac', F.flac()) }],
+      ['Rip selected, before a run', { sel: 'rip', cam: [1440, 112], viewW: 696, outline: P => `M${P.rip.x + 1} ${P.rip.y + 1} h286 v190 h-286 Z`, panel: inspector('rip', F.rip()) }],
+      ['Library selected', { sel: 'lib1', cam: [2440, -48], viewW: 696, outline: P => `M${P.lib1.x + 1} ${P.lib1.y + 1} h286 v190 h-286 Z`, panel: inspector('lib1', libStack) }],
+      ['Rip mid-rip: the locked setting above, the run below', { sel: 'rip', run: true, cam: [1440, 112], viewW: 696, outline: P => `M${P.rip.x + 1} ${P.rip.y + 1} h286 v190 h-286 Z`, panel: inspector('rip', F.rip(true), inspRun()) }],
+    ] },
+  { key: 'c', title: 'C. The card is the form', tag: '',
+    blurb: 'Before a run a card holds only its name and settings, so its lower two thirds are empty. Click it, and the settings become fields where the values were. One or two short settings fit in the 288 × 192 card; the template needs the card to grow to 576 × 240. Mid-rip it is the same as A.',
+    frames: [
+      ['FLAC selected: the field sits where "8" was', faceOpts('flac', F.flac(), [1736, -48])],
+      ['Rip selected, before a run', faceOpts('rip', F.rip(), [1220, 112])],
+      ['Library selected: the card grows to 576 × 240; the MP3 strip moves down 48', faceOpts('lib1', F.lib(), [2392, -48], [576, 240])],
+    ] },
+];
+
+/* C's grown card: widen the selected card. */
+const _card = card;
+card = function (id, p, o) {
+  let h = _card(id, p, o);
+  if (o.grow && o.sel === id) h = h.replace('style="left', 'style="width:' + o.grow[0] + 'px;height:' + o.grow[1] + 'px;left');
+  return h;
+};
+
+let out = '';
+for (const op of OPTS) {
+  out += `<section class="opt"><h2>${op.title}${op.tag ? `<span class="tag">${op.tag}</span>` : ''}</h2><p>${op.blurb}</p>`;
+  op.frames.forEach(([cap, o], i) => {
+    o.id = `${op.key}${i + 1}`;
+    out += `<div class="cap">${o.id.toUpperCase()} · ${cap}</div><div class="scroll">${frame(o)}</div>`;
+  });
+  out += '</section>';
+}
+document.getElementById('opts').innerHTML = out;
+
+const m = location.hash.match(/solo=(\w+)/);
+if (m) { const f = document.getElementById(m[1]); document.body.classList.add('solo'); document.getElementById('soloslot').appendChild(f); }
+function tg() { const r = document.documentElement; const d = r.dataset.theme === 'dark' || (!r.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches); r.dataset.theme = d ? 'light' : 'dark'; document.querySelector('.theme').textContent = d ? 'Dark' : 'Light'; }
+if (/dark/.test(location.hash)) document.documentElement.dataset.theme = 'dark';
+</script>
+</body>
+</html>

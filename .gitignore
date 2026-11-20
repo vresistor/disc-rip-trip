@@ -1,0 +1,19 @@
+/target/
+/dist/
+.DS_Store
+
+# Screenshots the window tests save of every state they reach.
+/app/shots/
+
+# Made by scripts/build-flatpak.sh: what the manifest packages, and the bundle.
+/packaging/flatpak/payload/
+*.flatpak
+
+# flatpak-builder's own state and caches.
+/.flatpak-builder/
+
+# Local configuration and secrets: never committed.
+.env
+.env.*
+/.claude/settings.local.json
+/settings.json
