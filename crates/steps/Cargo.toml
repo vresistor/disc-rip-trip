@@ -20,7 +20,7 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 # Hashing a dump, with progress and Stop, in one pass for all three.
 crc32fast = "1"
 md-5 = "0.10"
-sha1 = "0.10"
+sha1 = "0.11"
 # Writing the tags ffmpeg can't (an ID3 UFID frame, MP4 freeform atoms), and
 # `drt fix-tags`. Read without its conversions, so nothing else changes.
 lofty = { version = "=0.24.0", default-features = false }
