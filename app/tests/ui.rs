@@ -2667,7 +2667,7 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     h.run_steps(2);
     // Before a run, each says what it's for.
     open_id(&mut h, "g_redump");
-    h.get_by_label_contains("Looks the game up by its serial when Check can't name it");
+    h.get_by_label_contains("Looks the game up by its serial when Check and fix can't name it");
     open_id(&mut h, "g_check");
     h.get_by_label_contains("Compares the copy's checksums with Redump's list");
     app_mut(&mut h).close_tray();
@@ -2680,8 +2680,8 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     let i = app(&h).sel;
     app_mut(&mut h).set_view(i, (0.9, egui::vec2(-560.0, 40.0)));
     h.run_steps(3);
-    h.get_by_label_contains("Redump, Waits for Check, Check needs you");
-    h.get_by_label_contains("Check, Doesn't match Redump, same size, 15 bad sectors");
+    h.get_by_label_contains("Redump, Waits for Check and fix, Check and fix needs you");
+    h.get_by_label_contains("Check and fix, Doesn't match Redump, same size, 140 bad sectors");
     shot(&mut h, "games-check-holds");
     open_id(&mut h, "g_check");
     h.get_by_label_contains("Redump has 2 copies of SLES-04711, and this one matches none of them.");
@@ -2689,16 +2689,16 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     h.get_by_label("Size: Redump 200,000 sectors, this copy 200,000 sectors, the same");
     h.get_by_label_contains("SHA-1: Redump 43c1fe26…, this copy 9b07a5e1…, different");
     h.get_by_label("The drive reported no read errors");
-    h.get_by_label("15 sectors: fail their error correction");
-    h.get_by_label("between 49% and 68% of the way through (ECC)");
+    h.get_by_label("At least 140 sectors read wrong");
+    h.get_by_label_contains("15 failing their error correction, between 49% and 68% of the way through (ECC)");
     h.get_by_label("redumper doesn't know this drive, so it used general settings and a read offset of +0");
-    h.get_by_label_contains("15 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts can't find them. Fix bad sectors reads just those sectors again, one at a time");
+    h.get_by_label_contains("140 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts can't find them. Fix bad sectors reads just those sectors again, one at a time");
     assert!(h.query_all_by_label_contains("Fix bad sectors, ").next().is_some());
     assert!(h.query_all_by_label_contains("Re-read bad parts, ").next().is_none(), "no help when the drive reported nothing");
     assert!(h.query_all_by_label_contains("Rip again and combine, ").next().is_some());
     shot(&mut h, "step-check-mismatch");
     open_id(&mut h, "g_redump");
-    h.get_by_label_contains("Waits for Check, which needs you to decide about the dump.");
+    h.get_by_label_contains("Waits for Check and fix, which needs you to decide about the dump.");
     shot(&mut h, "step-redump-waiting");
     // Kept: Redump looks the serial up, and Choose asks.
     open_id(&mut h, "g_check");
@@ -2721,8 +2721,8 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     click(&mut h, "Start");
     until(&mut h, "Redump", |a| a.m.snapshot(a.sel).steps["g_redump"].state == StepState::Ok);
     open_id(&mut h, "g_redump");
-    h.get_by_label_contains("Check found the game by its checksums, so there was nothing to look up.");
-    h.get_by_label_contains("Redump, Not needed, Check found the game");
+    h.get_by_label_contains("Check and fix found the game by its checksums, so there was nothing to look up.");
+    h.get_by_label_contains("Redump, Not needed, Check and fix found the game");
     shot(&mut h, "step-redump-not-needed");
     open_id(&mut h, "g_check");
     h.get_by_label_contains("Its checksums match Redump's copy of Ape Escape (Europe).");
@@ -2785,7 +2785,7 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     let i = app(&h).sel;
     app_mut(&mut h).set_view(i, (0.9, egui::vec2(-560.0, 40.0)));
     h.run_steps(3);
-    h.get_by_label_contains("Check, Re-reading 140 bad sectors");
+    h.get_by_label_contains("Check and fix, Re-reading 140 bad sectors");
     shot(&mut h, "games-check-fixing");
     open_id(&mut h, "g_check");
     h.get_by_label_contains("Re-reading 140 bad sectors: each is read again from the disc, on its own");
@@ -2794,7 +2794,7 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     h.run_steps(3);
     h.get_by_label_contains("Rip 2 of 4: the whole disc is read again");
     h.get_by_label("Bad sectors read again");
-    h.get_by_label("139 sectors read right and put in place");
+    h.get_by_label("139 sectors read correctly and put in place");
     h.get_by_label("1 sector still bad");
     shot(&mut h, "step-check-ripping-again");
     until(&mut h, "it to verify", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Verified");

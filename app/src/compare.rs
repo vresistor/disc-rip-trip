@@ -76,15 +76,15 @@ pub fn check_say(v: &StepView) -> String {
 /// Redump's header sentence: what it does, or what it did and why.
 pub fn redump_say(v: &StepView) -> String {
     if v.state == StepState::Wait && !v.detail.is_empty() {
-        return format!("{}, which needs you to decide about the dump. If Check can't name the game, Redump looks it up by its serial.", v.status);
+        return format!("{}, which needs you to decide about the dump. If Check and fix can't name the game, Redump looks it up by its serial.", v.status);
     }
     if not_started(v) {
-        return "Looks the game up by its serial when Check can't name it by its checksums, and offers what it finds to Choose.".into();
+        return "Looks the game up by its serial when Check and fix can't name it by its checksums, and offers what it finds to Choose.".into();
     }
     let n = v.status.strip_prefix("Found ").and_then(|s| s.split(' ').next()?.parse::<usize>().ok());
     match (v.status.as_str(), v.detail.as_str(), n) {
-        ("Not needed", drt_steps::real::game::CHECK_FOUND, _) => "Check found the game by its checksums, so there was nothing to look up. Its match goes on to Choose.".into(),
-        ("Not needed", _, _) => "Nothing came from Check, so there was nothing to look up.".into(),
+        ("Not needed", drt_steps::real::game::CHECK_FOUND, _) => "Check and fix found the game by its checksums, so there was nothing to look up. Its match goes on to Choose.".into(),
+        ("Not needed", _, _) => "Nothing came from Check and fix, so there was nothing to look up.".into(),
         (s, d, Some(1)) => format!("{s} {d}. It doesn't have this copy's checksums, so Choose asks you whether it's the one."),
         (s, d, Some(_)) => format!("{s} {d}. None has this copy's checksums, so Choose asks you which it is."),
         ("Not in Redump", d, _) => format!("Redump's list has {d}. Choose asks you to name it."),
@@ -184,7 +184,7 @@ fn fact(ui: &mut Ui, p: &Pal, what: &str, said: &str, ok: Option<bool>) {
     ui.add_space(6.0);
 }
 
-fn read(ui: &mut Ui, p: &Pal, r: &Read, first: bool) {
+fn read(ui: &mut Ui, p: &Pal, r: &Read, first: bool, exact: Option<u64>) {
     heading(ui, p, if first { "What the first rip reported" } else { "What the read reported" });
     if r.drive_reported() {
         fact(ui, p, "The drive reported read errors it couldn't fix", &format!("SCSI {}, C2 {} (in samples, 588 to a sector)", thousands(r.scsi), thousands(r.c2)), Some(false));
@@ -194,11 +194,27 @@ fn read(ui: &mut Ui, p: &Pal, r: &Read, first: bool) {
     if r.sectors.is_empty() {
         fact(ui, p, "Every sector passes its own check", "", Some(true));
     }
-    for s in &r.sectors {
-        let n = if s.count == 1 { "1 sector".to_owned() } else { format!("{} sectors", thousands(s.count)) };
-        let place = r.place(s);
-        let said = if place.is_empty() { s.kind.code().to_owned() } else { format!("{place} ({})", s.kind.code()) };
-        fact(ui, p, &format!("{n}: {}", s.kind.words().to_lowercase()), &said, Some(false));
+    // One total, then the kinds of fault among those same sectors: one
+    // sector can have several, so the kinds don't add up to the total.
+    if !r.sectors.is_empty() {
+        let kinds: Vec<String> = r
+            .sectors
+            .iter()
+            .map(|s| {
+                let place = r.place(s);
+                let place = if place.is_empty() { String::new() } else { format!(", {place}") };
+                format!("{} {}{place} ({})", thousands(s.count), s.kind.among(), s.kind.code())
+            })
+            .collect();
+        let said = if r.sectors.len() == 1 { kinds[0].clone() } else { format!("Of these:\n{}", kinds.join("\n")) };
+        // Fixing counted each sector; else the commonest kind is as few as
+        // there can be.
+        let total = match exact {
+            Some(n) => sectors(n),
+            None if r.sectors.len() == 1 => sectors(r.wrong()),
+            None => format!("At least {}", sectors(r.wrong())),
+        };
+        fact(ui, p, &format!("{total} read wrong"), &said, Some(false));
     }
     if !r.drive.is_empty() || r.generic {
         let drive = if r.drive.is_empty() { "The drive".to_owned() } else { r.drive.clone() };
@@ -229,7 +245,7 @@ fn fixing(ui: &mut Ui, p: &Pal, f: &Fixing) {
         return;
     }
     fact(ui, p, &format!("{} failed their own check", sectors(f.bad)), &format!("each read again up to {} times", f.tries), None);
-    fact(ui, p, &format!("{} read right and put in place", sectors(f.fixed)), "", (f.fixed > 0).then_some(true));
+    fact(ui, p, &format!("{} read correctly and put in place", sectors(f.fixed)), "", (f.fixed > 0).then_some(true));
     if f.left > 0 {
         let at = f.left_at.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(", ");
         let more = if f.left as usize > f.left_at.len() { ", …" } else { "" };
@@ -277,7 +293,7 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
             rips(ui, p, m, c);
         }
         if let Some(r) = &m.read {
-            read(ui, p, r, m.combined.is_some() || m.fixed.is_some());
+            read(ui, p, r, m.combined.is_some() || m.fixed.is_some(), m.fixed.as_ref().filter(|f| !f.other_disc && f.bad > 0).map(|f| f.bad));
         }
         meaning(ui, p, m);
         return;
@@ -314,7 +330,7 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
         rips(ui, p, m, c);
     }
     if let Some(r) = &m.read {
-        read(ui, p, r, m.combined.is_some() || m.fixed.is_some());
+        read(ui, p, r, m.combined.is_some() || m.fixed.is_some(), m.fixed.as_ref().filter(|f| !f.other_disc && f.bad > 0).map(|f| f.bad));
     }
     meaning(ui, p, m);
 }

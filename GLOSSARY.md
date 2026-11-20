@@ -141,6 +141,12 @@ disc, to say whether the read is right. Answers "did we read it
 correctly?", where a lookup answers "what is it?".
 _Avoid_: Verify (as a noun), validation
 
+**Check and fix**:
+The step after a game's or data disc's Rip. It checks the image (each
+sector's own checks, then Redump's list) and, for a CD image, puts it
+right by reading bad sectors again or ripping again and combining. Its
+id is `check`. See `docs/adr/0002-check-verifies-and-fixes.md`.
+
 **Verdict**:
 The outcome of a check for one item: *Verified* (it matches N other rips
 in AccurateRip), *Reads agree* (two reads are the same, with no

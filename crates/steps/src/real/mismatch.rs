@@ -75,6 +75,18 @@ impl Kind {
         }
     }
 
+    /// It, among sectors already counted as read wrong: *with the wrong
+    /// address*.
+    pub fn among(self) -> &'static str {
+        match self {
+            Kind::FilledIn => "couldn't be read and were filled in",
+            Kind::NotData => "not data at all",
+            Kind::Address => "with the wrong address",
+            Kind::Ecc => "failing their error correction",
+            Kind::Edc => "failing their checksum",
+        }
+    }
+
     /// redumper's name for it, for the curious.
     pub fn code(self) -> &'static str {
         match self {
@@ -478,7 +490,7 @@ impl Mismatch {
                 n => format!("combined from {} rips, {} still bad", c.rips.len(), sectors(n)),
             };
         }
-        let bad = self.read.as_ref().map_or(0, Read::bad);
+        let bad = self.read.as_ref().map_or(0, |r| r.bad().max(r.wrong()));
         if !self.in_redump() {
             return format!("not in Redump, {} bad", sectors(bad.max(self.read.as_ref().map_or(0, Read::wrong))));
         }
@@ -539,7 +551,7 @@ pub fn sectors(n: u64) -> String {
 pub fn reading(m: &Mismatch) -> Vec<String> {
     let mut out = vec![];
     let read = m.read.as_ref();
-    let bad = read.map_or(0, Read::bad);
+    let bad = read.map_or(0, |r| r.bad().max(r.wrong()));
     let reported = read.is_some_and(Read::drive_reported);
     let tracks = |n: usize| format!("{n} track{}", if n == 1 { "" } else { "s" });
     // What fixing and ripping again do, for a misread the drive kept quiet about.
@@ -780,8 +792,8 @@ CD-ROM [GAME_1.bin]:
         let p = &m.files[0];
         assert!(p.size_ok() && !p.sha1_ok());
         assert_eq!(p.expected.as_ref().unwrap().sectors(), Some(200_000));
-        assert_eq!(m.short(), "same size, 5 bad sectors");
-        assert!(m.reading[0].starts_with("The size is right, so it's likely the same version of the disc, but 5 sectors read wrong."), "{:?}", m.reading);
+        assert_eq!(m.short(), "same size, 40 bad sectors");
+        assert!(m.reading[0].starts_with("The size is right, so it's likely the same version of the disc, but 40 sectors read wrong."), "{:?}", m.reading);
         assert!(m.reading[0].contains("Re-read bad parts can't find them. Clean the disc"), "{:?}", m.reading);
         let opts = |m: &Mismatch| m.options().into_iter().map(|o| o.0).collect::<Vec<_>>();
         assert_eq!(opts(&m), ["keep", "leave_out"], "nothing the drive reported: re-reading can't help, and this can't be combined");

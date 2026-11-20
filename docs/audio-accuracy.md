@@ -353,9 +353,13 @@ stay as they are.
 
 ## Game and data discs
 
-The same rule for an image of a game or data disc: Check
-(`data.rs`), its hold (`game.rs`), fixing bad sectors (`fix.rs`), and
-combining rips (`combine.rs`).
+The same rule for an image of a game or data disc: the *Check and fix*
+step (its id is `check`). Its
+code is in `data.rs`, with its hold in `game.rs`, fixing bad sectors in
+`fix.rs`, and combining rips in `combine.rs`. Rip reads the disc once;
+Check and fix verifies the image and puts it right, using the drive
+through the same drive lane, so the two never read at once. See
+`docs/adr/0002-check-verifies-and-fixes.md` for why.
 
 - **Verified only on a Redump match.** A dump is called verified only
   when its files match an entry in Redump's list. Nothing else counts:
@@ -432,6 +436,11 @@ combining rips (`combine.rs`).
   The hashing is tested against coreutils' `sha1sum`, `md5sum` and
   `cksum -a crc32b`. The CHD made after it is decompressed in full and
   each track checked against those SHA-1s.
+- **What the sidebar counts.** One sector can fail several checks (a
+  wrong address, its error correction, its checksum), so Check and fix
+  gives the number of sectors read wrong first, then the kinds of fault
+  among them, which don't add up to it. Without a fix to count them, the
+  commonest kind is the least there can be, and is shown as *at least*.
 - **No match.** A combination that doesn't match stays held, saying how
   many sectors are still bad. It can be ripped and combined again, kept
   as the best combination (not verified), or skipped.

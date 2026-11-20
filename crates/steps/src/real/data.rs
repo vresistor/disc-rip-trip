@@ -57,7 +57,7 @@ pub fn image_info() -> StepInfo {
 }
 
 pub fn check_info() -> StepInfo {
-    StepInfo::new("check", "Check", Group::Check, ItemKind::Dump, ItemKind::Dump)
+    StepInfo::new("check", "Check and fix", Group::Check, ItemKind::Dump, ItemKind::Dump)
         .gives(&["hashes", "name"])
         .from("compare with Redump's known-good copies")
         .param(ParamSpec::new("systems", "Compare with Redump's list for", ParamKind::Choice(redump::CHOICES)).default(redump::ALL).on_card("Look in").labels(redump::LABELS))

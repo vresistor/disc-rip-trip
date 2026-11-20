@@ -121,8 +121,8 @@ async fn a_game_goes_all_the_way_and_redump_names_it() {
     assert!(s.steps["g_disc"].detail.starts_with("Europe"), "{}", s.steps["g_disc"].detail);
     assert_eq!(s.steps["g_check"].items[0].note, "Verified: Ape Escape (Europe)");
     // Check named it: nothing for Redump to look up; Check's match goes on to Choose.
-    assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_redump"].detail.as_str()), ("Not needed", "Check found the game"));
-    assert_eq!(s.steps["g_redump"].items[0].note, "Check found the game");
+    assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_redump"].detail.as_str()), ("Not needed", "Check and fix found the game"));
+    assert_eq!(s.steps["g_redump"].items[0].note, "Check and fix found the game");
     assert_eq!((s.steps["g_choose"].status.as_str(), s.steps["g_choose"].detail.as_str()), ("Ape Escape (Europe)", "verified"));
     assert_eq!(s.steps["g_lib"].items[0].note, "~/Games/PlayStation/Ape Escape (Europe)");
     assert_eq!(s.steps["g_m3u"].status, "One disc");
@@ -235,18 +235,18 @@ async fn a_bad_read_is_held_with_why_and_redump_waits_then_looks_up_the_serial()
     let run = e.start(&asking()).unwrap();
     let s = until(&run, held).await;
     let check = &s.steps["g_check"];
-    assert_eq!((check.status.as_str(), check.detail.as_str()), ("Doesn't match Redump", "same size, 15 bad sectors"));
+    assert_eq!((check.status.as_str(), check.detail.as_str()), ("Doesn't match Redump", "same size, 140 bad sectors"));
     let m: Mismatch = serde_json::from_value(check.record.report.clone().expect("a report")).unwrap();
     assert_eq!(m.entry, "Lantern Keep (Europe) (Disc 1)");
     assert_eq!(m.copies(), 2);
     assert!(m.files[0].size_ok() && !m.files[0].sha1_ok());
     let read = m.read.as_ref().unwrap();
     assert!(read.generic && !read.drive_reported());
-    assert!(m.reading[0].contains("15 sectors read wrong"), "{:?}", m.reading);
+    assert!(m.reading[0].contains("140 sectors read wrong"), "{:?}", m.reading);
     // Straight after it, Redump says what it waits for; Choose further on only waits.
     let r = &s.steps["g_redump"];
-    assert_eq!((r.state, r.status.as_str(), r.detail.as_str()), (StepState::Wait, "Waits for Check", "Check needs you"));
-    assert_eq!((s.steps["g_choose"].status.as_str(), s.steps["g_choose"].detail.as_str()), ("Waits for Check", ""));
+    assert_eq!((r.state, r.status.as_str(), r.detail.as_str()), (StepState::Wait, "Waits for Check and fix", "Check and fix needs you"));
+    assert_eq!((s.steps["g_choose"].status.as_str(), s.steps["g_choose"].detail.as_str()), ("Waits for Check and fix", ""));
     let item = check.items[0].id.clone();
     run.send(Command::Retry { step: "g_check".into(), item, option: "keep".into() }).await;
     let (s, asked) = drive(run, Answer::Skip).await;
@@ -263,7 +263,7 @@ async fn a_disc_skipped_at_check_leaves_redump_nothing_to_do() {
     let s = until(&run, held).await;
     run.send(Command::Retry { step: "g_check".into(), item: s.steps["g_check"].items[0].id.clone(), option: "leave_out".into() }).await;
     let (s, _) = drive(run, Answer::Skip).await;
-    assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_redump"].detail.as_str()), ("Not needed", "nothing came from Check"));
+    assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_redump"].detail.as_str()), ("Not needed", "nothing came from Check and fix"));
 }
 
 /// A misread the drive kept quiet about: Check offers ripping again and
@@ -527,7 +527,7 @@ async fn the_real_check_explains_a_dump_redump_disagrees_with() {
     let run = e.start(&recipe).unwrap();
     let s = until(&run, held).await;
     let c = &s.steps["g_check"];
-    assert_eq!((c.status.as_str(), c.detail.as_str()), ("Doesn't match Redump", "same size, 15 bad sectors"));
+    assert_eq!((c.status.as_str(), c.detail.as_str()), ("Doesn't match Redump", "same size, 140 bad sectors"));
     let m: Mismatch = serde_json::from_value(c.record.report.clone().unwrap()).unwrap();
     assert_eq!((m.serial.as_str(), m.entry.as_str(), m.copies()), ("SLES-04711", "Lantern Keep (Europe) (Disc 1)", 1));
     let p = &m.files[0];
@@ -535,7 +535,7 @@ async fn the_real_check_explains_a_dump_redump_disagrees_with() {
     assert!(p.size_ok() && !p.sha1_ok());
     assert_eq!(m.read.as_ref().unwrap().drive, "ACME DVD-RW XY123");
     assert!(c.record.log.iter().any(|l| l.line.starts_with("compared with Lantern Keep (Europe) (Disc 1): same size")), "the log says it too");
-    assert_eq!(s.steps["g_redump"].status, "Waits for Check");
+    assert_eq!(s.steps["g_redump"].status, "Waits for Check and fix");
     run.send(Command::Retry { step: "g_check".into(), item: c.items[0].id.clone(), option: "keep".into() }).await;
     let (s, _) = drive(run, Answer::Skip).await;
     assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_redump"].detail.as_str()), ("Found 1 game", "with serial SLES-04711"));

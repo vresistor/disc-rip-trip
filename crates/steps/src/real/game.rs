@@ -1014,7 +1014,7 @@ pub fn lookup(cat: &redump::Catalogue, system: &str, serial: Option<&str>, secto
 
 /// Redump's card when Check already named the game.
 pub const NOT_NEEDED: &str = "Not needed";
-pub const CHECK_FOUND: &str = "Check found the game";
+pub const CHECK_FOUND: &str = "Check and fix found the game";
 
 /// A lookup as Redump says it: when Check already named the game (its
 /// `name` is on the dump) and the checksums found that same entry, there
@@ -1022,7 +1022,7 @@ pub const CHECK_FOUND: &str = "Check found the game";
 pub fn after_check(c: &Context, mut l: Lookup) -> Lookup {
     let named = c.get(Subject::Disc, "name");
     if let Some(cand) = l.candidates.first_mut().filter(|x| x.score >= BY_HASH && named == Some(x.title.as_str())) {
-        cand.detail = "found by Check".into();
+        cand.detail = "found by Check and fix".into();
         (l.status, l.detail) = (NOT_NEEDED.into(), CHECK_FOUND.into());
     }
     l
@@ -1077,7 +1077,7 @@ pub struct Redump;
 
 /// Check sent nothing on (you skipped the disc there): nothing to look up.
 pub fn nothing_came(cx: &Cx) {
-    cx.status(NOT_NEEDED, "nothing came from Check");
+    cx.status(NOT_NEEDED, "nothing came from Check and fix");
 }
 
 #[async_trait]
@@ -1586,7 +1586,7 @@ mod tests {
         let mut c = Context::default();
         c.add(Subject::Disc, "name", "Colony Wars (Europe) (Disc 1)", "Redump");
         let l = after_check(&c, l);
-        assert_eq!((l.status.as_str(), l.detail.as_str(), l.candidates[0].detail.as_str()), (NOT_NEEDED, CHECK_FOUND, "found by Check"));
+        assert_eq!((l.status.as_str(), l.detail.as_str(), l.candidates[0].detail.as_str()), (NOT_NEEDED, CHECK_FOUND, "found by Check and fix"));
         assert!(sure(&l.candidates), "its entry still settles Choose");
     }
 

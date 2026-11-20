@@ -456,7 +456,7 @@ fn the_data_disc_recipe_type_checks_and_its_steps_follow_from_one_another() {
     let after_kind = names("d_disc");
     assert!(kinds("d_disc").contains(&"image") && !after_kind.contains(&"MusicBrainz") && !kinds("d_disc").contains(&"rip"), "{after_kind:?}");
     let after_image = names("d_image");
-    assert!(after_image.contains(&"Check") && after_image.contains(&"CHD") && after_image.contains(&"Plain image"), "{after_image:?}");
+    assert!(after_image.contains(&"Check and fix") && after_image.contains(&"CHD") && after_image.contains(&"Plain image"), "{after_image:?}");
     assert!(!after_image.contains(&"FLAC") && !after_image.contains(&"Library"), "{after_image:?}");
     assert!(names("d_chd").contains(&"Folder"));
     // Next disc once the disc is imaged, not before.
