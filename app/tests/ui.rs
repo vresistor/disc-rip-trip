@@ -227,6 +227,71 @@ fn a_question_opens_the_sidebar_and_is_answered_there() {
     assert!(app(&h).tray.is_none(), "the sidebar went with the question");
 }
 
+/// Puts two of the disc's tracks in a folder of their own for the CDs
+/// recipe's Review, so it finds their names taken. Gives the album's folder.
+fn review_has_two(h: &mut Harness<Window>, e: &Env) -> PathBuf {
+    let lib = e.dir.path().join("review");
+    let album = lib.join("The White Stripes/The White Stripes");
+    std::fs::create_dir_all(&album).unwrap();
+    for name in ["01 - Jimmy the Exploder.flac", "02 - Stop Breaking Down.flac"] {
+        std::fs::write(album.join(name), "already here").unwrap();
+    }
+    app_mut(h).m.set_param(0, "review", "folder", Value::from(lib.display().to_string())).unwrap();
+    album
+}
+
+#[test]
+fn files_already_there_are_asked_about_with_a_button_for_each_answer() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    let album = review_has_two(&mut h, &e);
+    click(&mut h, "Start");
+    to_the_hold(&mut h);
+    until(&mut h, "Review's question", |a| matches!(&a.tray, Some(Tray::Question { step }) if step == "review"));
+    h.get_by_label_contains("2 files already in The White Stripes / The White Stripes");
+    // Each answer is a button that says what it does, with what that means.
+    for (button, means) in [("Replace them", "The files there now are overwritten"), ("Keep both", "The new files get \" (2)\" after their names"), ("Skip", "The new files aren't filed")] {
+        h.get_by_label(button);
+        h.get_by_label(means);
+    }
+    assert!(h.query_by_label("Use this one").is_none(), "no button that only takes the default");
+    let side = app(&h).side_rect().unwrap();
+    assert!(side.width() < 700.0, "not the wide sidebar Choose compares lists in: {side:?}");
+    shot(&mut h, "folder-names-taken");
+    // Replace, not the default: the two are filed under their own names.
+    click(&mut h, "Replace them");
+    until(&mut h, "Review to file them all", |a| a.m.snapshot(0).steps["hold"].detail == "All here");
+    let review = &snap(&h).steps["review"];
+    let files: Vec<&str> = review.record.files.iter().map(|f| f.path.as_str()).collect();
+    assert!(files.contains(&album.join("01 - Jimmy the Exploder.flac").display().to_string().as_str()), "{files:?}");
+    assert!(files.iter().all(|f| !f.contains(" (2)")), "{files:?}");
+    assert_eq!(review.count(ItemState::Ok), 17);
+}
+
+#[test]
+fn keep_both_and_skip_from_the_buttons() {
+    for (button, ok, named) in [("Keep both", 17, Some("01 - Jimmy the Exploder (2).flac")), ("Skip", 15, None)] {
+        let e = env();
+        let mut h = window(&e, None, true, 0.0);
+        let album = review_has_two(&mut h, &e);
+        click(&mut h, "Start");
+        to_the_hold(&mut h);
+        until(&mut h, "Review's question", |a| matches!(&a.tray, Some(Tray::Question { step }) if step == "review"));
+        click(&mut h, button);
+        until(&mut h, "Review to finish", |a| a.m.snapshot(0).steps["review"].state == StepState::Ok);
+        let review = &snap(&h).steps["review"];
+        assert_eq!(review.count(ItemState::Ok), ok, "{button}");
+        let files: Vec<&str> = review.record.files.iter().map(|f| f.path.as_str()).collect();
+        match named {
+            Some(n) => assert!(files.contains(&album.join(n).display().to_string().as_str()), "{files:?}"),
+            None => {
+                assert_eq!(review.count(ItemState::Skipped), 2);
+                assert!(!files.iter().any(|f| f.contains("Jimmy the Exploder")), "{files:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_hold_is_let_through_from_its_sidebar() {
     let e = env();
@@ -3540,6 +3605,9 @@ fn the_disc_before_stays_on_the_canvas_until_the_next_goes_in() {
     let s = app(&h).m.snapshot(0);
     assert_eq!(s.steps["rip"].items.len(), 17, "the disc before, as it ended");
     assert_eq!(s.steps["drive"].status, "Empty");
+    // Followed as it finishes, not frozen as it was when the tray opened.
+    until(&mut h, "the first to hold", |a| a.m.runs[&0][0].snap.steps["hold"].detail == "All here");
+    assert_eq!(app(&h).m.snapshot(0).steps["hold"].detail, "All here");
     disc.store(true, std::sync::atomic::Ordering::SeqCst);
     // In: the canvas is the new disc's from here.
     until(&mut h, "the new disc", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].state == StepState::Ok));

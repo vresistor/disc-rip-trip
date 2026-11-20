@@ -90,7 +90,9 @@ pub struct Model {
     auto_left: HashMap<usize, Option<usize>>,
     /// The disc before, as it ended: shown until the next disc goes in, so
     /// the graph doesn't empty the moment the tray opens.
-    before_disc: HashMap<usize, Snapshot>,
+    /// Which run that was, and how it last looked: followed while it
+    /// finishes encoding and filing.
+    before_disc: HashMap<usize, (u64, Snapshot)>,
     /// Recipes whose findable settings (a drive's offset) are being looked
     /// up, and whether by measuring.
     pub finding: HashMap<usize, bool>,
@@ -375,6 +377,9 @@ impl Model {
                 if r.rx.has_changed().unwrap_or(false) {
                     r.snap = r.rx.borrow_and_update().clone();
                     changed = true;
+                    if let Some((_, snap)) = self.before_disc.get_mut(&i).filter(|(id, _)| *id == r.id) {
+                        *snap = r.snap.clone();
+                    }
                 }
                 // Ended: kept, replacing the recipe's last.
                 if r.snap.finished && !r.kept {
@@ -609,7 +614,7 @@ impl Model {
         if let Some(r) = self.shown_run(i) {
             // Waiting for the next disc: the one before as it ended, with
             // the Drive as it is now.
-            if let Some(before) = self.before_disc.get(&i).filter(|_| self.shows_newest(i) && waiting_for_disc(&r.snap)) {
+            if let Some((_, before)) = self.before_disc.get(&i).filter(|_| self.shows_newest(i) && waiting_for_disc(&r.snap)) {
                 let mut snap = before.clone();
                 for (id, v) in r.snap.steps.iter().filter(|(_, v)| v.step == "drive") {
                     snap.steps.insert(id.clone(), v.clone());
@@ -753,8 +758,8 @@ impl Model {
     fn start_run(&mut self, i: usize) -> Result<()> {
         match self.newest(i).filter(|r| r.snap.finished || self.loops_back_done(Some(&r.snap))) {
             Some(r) => {
-                let snap = r.snap.clone();
-                self.before_disc.insert(i, snap);
+                let before = (r.id, r.snap.clone());
+                self.before_disc.insert(i, before);
             }
             None => {
                 self.before_disc.remove(&i);
