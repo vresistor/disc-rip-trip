@@ -393,20 +393,30 @@ impl Model {
             let name = self.recipes.get(i).map(|r| r.name.clone()).unwrap_or_default();
             self.last.insert(name, k);
         }
-        // The next disc: when the newest run's Next disc is done.
+        // The next disc: when the newest run's Next disc is done, and no
+        // disc of the recipe waits for you. One that starts waiting for you
+        // before the next disc has gone in puts the next disc back.
         let ids: Vec<usize> = self.runs.keys().copied().collect();
         for i in ids {
+            let waits = self.waits_for_you(i).is_some();
+            if waits && self.next_not_in(i) {
+                self.put_back(i);
+                changed = true;
+            }
             let loops = self.loops_back_done(self.newest(i).map(|r| &r.snap));
+            let left = self.auto_left.get(&i).copied().unwrap_or(self.repeat_limit);
+            let no_more = self.no_repeat.contains(&i) || left == Some(0);
             let Some(newest) = self.runs.get_mut(&i).and_then(|v| v.last_mut()) else { continue };
             if newest.repeated || !loops {
                 continue;
             }
-            newest.repeated = true;
-            if newest.snap.stopped || self.no_repeat.contains(&i) {
+            let no_more = no_more || newest.snap.stopped;
+            // Looked at again each time, until nothing waits for you.
+            if waits && !no_more {
                 continue;
             }
-            let left = self.auto_left.get(&i).copied().unwrap_or(self.repeat_limit);
-            if left == Some(0) || self.drive_busy(i) {
+            newest.repeated = true;
+            if no_more || self.drive_busy(i) {
                 continue;
             }
             self.auto_left.insert(i, left.map(|n| n - 1));
@@ -475,6 +485,79 @@ impl Model {
     pub fn earlier(&self, i: usize) -> Vec<&Running> {
         let Some(v) = self.runs.get(&i) else { return vec![] };
         v[..v.len().saturating_sub(1)].iter().filter(|r| !r.snap.finished).collect()
+    }
+
+    /// What a disc of the recipe waits on you for, as what to do first: a
+    /// question, files held for you to let through, a step that needs you
+    /// (a track to decide). Only discs still going count.
+    pub fn waits_for_you(&self, i: usize) -> Option<String> {
+        let v = self.runs.get(&i)?;
+        // The disc out of the drive last: the newest, or the one before a
+        // next disc that hasn't gone in.
+        let last = if self.next_not_in(i) { v.len().checked_sub(2) } else { v.len().checked_sub(1) };
+        v.iter().enumerate().rev().filter(|(_, r)| !r.snap.finished && !r.snap.stopped).find_map(|(k, r)| {
+            let disc = if Some(k) == last { "the last disc" } else { "an earlier disc" };
+            if r.snap.question.is_some() {
+                return Some(format!("Answer the question on {disc} first"));
+            }
+            let steps = r.snap.order.iter().filter_map(|id| r.snap.steps.get(id));
+            for v in steps {
+                if v.state == StepState::Hold && v.detail == crate::card::WAITS_FOR_YOU && v.count(ItemState::Waiting) > 0 {
+                    return Some(format!("Let the files on {disc} through first"));
+                }
+                let retries = self.engine.registry.info(&v.step).is_some_and(|inf| inf.retries.iter().any(|r| !matches!(r.id, "keep" | "leave_out")));
+                if crate::card::Shown::of(v, retries) == crate::card::Shown::Needs {
+                    return Some(format!("{} on {disc} needs you first", v.name));
+                }
+            }
+            None
+        })
+    }
+
+    /// Why the recipe is held back, if it is: the next disc won't start, or
+    /// Start can't, until you've done what a disc waits for.
+    pub fn held_back(&self, i: usize) -> Option<String> {
+        if self.next_waits(i) || !self.running(i) {
+            return self.waits_for_you(i);
+        }
+        None
+    }
+
+    /// Whether the newest run is through its Next disc and the next disc
+    /// will start once nothing waits for you.
+    pub fn next_waits(&self, i: usize) -> bool {
+        let Some(r) = self.newest(i) else { return false };
+        let left = self.auto_left.get(&i).copied().unwrap_or(self.repeat_limit);
+        !r.repeated && !r.snap.stopped && !r.snap.finished && self.loops_back_done(Some(&r.snap)) && !self.no_repeat.contains(&i) && left != Some(0)
+    }
+
+    /// Whether the newest run is a next disc that hasn't gone in: started by
+    /// the one before's Next disc, its Drive still waiting, nothing else begun.
+    fn next_not_in(&self, i: usize) -> bool {
+        let Some(v) = self.runs.get(&i) else { return false };
+        let (Some(r), Some(before)) = (v.last(), v.len().checked_sub(2).map(|k| &v[k])) else { return false };
+        before.repeated
+            && waiting_for_disc(&r.snap)
+            && r.snap.question.is_none()
+            && r.snap.steps.values().all(|s| s.step == "drive" || matches!(s.state, StepState::Idle | StepState::Wait) || (s.state == StepState::Hold && s.items.is_empty()))
+    }
+
+    /// Puts a next disc that hasn't gone in back: stopped and gone, and
+    /// the disc before it starts it again once nothing waits for you.
+    fn put_back(&mut self, i: usize) {
+        let Some(v) = self.runs.get_mut(&i) else { return };
+        let Some(r) = v.pop() else { return };
+        let _ = r.run.commands().try_send(Command::Stop);
+        if let Some(before) = v.last_mut() {
+            before.repeated = false;
+        }
+        if let Some(Some(n)) = self.auto_left.get_mut(&i) {
+            *n += 1;
+        }
+        self.before_disc.remove(&i);
+        if self.shown.get(&i) == Some(&r.id) {
+            self.shown.remove(&i);
+        }
     }
 
     /// Whether a run's step that leads back to the start (Next disc) is done.
@@ -674,6 +757,9 @@ impl Model {
         if self.drafts.contains_key(&i) {
             return Some("Save or cancel your edits first".into());
         }
+        if let Some(why) = self.waits_for_you(i) {
+            return Some(why);
+        }
         if self.unplugged(i) {
             return Some("Not connected".into());
         }
@@ -749,7 +835,13 @@ impl Model {
 
     /// Stop, by hand: the newest disc, and no more after it.
     pub fn stop(&mut self, i: usize) {
+        // The next disc held back: only it is called off; the disc out of
+        // the drive goes on finishing.
+        let waiting = self.next_waits(i);
         self.no_repeat.insert(i);
+        if waiting {
+            return;
+        }
         if let Some(r) = self.newest(i) {
             let _ = r.run.commands().try_send(Command::Stop);
         }
@@ -790,7 +882,15 @@ impl Model {
 
     /// Says something to the run the recipe shows.
     pub fn send(&self, i: usize, c: Command) {
-        if let Some(r) = self.shown_run(i) {
+        // Waiting for the next disc, the canvas is the disc before's: what
+        // you answer there is its.
+        let before = self.before_disc.get(&i).filter(|_| self.shows_newest(i) && self.shown_run(i).is_some_and(|r| waiting_for_disc(&r.snap)));
+        let to_before = matches!(c, Command::Answer { .. } | Command::Approve { .. } | Command::Retry { .. });
+        let run = match before {
+            Some((id, _)) if to_before => self.runs.get(&i).and_then(|v| v.iter().find(|r| r.id == *id)),
+            _ => self.shown_run(i),
+        };
+        if let Some(r) = run {
             let _ = r.run.commands().try_send(c);
         }
     }
@@ -800,6 +900,9 @@ impl Model {
         // Calm, not a fault: nothing to do here till it's plugged in.
         if self.unplugged(i) {
             return ("Not connected".into(), StepState::Idle);
+        }
+        if let Some(why) = self.held_back(i) {
+            return (why, StepState::Needs);
         }
         if let Some(r) = self.newest(i) {
             return run_line(&r.snap, false);

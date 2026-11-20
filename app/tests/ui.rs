@@ -552,6 +552,38 @@ fn next_disc_leads_back_to_the_drive_on_the_canvas() {
     shot(&mut h, "loop");
 }
 
+/// The sim Hold, but it takes nothing in until `open` is set: so a test
+/// can have the next disc start before the first disc's Hold waits for you.
+struct LatchedHold {
+    inner: std::sync::Arc<dyn drt_engine::Step>,
+    open: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl drt_engine::Step for LatchedHold {
+    fn info(&self) -> drt_engine::StepInfo {
+        self.inner.info()
+    }
+    async fn run(&self, inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+        while !self.open.load(std::sync::atomic::Ordering::SeqCst) {
+            cx.sleep(5).await?;
+        }
+        self.inner.run(inlet, outlet, cx).await
+    }
+}
+
+/// The sim steps with the Hold latched shut, and the latch.
+fn latched_hold(mut reg: drt_engine::Registry) -> (drt_engine::Registry, Arc<std::sync::atomic::AtomicBool>) {
+    let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let inner = simulated(None).get("hold").unwrap().0;
+    reg.add(LatchedHold { inner, open: open.clone() });
+    (reg, open)
+}
+
+fn open_latch(open: &std::sync::atomic::AtomicBool) {
+    open.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Runs to the hold of the newest CDs disc and answers its question.
 fn to_the_hold(h: &mut Harness<Window>) {
     until(h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
@@ -561,11 +593,15 @@ fn to_the_hold(h: &mut Harness<Window>) {
 #[test]
 fn next_disc_starts_the_next_and_the_earlier_waits_in_the_list() {
     let e = env();
-    let mut h = window(&e, None, true, 0.0);
+    // The first disc's Hold fills only once the second has started: one
+    // full before would hold the second back.
+    let (reg, open) = latched_hold(simulated(None));
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     app_mut(&mut h).m.repeat_limit = Some(1);
     click(&mut h, "Start");
     to_the_hold(&mut h);
     until(&mut h, "the second disc", |a| a.m.runs.get(&0).is_some_and(|v| v.len() == 2));
+    open_latch(&open);
     // The canvas follows the new disc; the first holds at its Library.
     let first = app(&h).m.runs[&0][0].id;
     until(&mut h, "the first to hold", |a| a.m.runs[&0][0].snap.steps["hold"].detail == "All here");
@@ -583,6 +619,73 @@ fn next_disc_starts_the_next_and_the_earlier_waits_in_the_list() {
     until(&mut h, "the first disc to finish", |a| a.m.earlier(0).is_empty());
     assert!(h.query_by_label_contains("The White Stripes, Holding").is_none());
     assert_ne!(app(&h).m.shown_run(0).unwrap().id, first, "back to the newest");
+}
+
+/// The sim CDs recipe whose Review finds two names taken, and whose next
+/// disc waits for `disc`. Runs to Review's question.
+fn to_the_review_question(e: &Env) -> (Harness<'static, Window>, Arc<std::sync::atomic::AtomicBool>) {
+    let inner = simulated(None).get("drive").unwrap().0;
+    let disc = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut reg = simulated(None);
+    reg.add(WaitingDrive { inner, runs: Default::default(), disc: disc.clone() });
+    let mut h = window_on(e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
+    app_mut(&mut h).m.repeat_limit = Some(1);
+    review_has_two(&mut h, e);
+    click(&mut h, "Start");
+    to_the_hold(&mut h);
+    until(&mut h, "Review's question", |a| matches!(&a.tray, Some(Tray::Question { step }) if step == "review"));
+    until(&mut h, "Next disc", |a| a.m.runs[&0][0].snap.steps["next"].state == StepState::Ok);
+    h.run_steps(5);
+    (h, disc)
+}
+
+#[test]
+fn no_next_disc_while_the_last_one_asks() {
+    let e = env();
+    let (mut h, disc) = to_the_review_question(&e);
+    // Next disc opened the tray, but the next disc doesn't start (or, if
+    // it had, it's put back) while the first asks.
+    assert_eq!(app(&h).m.runs[&0].len(), 1);
+    let why = "Answer the question on the last disc first";
+    assert_eq!(app(&h).m.held_back(0).as_deref(), Some(why));
+    h.get_by_label_contains(&format!("CDs, {why}"));
+    assert!(h.query_all_by_label(why).count() >= 1, "the header says so too");
+    shot(&mut h, "next-disc-held-back");
+    // Answered from the sidebar it's in: the next disc follows once the
+    // files are let through too.
+    click(&mut h, "Replace them");
+    until(&mut h, "the Hold to wait for you", |a| a.m.held_back(0).as_deref() == Some("Let the files on the last disc through first"));
+    assert_eq!(app(&h).m.runs[&0].len(), 1);
+    assert_eq!(snap(&h).steps["review"].count(ItemState::Ok), 17, "the first disc's answer went to it");
+    click_tile(&mut h, "Hold,");
+    h.get_by_label("Let 17 through").click();
+    h.run_steps(2);
+    until(&mut h, "the second disc", |a| a.m.runs[&0].len() == 2);
+    assert!(app(&h).m.held_back(0).is_none());
+    disc.store(true, std::sync::atomic::Ordering::SeqCst);
+    until(&mut h, "the second disc in", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].state == StepState::Ok));
+}
+
+#[test]
+fn stop_while_held_back_calls_only_the_next_disc_off() {
+    let e = env();
+    let (mut h, _disc) = to_the_review_question(&e);
+    assert!(app(&h).m.next_waits(0));
+    click(&mut h, "Stop");
+    assert!(!app(&h).m.next_waits(0));
+    // The first disc goes on: answered, let through, filed; no second.
+    click(&mut h, "Keep both");
+    until(&mut h, "the hold", |a| a.m.snapshot(0).steps["hold"].detail == "All here");
+    click_tile(&mut h, "Hold,");
+    h.get_by_label("Let 17 through").click();
+    h.run_steps(2);
+    until(&mut h, "the first to finish", |a| a.m.snapshot(0).finished);
+    h.run_steps(5);
+    assert_eq!(app(&h).m.runs[&0].len(), 1);
+    let s = snap(&h);
+    assert!(!s.stopped);
+    assert_eq!(s.steps["lib1"].count(ItemState::Ok), 17);
+    h.get_by_label_contains("CDs, Done");
 }
 
 #[test]
@@ -1519,11 +1622,13 @@ fn in_edit_mode_the_header_renames_duplicates_and_deletes() {
 #[test]
 fn a_recipe_holding_a_disc_cannot_be_deleted() {
     let e = env();
-    let mut h = window(&e, None, true, 0.0);
+    let (reg, open) = latched_hold(simulated(None));
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     app_mut(&mut h).m.repeat_limit = Some(1);
     click(&mut h, "Start");
     to_the_hold(&mut h);
     until(&mut h, "the second disc", |a| a.m.runs.get(&0).is_some_and(|v| v.len() == 2));
+    open_latch(&open);
     until(&mut h, "the first to hold", |a| a.m.runs[&0][0].snap.steps["hold"].detail == "All here");
     // While running, it can't even be edited, and Delete would be refused.
     assert!(h.get_by_label("Edit").accesskit_node().is_disabled());
@@ -1532,6 +1637,10 @@ fn a_recipe_holding_a_disc_cannot_be_deleted() {
     click(&mut h, "Stop");
     until(&mut h, "the stop", |a| a.m.newest(0).is_some_and(|r| r.snap.finished));
     assert!(!app(&h).m.running(0) && !app(&h).m.earlier(0).is_empty());
+    // No new disc while the first waits for you: Start says why.
+    assert!(h.get_by_label("Start").accesskit_node().is_disabled());
+    assert_eq!(app(&h).m.cant_start(0).as_deref(), Some("Let the files on an earlier disc through first"));
+    h.get_by_label_contains("CDs, Let the files on an earlier disc through first");
     click(&mut h, "Edit");
     click(&mut h, "Delete");
     assert!(app(&h).confirm_delete.is_none(), "not even asked");
@@ -3595,19 +3704,31 @@ fn the_disc_before_stays_on_the_canvas_until_the_next_goes_in() {
     let disc = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut reg = simulated(None);
     reg.add(WaitingDrive { inner, runs: Default::default(), disc: disc.clone() });
+    let (reg, open) = latched_hold(reg);
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     app_mut(&mut h).m.repeat_limit = Some(1);
     click(&mut h, "Start");
     to_the_hold(&mut h);
     until(&mut h, "the second disc", |a| a.m.runs.get(&0).is_some_and(|v| v.len() == 2));
     until(&mut h, "the drive to wait", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].status == "Empty"));
+    open_latch(&open);
     // The first disc's tracks are still there; the Drive says it's empty.
     let s = app(&h).m.snapshot(0);
     assert_eq!(s.steps["rip"].items.len(), 17, "the disc before, as it ended");
     assert_eq!(s.steps["drive"].status, "Empty");
-    // Followed as it finishes, not frozen as it was when the tray opened.
+    // The first disc's Hold fills: it waits for you, so the next disc,
+    // not in yet, is put back until you've let the files through.
     until(&mut h, "the first to hold", |a| a.m.runs[&0][0].snap.steps["hold"].detail == "All here");
+    until(&mut h, "the next disc put back", |a| a.m.runs[&0].len() == 1);
     assert_eq!(app(&h).m.snapshot(0).steps["hold"].detail, "All here");
+    assert_eq!(app(&h).m.held_back(0).as_deref(), Some("Let the files on the last disc through first"));
+    click_tile(&mut h, "Hold,");
+    h.get_by_label("Let 17 through").click();
+    h.run_steps(2);
+    until(&mut h, "the second disc again", |a| a.m.runs[&0].len() == 2);
+    // Followed as it finishes, not frozen as it was when the tray opened.
+    until(&mut h, "the first to file", |a| a.m.snapshot(0).steps["lib1"].status == "17 filed");
+    assert!(app(&h).m.newest(0).is_some_and(|r| r.snap.steps["drive"].state != StepState::Ok), "still waiting for the disc");
     disc.store(true, std::sync::atomic::Ordering::SeqCst);
     // In: the canvas is the new disc's from here.
     until(&mut h, "the new disc", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].state == StepState::Ok));

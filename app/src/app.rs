@@ -704,16 +704,19 @@ impl App {
         let w = 216.0 - PAD.x - 26.0 - 26.0;
         let drive_text = if drive.is_empty() { "no drive".to_owned() } else { drive.clone() };
         let lines = [(name.clone(), font(14.5, 600), p.ink), (status.clone(), font(13.0, 400), col), (drive_text, font(12.0, 400), p.subtle)];
+        // What it waits for you to do may take a second line.
+        let held = self.m.held_back(i).is_some_and(|why| why == status);
         let galleys: Vec<_> = lines
             .into_iter()
-            .map(|(t, f, c)| {
+            .enumerate()
+            .map(|(k, (t, f, c))| {
                 let mut job = egui::text::LayoutJob::single_section(t, egui::TextFormat::simple(f, c));
-                job.wrap = egui::text::TextWrapping::truncate_at_width(w);
+                job.wrap = egui::text::TextWrapping { max_rows: if k == 1 && held { 2 } else { 1 }, break_anywhere: !(k == 1 && held), ..egui::text::TextWrapping::truncate_at_width(w) };
                 ui.painter().layout_job(job)
             })
             .collect();
         // Each line in a box of the mockup's line-height (1.45).
-        let boxes = [14.5 * 1.45, 13.0 * 1.45, 12.0 * 1.45];
+        let boxes = [14.5 * 1.45, 13.0 * 1.45 * galleys[1].rows.len().max(1) as f32, 12.0 * 1.45];
         let height = boxes.iter().sum::<f32>() + 2.0 * PAD.y;
         ui.horizontal(|ui| {
             ui.add_space(8.0);
@@ -914,6 +917,9 @@ impl App {
             if self.m.unplugged(i) {
                 // Grey: nothing to do here but plug it in.
                 pill(ui, p, "Not connected", Tone::Plain, None, t);
+            } else if let Some(why) = self.m.held_back(i).filter(|_| self.m.shows_newest(i)) {
+                // What it waits for before the next disc, in so many words.
+                pill(ui, p, &why, Tone::Warn, Some(StepState::Needs), t);
             } else if let Some(r) = self.m.shown_run(i) {
                 let (line, state) = crate::model::run_line(&r.snap, !self.m.shows_newest(i));
                 // The one pill, as in the sidebar: its state icon and words.
@@ -1056,7 +1062,10 @@ impl App {
                             self.show_run(i, None);
                         }
                     } else if running {
-                        if Btn::new("stop", "Stop").fg(p.bad).show(ui, p).clicked() {
+                        let b = Btn::new("stop", "Stop").fg(p.bad).show(ui, p);
+                        // Held back, Stop only calls the next disc off.
+                        let b = if self.m.next_waits(i) { b.on_hover_text("No next disc; this one finishes") } else { b };
+                        if b.clicked() {
                             self.m.stop(i);
                         }
                     } else {
