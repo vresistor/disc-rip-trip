@@ -11,7 +11,7 @@
 //! revisions), so identity waits for the hash. Each step's `StepInfo` is
 //! here once and shared by the real and the simulated step.
 
-use super::mismatch::{self, Combination, Mismatch};
+use super::mismatch::{self, Combination, Fixing, Mismatch};
 use super::playstation::{self, Sectors, Volume};
 use super::{data, media, redump};
 use crate::template;
@@ -352,8 +352,18 @@ pub trait Reread: Send + Sync {
     /// Re-reads what the drive reported bad, keeps the new hashes on the
     /// dump, and gives Redump's name for it if it now matches.
     async fn refine(&self, cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>>;
-    /// Whether ripping again and combining can help this dump.
+    /// Whether ripping again and combining, or fixing bad sectors, can
+    /// help this dump: a CD image whose sectors have checks of their own.
     fn can_combine(&self, dump: &drt_engine::Item) -> bool;
+    /// Reads the dump's sectors that fail their own check again from the
+    /// disc, up to `tries` times each, and puts each copy that passes its
+    /// checks in place in the dump's own files, keeping them as they were
+    /// until [`Reread::settled`]. Gives what that came to and the files'
+    /// checksums, hashed again from disk.
+    async fn fix(&self, cx: &Cx, dump: &drt_engine::Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)>;
+    /// The dump is verified: the copy of its files as they were before
+    /// fixing can go.
+    async fn settled(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<()>;
     /// Rips the disc once more and combines every rip so far, sector by
     /// sector. Gives what that came to and the combined copy's checksums,
     /// under the dump's own file names. The dump's files stay as they are.
@@ -365,29 +375,88 @@ pub trait Reread: Send + Sync {
     async fn rehash(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<Vec<redump::Rom>>;
 }
 
+/// The choices for Check's *If it doesn't match Redump*.
+pub const BY_ITSELF: &str = "fix";
+pub const ASK: &str = "ask";
+pub const IF_NO_MATCH: &[&str] = &[BY_ITSELF, ASK];
+pub const IF_NO_MATCH_LABELS: &[&str] = &["Try to fix it by itself", "Ask me"];
+/// Extra rips Check makes by itself, unless its settings say otherwise.
+pub const EXTRA_RIPS: u32 = 3;
+
+/// What Check does by itself with a dump that doesn't match Redump.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Policy {
+    /// Fix bad sectors, then rip again and combine, before asking.
+    pub by_itself: bool,
+    /// Tries for each bad sector.
+    pub tries: u32,
+    /// Extra rips at most.
+    pub rips: u32,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Policy { by_itself: true, tries: super::fix::TRIES, rips: EXTRA_RIPS }
+    }
+}
+
+impl Policy {
+    /// Check's settings.
+    pub fn of(cx: &Cx) -> Policy {
+        let d = Policy::default();
+        let n = |k: &str, or: u32| cx.param(k).and_then(|v| v.as_u64()).map_or(or, |v| v as u32);
+        Policy { by_itself: cx.text("if_no_match") != ASK, tries: n("fix_tries", d.tries).max(1), rips: n("extra_rips", d.rips) }
+    }
+}
+
+/// What Check does next by itself: fix bad sectors, if it can; then, for a
+/// disc Redump has, rip again and combine, up to the policy's rips. `None`
+/// when that's all done, or a different disc seems to be in the drive:
+/// then it asks.
+fn next_by_itself(options: &[(String, String)], fixed: Option<&Fixing>, rips: u32, policy: &Policy, listed: bool) -> Option<&'static str> {
+    let offers = |id: &str| options.iter().any(|o| o.0 == id);
+    if fixed.is_some_and(|f| f.other_disc) {
+        return None;
+    }
+    if offers("fix") {
+        return Some("fix");
+    }
+    (listed && offers("combine") && rips < policy.rips).then_some("combine")
+}
+
 /// Holds a dump, Bad, until you say: one of the dump's own options (see
-/// [`Mismatch::options`]: Re-read bad parts, Rip again and combine, Keep it
-/// anyway, Skip this disc). A re-read or a combination whose checksums are
-/// in `cat` goes on, verified; one that isn't stays held, saying what it
-/// came to, and Keep then keeps the best combination, not verified. Never
-/// verified without Redump's checksums. `explain` says why it's held, for
-/// the card and the sidebar, again after each try. Filing waits meanwhile.
-/// Gives the dump to send on, if any.
+/// [`Mismatch::options`]: Re-read bad parts, Fix bad sectors, Rip again and
+/// combine, Keep it anyway, Skip this disc). With `policy.by_itself`, it
+/// first fixes bad sectors and then, for a disc Redump has, rips again and
+/// combines up to `policy.rips` times, stopping at a match, before asking.
+/// A fix, a re-read or a combination whose checksums are in `cat` goes on,
+/// verified, once the dump's files are hashed again from disk; one that
+/// isn't stays held, saying what it came to, and Keep then keeps the best
+/// it has, not verified. Never verified without Redump's checksums, and
+/// never kept without you. `explain` says why it's held, for the card and
+/// the sidebar, again after each try. Filing waits meanwhile. Gives the
+/// dump to send on, if any.
 pub async fn hold(
     cx: &Cx,
     mut dump: drt_engine::Item,
     serial: &str,
     reread: &dyn Reread,
     cat: Option<&redump::Catalogue>,
+    policy: Policy,
     explain: impl Fn(&drt_engine::Item) -> Option<Mismatch>,
 ) -> Result<Option<drt_engine::Item>> {
     let listed = cat.is_some_and(|c| !c.by_serial(serial).is_empty());
     let bad = if listed { format!("Doesn't match Redump's dumps of {serial}") } else { "Not in Redump, and some sectors fail their own check".to_owned() };
     cx.log(&bad);
     let mut combined: Option<Combination> = None;
+    let mut fixed: Option<Fixing> = None;
     let mut trouble: Option<String> = None;
+    let mut by_itself = policy.by_itself;
+    let mut own_rips = 0u32;
+    let mut tried: Vec<String> = vec![];
+    let total_rips = 1 + policy.rips as usize;
     loop {
-        let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), combined.clone()));
+        let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), combined.clone()).fixing(fixed.clone()));
         if let Some(m) = &why {
             cx.log(format!("compared with {}: {}", if m.in_redump() { m.entry.as_str() } else { "nothing in Redump" }, m.short()));
             for line in &m.reading {
@@ -396,22 +465,38 @@ pub async fn hold(
         }
         cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
         let head = if listed { "Doesn't match Redump" } else { "Not verified" };
-        cx.status(head, why.as_ref().map_or_else(|| serial.to_owned(), Mismatch::short));
-        cx.state(StepState::Bad);
-        // What it offers first, so it's there the moment it's marked bad.
         let options = why.as_ref().map(Mismatch::options).unwrap_or_default();
-        cx.item_options(&dump, options.clone());
-        cx.item(&dump, ItemState::Bad, trouble.take().unwrap_or_else(|| bad.clone()));
-        let req = loop {
-            match cx.next_retry().await {
-                None => return Ok(None),
-                // Only what it offered (or anything, when it offered the step's own).
-                Some(r) if r.item == dump.id && (options.is_empty() || options.iter().any(|o| o.0 == r.option)) => break r,
-                Some(_) => {}
+        let planned = if by_itself { next_by_itself(&options, fixed.as_ref(), own_rips, &policy, listed) } else { None };
+        let option = match planned {
+            Some(o) => {
+                cx.log(format!("by itself, as Check's settings say: {}", if o == "fix" { "Fix bad sectors" } else { "Rip again and combine" }));
+                o.to_owned()
+            }
+            None => {
+                if by_itself && !tried.is_empty() && trouble.is_none() {
+                    let not = if listed { "still doesn't match Redump" } else { "not verified: no Redump entry" };
+                    trouble = Some(format!("Tried by itself ({}); {not}", tried.join(", ")));
+                    cx.log(format!("tried by itself ({}); {not}: asking", tried.join(", ")));
+                }
+                by_itself = false;
+                cx.status(head, why.as_ref().map_or_else(|| serial.to_owned(), Mismatch::short));
+                cx.state(StepState::Bad);
+                // What it offers first, so it's there the moment it's marked bad.
+                cx.item_options(&dump, options.clone());
+                cx.item(&dump, ItemState::Bad, trouble.take().unwrap_or_else(|| bad.clone()));
+                let req = loop {
+                    match cx.next_retry().await {
+                        None => return Ok(None),
+                        // Only what it offered (or anything, when it offered the step's own).
+                        Some(r) if r.item == dump.id && (options.is_empty() || options.iter().any(|o| o.0 == r.option)) => break r,
+                        Some(_) => {}
+                    }
+                };
+                req.option
             }
         };
         cx.state(StepState::Busy);
-        match req.option.as_str() {
+        match option.as_str() {
             "leave_out" => {
                 cx.item(&dump, ItemState::Skipped, "skipped");
                 cx.status("Skipped", serial.to_owned());
@@ -421,19 +506,65 @@ pub async fn hold(
                 reread.adopt(cx, &dump).await?;
                 let against = if listed { format!("; doesn't match Redump's copies of {serial}") } else { String::new() };
                 cx.item(&dump, ItemState::Ok, format!("kept the best combination, not verified{against}"));
-                cx.status("Kept, not verified", combined.as_ref().map(Combination::note).unwrap_or_default());
+                cx.status("Kept, not verified", mismatch::result_note(fixed.as_ref(), combined.as_ref()));
                 return Ok(Some(dump));
             }
             "keep" => {
                 let against = if listed { format!("; doesn't match Redump's copies of {serial}") } else { "; not verified".to_owned() };
-                cx.item(&dump, ItemState::Ok, format!("kept anyway{against}"));
+                let how = if fixed.as_ref().is_some_and(|f| f.fixed > 0) { "kept with bad sectors fixed" } else { "kept anyway" };
+                cx.item(&dump, ItemState::Ok, format!("{how}{against}"));
                 cx.status("Kept anyway", if listed { "doesn't match Redump" } else { "not verified" });
+                return Ok(Some(dump));
+            }
+            "fix" => {
+                cx.item(&dump, ItemState::Busy, "looking for bad sectors");
+                cx.status("Looking for bad sectors", serial.to_owned());
+                let (mut f, roms) = match reread.fix(cx, &dump, policy.tries).await {
+                    Ok(done) => done,
+                    Err(e) if cx.stopped() => return Err(e),
+                    Err(e) => {
+                        cx.log(format!("fix bad sectors: {e}"));
+                        trouble = Some(format!("Couldn't fix bad sectors: {e}"));
+                        by_itself = false;
+                        // Not tried: it can be again.
+                        continue;
+                    }
+                };
+                tried.push(format!("{} re-read", mismatch::sectors(f.fixed)));
+                for r in &roms {
+                    dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
+                }
+                fixed = Some(f.clone());
+                if f.fixed == 0 {
+                    continue;
+                }
+                let Some(entry) = cat.and_then(|cat| cat.by_hashes(&roms)) else { continue };
+                // Hashed from disk after the fix: verified on all four counts, or not at all.
+                if let Err(why) = compare(cx, entry, &roms) {
+                    cx.log(format!("not verified: {why}"));
+                    trouble = Some("The fixed copy's SHA-1 is Redump's, but its other checksums aren't".into());
+                    continue;
+                }
+                f.verified = true;
+                reread.settled(cx, &dump).await?;
+                let name = entry.name.clone();
+                dump.context_mut().add(Subject::Disc, "name", name.clone(), "Redump");
+                let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), None).fixing(Some(f.clone())));
+                cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
+                cx.verified(&dump, format!("Verified: {name}, {}", f.note()));
+                cx.status("Verified", f.note());
                 return Ok(Some(dump));
             }
             "combine" => {
                 let n = combined.as_ref().map_or(1, |c| c.rips.len()) + 1;
-                cx.item(&dump, ItemState::Busy, format!("ripping again, rip {n}"));
-                cx.status(format!("Ripping again, rip {n}"), serial.to_owned());
+                let doing = if by_itself {
+                    own_rips += 1;
+                    format!("Rip {n} of {}", total_rips.max(n))
+                } else {
+                    format!("Ripping again, rip {n}")
+                };
+                cx.item(&dump, ItemState::Busy, doing.to_lowercase());
+                cx.status(doing, serial.to_owned());
                 let (mut c, roms) = match reread.combine(cx, &dump).await {
                     Ok(done) => done,
                     Err(e) if cx.stopped() => return Err(e),
@@ -441,9 +572,14 @@ pub async fn hold(
                     Err(e) => {
                         cx.log(format!("rip again: {e}"));
                         trouble = Some(format!("Couldn't rip again: {e}"));
+                        by_itself = false;
                         continue;
                     }
                 };
+                if by_itself {
+                    tried.retain(|t| !t.ends_with("more rip") && !t.ends_with("more rips"));
+                    tried.push(format!("{own_rips} more rip{}", if own_rips == 1 { "" } else { "s" }));
+                }
                 for r in &roms {
                     dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
                 }
@@ -458,28 +594,24 @@ pub async fn hold(
                 for r in &now {
                     dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
                 }
-                match redump::same_files(entry, &now) {
-                    Ok(lines) => {
-                        for l in lines {
-                            cx.log(format!("checked {l} (hashed from disk with the crc32fast, md-5 and sha1 crates)"));
-                        }
-                    }
-                    Err(why) => {
-                        cx.log(format!("not verified: {why}"));
-                        trouble = Some("The combination's SHA-1 is Redump's, but its other checksums aren't".into());
-                        continue;
-                    }
+                if let Err(why) = compare(cx, entry, &now) {
+                    cx.log(format!("not verified: {why}"));
+                    trouble = Some("The combination's SHA-1 is Redump's, but its other checksums aren't".into());
+                    continue;
                 }
                 c.verified = true;
-                {
-                    let name = entry.name.clone();
-                    dump.context_mut().add(Subject::Disc, "name", name.clone(), "Redump");
-                    let why = explain(&dump).map(|m| m.with(true, Some(c.clone())));
-                    cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
-                    cx.verified(&dump, format!("Verified: {name}, {}", c.note()));
-                    cx.status("Verified", c.note());
-                    return Ok(Some(dump));
+                if let Some(f) = fixed.as_mut() {
+                    f.verified = true;
                 }
+                reread.settled(cx, &dump).await?;
+                let name = entry.name.clone();
+                dump.context_mut().add(Subject::Disc, "name", name.clone(), "Redump");
+                let why = explain(&dump).map(|m| m.with(true, Some(c.clone())).fixing(fixed.clone()));
+                cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
+                let note = mismatch::result_note(fixed.as_ref(), Some(&c));
+                cx.verified(&dump, format!("Verified: {name}, {note}"));
+                cx.status("Verified", note);
+                return Ok(Some(dump));
             }
             _ => {
                 cx.item(&dump, ItemState::Busy, "re-reading bad parts");
@@ -501,6 +633,16 @@ pub async fn hold(
             }
         }
     }
+}
+
+/// The dump's files, hashed from disk, against Redump's entry on size,
+/// CRC-32, MD5 and SHA-1, each comparison logged.
+fn compare(cx: &Cx, entry: &redump::Game, roms: &[redump::Rom]) -> std::result::Result<(), String> {
+    let lines = redump::same_files(entry, roms)?;
+    for l in lines {
+        cx.log(format!("checked {l} (hashed from disk with the crc32fast, md-5 and sha1 crates)"));
+    }
+    Ok(())
 }
 
 /// Check's hold for a game or a data disc that doesn't match Redump: held
@@ -526,7 +668,7 @@ pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Ro
                 let main = d.path.as_deref()?;
                 mismatch::explain(serial, &cat.by_serial(serial), &hashed(d.context(), main), log(main).as_deref())
             };
-            return hold(cx, dump, serial, reread, Some(cat), explain).await;
+            return hold(cx, dump, serial, reread, Some(cat), Policy::of(cx), explain).await;
         }
     }
     // Nothing in Redump to compare with: held only when it can be helped,
@@ -539,7 +681,7 @@ pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Ro
         let main = d.path.as_deref()?;
         Some(mismatch::unlisted(&serial_s, &hashed(d.context(), main), &log(main)?))
     };
-    hold(cx, dump, &serial_s, reread, cat.as_deref(), explain).await
+    hold(cx, dump, &serial_s, reread, cat.as_deref(), Policy::of(cx), explain).await
 }
 
 /// A rip of the whole disc into a folder, giving its cue sheet: redumper's
@@ -556,6 +698,24 @@ pub fn redumper_rip() -> RipFn {
 /// `combined`.
 pub struct Disc {
     pub rip: RipFn,
+    pub source: SourceFn,
+}
+
+/// Where Fix bad sectors reads from, for a dump: the drive it was ripped
+/// on ([`drive_source`]), a stand-in in a test.
+pub type SourceFn = std::sync::Arc<dyn Fn(&drt_engine::Item) -> Result<Box<dyn super::fix::Source>> + Send + Sync>;
+
+/// The drive the dump was ripped on, with its disc in.
+pub fn drive_source() -> SourceFn {
+    std::sync::Arc::new(|dump: &drt_engine::Item| {
+        let dev = super::device(dump.context())?;
+        if !media::disc_in(&dev) {
+            bail!("there's no disc in the drive");
+        }
+        let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+        let sectors = super::combine::layout(&main)?.iter().map(|t| (t.size / super::combine::SECTOR as u64) as i64).sum();
+        Ok(Box::new(super::fix::Drive { device: dev, sectors }) as Box<dyn super::fix::Source>)
+    })
 }
 
 impl Disc {
@@ -584,6 +744,56 @@ impl Reread for Disc {
 
     fn can_combine(&self, dump: &drt_engine::Item) -> bool {
         data::combinable(dump)
+    }
+
+    async fn fix(&self, cx: &Cx, dump: &drt_engine::Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)> {
+        use super::fix;
+        let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+        let keep = Self::folders(cx)?.join("before-fix");
+        let mut source = (self.source)(dump)?;
+        let fixed = {
+            let _drive = cx.lane(LaneKind::Drive).await;
+            let (cx2, d, main) = (cx.clone(), dump.clone(), main.clone());
+            let done = tokio::task::spawn_blocking(move || {
+                let mut said = String::new();
+                fix::fix(
+                    &main,
+                    &mut *source,
+                    tries,
+                    &keep,
+                    |p, doing| {
+                        cx2.progress(Some(p));
+                        if !doing.is_empty() && doing != said {
+                            cx2.item(&d, ItemState::Busy, doing.clone());
+                            cx2.status(cap(&doing), "");
+                            said = doing;
+                        }
+                    },
+                    &|| cx2.stopped(),
+                )
+            })
+            .await?;
+            cx.drive_says(StepState::Idle, "Waiting", "");
+            done?
+        };
+        cx.progress(None);
+        for l in fix::log_lines(&fixed, tries) {
+            cx.log(l);
+        }
+        let roms = self.rehash(cx, dump).await?;
+        for r in &roms {
+            cx.log(format!("after fixing: <rom name=\"{}\" size=\"{}\" crc=\"{}\" md5=\"{}\" sha1=\"{}\" />", r.name, r.size, r.crc, r.md5, r.sha1));
+        }
+        Ok((Fixing::of(&fixed, tries), roms))
+    }
+
+    async fn settled(&self, cx: &Cx, _dump: &drt_engine::Item) -> Result<()> {
+        let keep = Self::folders(cx)?.join("before-fix");
+        if keep.exists() {
+            std::fs::remove_dir_all(&keep)?;
+            cx.log("verified: the copy of the files as they were before fixing is gone");
+        }
+        Ok(())
     }
 
     async fn combine(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<(Combination, Vec<redump::Rom>)> {
@@ -619,6 +829,13 @@ impl Reread for Disc {
         })
         .await??;
         cx.progress(None);
+        let mut by_rip: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+        for (lba, k) in &done.0.tally.from {
+            by_rip.entry(done.0.used.get(*k).copied().unwrap_or(0)).or_default().push(lba.to_string());
+        }
+        for (n, lbas) in by_rip {
+            cx.log(format!("combined: from rip {n}: {} sector{} ({})", lbas.len(), if lbas.len() == 1 { "" } else { "s" }, lbas.join(", ")));
+        }
         Ok((Combination::of(&done.0, false), done.1))
     }
 
@@ -1202,6 +1419,11 @@ impl Step for LibCrypt {
         }
         Ok(())
     }
+}
+
+fn cap(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 #[cfg(test)]

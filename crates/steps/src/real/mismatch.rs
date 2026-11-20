@@ -271,6 +271,70 @@ pub struct Mismatch {
     /// The rips combined so far, once it's been ripped again.
     #[serde(default)]
     pub combined: Option<Combination>,
+    /// What Fix bad sectors came to, once it's been tried.
+    #[serde(default)]
+    pub fixed: Option<Fixing>,
+}
+
+/// What Fix bad sectors came to: the sectors that failed their own check,
+/// read again from the disc.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fixing {
+    /// Sectors that failed their own check.
+    pub bad: u64,
+    /// Those read again right and put in place.
+    pub fixed: u64,
+    /// Those still failing after every try.
+    pub left: u64,
+    /// The first few of those.
+    pub left_at: Vec<i64>,
+    /// Those of them that came back the same on every read.
+    pub same: u64,
+    /// Tries for each.
+    pub tries: u32,
+    /// Sectors that read right the first time came back different: the
+    /// disc in the drive may not be this one, and nothing was changed.
+    pub other_disc: bool,
+    /// Its checksums are Redump's.
+    pub verified: bool,
+}
+
+impl Fixing {
+    pub fn of(f: &super::fix::Fixed, tries: u32) -> Fixing {
+        let left: Vec<&super::fix::Sector> = f.left().collect();
+        Fixing {
+            bad: f.bad.len() as u64,
+            fixed: f.fixed().count() as u64,
+            left: left.len() as u64,
+            left_at: left.iter().take(10).map(|s| s.lba).collect(),
+            same: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { same: true, .. })).count() as u64,
+            tries,
+            other_disc: f.other_disc.is_some(),
+            verified: false,
+        }
+    }
+
+    /// The item's note: *211 sectors re-read*.
+    pub fn note(&self) -> String {
+        format!("{} re-read", sectors(self.fixed))
+    }
+}
+
+/// What fixing and combining came to, for the item's note: *211 sectors
+/// re-read, 1 from a second rip*, or either alone.
+pub fn result_note(fixed: Option<&Fixing>, combined: Option<&Combination>) -> String {
+    match (fixed.filter(|f| f.fixed > 0), combined) {
+        (Some(f), Some(c)) => {
+            let from = match c.rips.len() {
+                2 => "a second rip".to_owned(),
+                n => format!("{} more rips", n.saturating_sub(1)),
+            };
+            format!("{}, {} from {from}", f.note(), c.taken)
+        }
+        (Some(f), None) => f.note(),
+        (None, Some(c)) => c.note(),
+        (None, None) => String::new(),
+    }
 }
 
 /// One rip of the disc, as combining found it.
@@ -364,12 +428,23 @@ impl Mismatch {
         if refine {
             out.push(o("refine", "Re-read bad parts"));
         }
+        if self.can_fix() {
+            out.push(o("fix", "Fix bad sectors"));
+        }
         if self.can_combine && (!self.in_redump() || self.same_size()) {
             out.push(o("combine", if self.combined.is_some() { "Rip again and combine again" } else { "Rip again and combine" }));
         }
         out.push(o("keep", if self.combined.is_some() { "Keep the best combination (not verified)" } else { "Keep it anyway" }));
         out.push(o("leave_out", "Skip this disc"));
         out
+    }
+
+    /// Whether Fix bad sectors can help: the sectors have checks of their
+    /// own (as for combining), it hasn't been tried, nothing's been
+    /// combined yet, the copy is the size of Redump's, and some of its
+    /// sectors fail their check, as far as the read said.
+    pub fn can_fix(&self) -> bool {
+        self.can_combine && self.fixed.is_none() && self.combined.is_none() && (!self.in_redump() || self.same_size()) && self.read.as_ref().is_none_or(|r| r.bad().max(r.wrong()) > 0)
     }
 
     /// Says whether combining can help and what it's come to, and works
@@ -381,8 +456,22 @@ impl Mismatch {
         self
     }
 
+    /// Says what fixing came to, and works out what it all means again.
+    pub fn fixing(mut self, fixed: Option<Fixing>) -> Mismatch {
+        self.fixed = fixed;
+        self.reading = reading(&self);
+        self
+    }
+
     /// For the card, a few words: *same size, 15 bad sectors*.
     pub fn short(&self) -> String {
+        if let Some(f) = self.fixed.as_ref().filter(|_| self.combined.is_none()) {
+            return match (f.other_disc, f.left) {
+                (true, _) => "not fixed: another disc in the drive?".into(),
+                (false, 0) => format!("{} re-read", sectors(f.fixed)),
+                (false, n) => format!("{} re-read, {} still bad", sectors(f.fixed), sectors(n)),
+            };
+        }
         if let Some(c) = &self.combined {
             return match c.still_bad {
                 0 => format!("combined from {} rips", c.rips.len()),
@@ -426,6 +515,7 @@ pub fn explain(serial: &str, copies: &[&redump::Game], dumped: &[redump::Rom], l
         reading: vec![],
         can_combine: false,
         combined: None,
+        fixed: None,
     };
     m.reading = reading(&m);
     Some(m)
@@ -440,7 +530,7 @@ pub fn unlisted(serial: &str, dumped: &[redump::Rom], log: &str) -> Mismatch {
     m
 }
 
-fn sectors(n: u64) -> String {
+pub fn sectors(n: u64) -> String {
     format!("{n} sector{}", if n == 1 { "" } else { "s" })
 }
 
@@ -452,8 +542,11 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
     let bad = read.map_or(0, Read::bad);
     let reported = read.is_some_and(Read::drive_reported);
     let tracks = |n: usize| format!("{n} track{}", if n == 1 { "" } else { "s" });
-    // What ripping again and combining does, for a misread the drive kept quiet about.
-    let combine = "Rip again and combine reads the whole disc again and keeps, for each sector, a copy that passes its own check. Misreads like these usually fall in different places each time.";
+    // What fixing and ripping again do, for a misread the drive kept quiet about.
+    let combine = "Fix bad sectors reads just those sectors again, one at a time, and puts a copy in place only when it passes its own check. If that isn't enough, Rip again and combine reads the whole disc again: misreads like these usually fall in different places each time.";
+    if let Some(f) = &m.fixed {
+        out.push(fix_reading(f, m.in_redump(), m.combined.is_some()));
+    }
     if let Some(c) = &m.combined {
         let rips = c.rips.len();
         out.push(match (c.verified, c.still_bad, m.in_redump()) {
@@ -467,6 +560,8 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
             (false, n, _) => format!("Combined from {rips} rips, {} still {} no copy that passes its check. Another rip may read {} right; cleaning the disc first can help.", sectors(n), if n == 1 { "has" } else { "have" }, if n == 1 { "it" } else { "them" }),
         });
         out.extend(c.left_out.iter().cloned());
+    } else if m.fixed.is_some() {
+        // Said above.
     } else if !m.in_redump() {
         let wrong = read.map_or(0, |r| r.bad().max(r.wrong()));
         let first = format!("Redump has no copy of this disc to compare with, and {} of this copy fail their own check.", sectors(wrong));
@@ -498,7 +593,7 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
         out.push("The size is right, but the contents differ. There's no rip log to say how the read went.".into());
     }
     if let Some(r) = read {
-        if let Some(a) = r.of(Kind::Address).filter(|_| m.combined.is_none()) {
+        if let Some(a) = r.of(Kind::Address).filter(|_| m.combined.is_none() && m.fixed.is_none()) {
             out.push(format!("{} came back with the wrong address. A scratch can cause that, and so can a drive that loses its place while reading.", sectors(a.count)));
         }
         if r.generic {
@@ -508,6 +603,45 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
         }
     }
     out
+}
+
+/// What Fix bad sectors came to, in a sentence or two.
+fn fix_reading(f: &Fixing, in_redump: bool, combined: bool) -> String {
+    if f.other_disc {
+        return "Fix bad sectors changed nothing: sectors that read right the first time came back different, so the disc in the drive may not be this one.".into();
+    }
+    if f.bad == 0 {
+        return "Fix bad sectors found no sector that fails its own check, so there was nothing to read again.".into();
+    }
+    let read = format!(
+        "Fix bad sectors read {} again, up to {} times each, and put {} that passed {} own check in place.",
+        sectors(f.bad),
+        f.tries,
+        if f.fixed == 1 { "the 1 copy".to_owned() } else { format!("the {} copies", f.fixed) },
+        if f.fixed == 1 { "its" } else { "their" }
+    );
+    let left = match (f.left, f.same) {
+        (0, _) => String::new(),
+        (n, s) if s == n => format!(
+            " {} came back the same on every read and {} left as {}: some discs are pressed with sectors like that on purpose.",
+            sectors(n),
+            if n == 1 { "is" } else { "are" },
+            if n == 1 { "it is" } else { "they are" }
+        ),
+        (n, _) => format!(" {} still {} no copy that passes.", sectors(n), if n == 1 { "has" } else { "have" }),
+    };
+    let then = match (f.verified, in_redump, combined, f.left) {
+        (_, _, true, _) => " Then the disc was ripped again, and the rips combined.".to_owned(),
+        (true, _, false, _) => " It now matches Redump's copy.".to_owned(),
+        (false, false, false, 0) => " Every sector passes its own check now, but Redump has no copy to compare with, so it can't be called verified.".to_owned(),
+        (false, false, false, _) => " Redump has no copy to compare with, so it can't be called verified.".to_owned(),
+        (false, true, false, 0) => {
+            " Every sector passes its own check now, but it still doesn't match Redump's copy: some may be wrong in a way their own check can't show. Rip again and combine compares whole rips."
+                .to_owned()
+        }
+        (false, true, false, _) => " Rip again and combine may find a good copy in another rip.".to_owned(),
+    };
+    format!("{read}{left}{then}")
 }
 
 fn cap(s: &str) -> String {
@@ -654,7 +788,8 @@ CD-ROM [GAME_1.bin]:
         // A CD image redumper made: combining is offered, and said why.
         let m = m.with(true, None);
         assert!(m.reading[0].contains("Rip again and combine reads the whole disc again"), "{:?}", m.reading);
-        assert_eq!(opts(&m), ["combine", "keep", "leave_out"]);
+        assert_eq!(opts(&m), ["fix", "combine", "keep", "leave_out"]);
+        assert!(m.reading[0].contains("Fix bad sectors reads just those sectors again, one at a time"), "{:?}", m.reading);
         assert!(m.reading[1].starts_with("40 sectors came back with the wrong address"));
         assert_eq!(
             m.reading[2],
@@ -694,6 +829,38 @@ CD-ROM [GAME_1.bin]:
         assert!(m.files[0].sha1_ok() && !m.files[1].sha1_ok());
         assert!(m.reading[0].starts_with("The first track matches Redump's, so it's likely the same disc, but the music tracks don't."));
         assert!(explain("SLUS-00002", &[], &dumped, None).is_none(), "nothing to compare with");
+    }
+
+    #[test]
+    fn what_fixing_came_to_is_said_plainly() {
+        let cat = dat();
+        let copies = cat.by_serial("SLES-04711");
+        let dumped = [rom("GAME_1.bin", BIN, "bbbb000000000000000000000000000000000000")];
+        let m = explain("SLES-04711", &copies, &dumped, Some(LOG)).unwrap().with(true, None);
+        let f = Fixing { bad: 212, fixed: 211, left: 1, left_at: vec![98000], same: 0, tries: 10, other_disc: false, verified: false };
+        let fixed = m.clone().fixing(Some(f.clone()));
+        assert_eq!(fixed.short(), "211 sectors re-read, 1 sector still bad");
+        assert_eq!(
+            fixed.reading[0],
+            "Fix bad sectors read 212 sectors again, up to 10 times each, and put the 211 copies that passed their own check in place. 1 sector still has no copy that passes. Rip again and combine may find a good copy in another rip."
+        );
+        assert!(!fixed.reading.iter().any(|l| l.contains("wrong address")), "the first rip's addresses are old news: {:?}", fixed.reading);
+        let opts = |m: &Mismatch| m.options().into_iter().map(|o| o.0).collect::<Vec<_>>();
+        assert_eq!(opts(&fixed), ["combine", "keep", "leave_out"], "fixed once is enough");
+        // Pressed so: the same on every read.
+        let pressed = m.clone().fixing(Some(Fixing { same: 1, ..f.clone() }));
+        assert!(pressed.reading[0].contains("1 sector came back the same on every read and is left as it is: some discs are pressed with sectors like that on purpose."), "{:?}", pressed.reading);
+        let other = m.clone().fixing(Some(Fixing { other_disc: true, ..Fixing::default() }));
+        assert!(other.reading[0].contains("the disc in the drive may not be this one"));
+        assert_eq!(opts(&other), ["combine", "keep", "leave_out"]);
+        // The notes.
+        let c = Combination { rips: vec![RipRead { n: 1, bad: 1 }, RipRead { n: 2, bad: 200 }], taken: 1, ..Combination::default() };
+        assert_eq!(result_note(Some(&f), Some(&c)), "211 sectors re-read, 1 from a second rip");
+        assert_eq!(result_note(Some(&f), None), "211 sectors re-read");
+        let c3 = Combination { rips: vec![RipRead::default(); 3], taken: 4, ..Combination::default() };
+        assert_eq!(result_note(Some(&f), Some(&c3)), "211 sectors re-read, 4 from 2 more rips");
+        assert_eq!(result_note(None, Some(&c3)), "combined from 3 rips, 4 sectors taken from the later rips");
+        assert_eq!(result_note(Some(&Fixing::default()), Some(&c3)), c3.note(), "nothing re-read: the combination alone");
     }
 
     /// Reads a real log. `DRT_LOG=… cargo test -p drt-steps real_log -- --ignored --nocapture`.

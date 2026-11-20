@@ -5,7 +5,7 @@
 
 use crate::theme::{font, state_icon, tnum, Pal};
 use drt_engine::{StepState, StepView};
-use drt_steps::real::mismatch::{Combination, Mismatch, Read};
+use drt_steps::real::mismatch::{Combination, Fixing, Mismatch, Read};
 use egui::{pos2, vec2, Align2, RichText, Sense, Stroke, Ui};
 
 /// The comparison Check keeps in its record, if it held this dump.
@@ -24,7 +24,33 @@ pub fn check_say(v: &StepView) -> String {
     }
     let m = mismatch(v);
     let rips = m.as_ref().and_then(|m| m.combined.as_ref()).map(|c| c.rips.len());
+    let fixed = m.as_ref().and_then(|m| m.fixed.as_ref()).filter(|f| f.fixed > 0);
+    if v.status == "Looking for bad sectors" {
+        return "Looking through the copy for sectors that fail their own check.".into();
+    }
+    if v.status.starts_with("Re-reading ") && (v.status.ends_with(" bad sectors") || v.status.ends_with(" bad sector")) {
+        return format!("{}: each is read again from the disc, on its own, and put in place only if the copy passes its own check.", v.status);
+    }
+    if v.status.starts_with("Rip ") && v.status.contains(" of ") {
+        return format!("{}: the whole disc is read again, to combine with the rips before, sector by sector. It stops as soon as the copy matches Redump's.", v.status);
+    }
     match (v.status.as_str(), &m) {
+        ("Verified", Some(m)) if fixed.is_some() && rips.is_some() => format!(
+            "It matches Redump's copy of {} now: {} read again from the disc, then combined with {} more rip{}. Its size and all its checksums are Redump's.",
+            m.entry,
+            sectors(fixed.map_or(0, |f| f.fixed)),
+            rips.unwrap_or(1) - 1,
+            if rips == Some(2) { "" } else { "s" }
+        ),
+        ("Verified", Some(m)) if fixed.is_some() => {
+            format!("It matches Redump's copy of {} now, after reading {} again from the disc. Its size and all its checksums are Redump's.", m.entry, sectors(fixed.map_or(0, |f| f.fixed)))
+        }
+        ("Doesn't match Redump", Some(m)) if m.fixed.is_some() && rips.is_none() => {
+            format!("Its bad sectors were read again from the disc, and this copy still doesn't match Redump's copy of {}. Below, what that came to.", m.serial)
+        }
+        ("Not verified", Some(m)) if m.fixed.is_some() && rips.is_none() => {
+            "Its bad sectors were read again from the disc. Redump has no copy of this disc to compare with, so it can't be called verified.".into()
+        }
         ("Doesn't match Redump", Some(m)) if rips.is_some() => {
             format!("Combined from {} rips, this copy still doesn't match Redump's copy of {}. Below, each rip and what combining them came to.", rips.unwrap_or(0), m.serial)
         }
@@ -191,6 +217,27 @@ fn sectors(n: u64) -> String {
     }
 }
 
+/// What Fix bad sectors came to.
+fn fixing(ui: &mut Ui, p: &Pal, f: &Fixing) {
+    heading(ui, p, "Bad sectors read again");
+    if f.other_disc {
+        fact(ui, p, "Nothing changed", "Sectors that read right the first time came back different: is this the same disc?", Some(false));
+        return;
+    }
+    if f.bad == 0 {
+        fact(ui, p, "No sector fails its own check", "", Some(true));
+        return;
+    }
+    fact(ui, p, &format!("{} failed their own check", sectors(f.bad)), &format!("each read again up to {} times", f.tries), None);
+    fact(ui, p, &format!("{} read right and put in place", sectors(f.fixed)), "", (f.fixed > 0).then_some(true));
+    if f.left > 0 {
+        let at = f.left_at.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(", ");
+        let more = if f.left as usize > f.left_at.len() { ", …" } else { "" };
+        let same = if f.same > 0 { format!("; {} the same on every read, left as {}", f.same, if f.same == 1 { "it is" } else { "they are" }) } else { String::new() };
+        fact(ui, p, &format!("{} still bad", sectors(f.left)), &format!("sector {at}{more}{same}"), Some(false));
+    }
+}
+
 /// Each rip, and what combining them came to.
 fn rips(ui: &mut Ui, p: &Pal, m: &Mismatch, c: &Combination) {
     heading(ui, p, "Rips");
@@ -223,11 +270,14 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
     heading(ui, p, "Compared with Redump");
     if !m.in_redump() {
         ui.label(RichText::new("Redump has no copy of this disc").font(font(13.5, 600)).color(p.ink));
+        if let Some(f) = &m.fixed {
+            fixing(ui, p, f);
+        }
         if let Some(c) = &m.combined {
             rips(ui, p, m, c);
         }
         if let Some(r) = &m.read {
-            read(ui, p, r, m.combined.is_some());
+            read(ui, p, r, m.combined.is_some() || m.fixed.is_some());
         }
         meaning(ui, p, m);
         return;
@@ -257,11 +307,14 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
         row(ui, p, "SHA-1", &sum(&f.expected), &sum(&f.got), Some(f.sha1_ok()));
         ui.add_space(8.0);
     }
+    if let Some(f) = &m.fixed {
+        fixing(ui, p, f);
+    }
     if let Some(c) = &m.combined {
         rips(ui, p, m, c);
     }
     if let Some(r) = &m.read {
-        read(ui, p, r, m.combined.is_some());
+        read(ui, p, r, m.combined.is_some() || m.fixed.is_some());
     }
     meaning(ui, p, m);
 }

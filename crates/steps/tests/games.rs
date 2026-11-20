@@ -25,6 +25,15 @@ fn engine(discs: Vec<Disc>) -> Engine {
     e
 }
 
+/// The Games recipe with Check asking first, rather than fixing by itself.
+fn asking() -> drt_engine::Recipe {
+    let mut r = recipes::games();
+    if let Some(drt_engine::Node::Step { params, .. }) = r.root.find_mut("g_check") {
+        params.insert("if_no_match".into(), Setting::chosen(Value::from("ask")));
+    }
+    r
+}
+
 /// Runs to the end, answering each question with `answer`. Gives the last
 /// snapshot and what was asked.
 async fn drive(run: Run, answer: Answer) -> (Snapshot, Vec<String>) {
@@ -188,7 +197,7 @@ async fn a_dump_redump_disagrees_with_is_held_until_you_say() {
     assert_eq!(held.steps["g_check"].state, StepState::Bad);
     assert_eq!(held.steps["g_lib"].count(ItemState::Ok), 0);
     let check = drt_steps::real().info("check").unwrap();
-    assert_eq!(check.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Rip again and combine", "Keep it anyway", "Skip this disc"]);
+    assert_eq!(check.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Fix bad sectors", "Rip again and combine", "Keep it anyway", "Skip this disc"]);
     // No log to say the drive reported nothing: re-reading may help; no
     // rip of sectors to combine.
     let offered: Vec<&str> = item.options.iter().map(|o| o.1.as_str()).collect();
@@ -223,7 +232,7 @@ fn held(s: &Snapshot) -> bool {
 #[tokio::test]
 async fn a_bad_read_is_held_with_why_and_redump_waits_then_looks_up_the_serial() {
     let e = engine(vec![LANTERN_KEEP_DAMAGED]);
-    let run = e.start(&recipes::games()).unwrap();
+    let run = e.start(&asking()).unwrap();
     let s = until(&run, held).await;
     let check = &s.steps["g_check"];
     assert_eq!((check.status.as_str(), check.detail.as_str()), ("Doesn't match Redump", "same size, 15 bad sectors"));
@@ -250,7 +259,7 @@ async fn a_bad_read_is_held_with_why_and_redump_waits_then_looks_up_the_serial()
 #[tokio::test]
 async fn a_disc_skipped_at_check_leaves_redump_nothing_to_do() {
     let e = engine(vec![LANTERN_KEEP_DAMAGED]);
-    let run = e.start(&recipes::games()).unwrap();
+    let run = e.start(&asking()).unwrap();
     let s = until(&run, held).await;
     run.send(Command::Retry { step: "g_check".into(), item: s.steps["g_check"].items[0].id.clone(), option: "leave_out".into() }).await;
     let (s, _) = drive(run, Answer::Skip).await;
@@ -263,11 +272,11 @@ async fn a_disc_skipped_at_check_leaves_redump_nothing_to_do() {
 #[tokio::test]
 async fn ripping_again_and_combining_until_it_matches_redump() {
     let e = engine(vec![LANTERN_KEEP_DAMAGED]);
-    let run = e.start(&recipes::games()).unwrap();
+    let run = e.start(&asking()).unwrap();
     let s = until(&run, held).await;
     let item = s.steps["g_check"].items[0].clone();
     let labels = |i: &drt_engine::ItemView| i.options.iter().map(|o| o.1.clone()).collect::<Vec<_>>();
-    assert_eq!(labels(&item), ["Rip again and combine", "Keep it anyway", "Skip this disc"], "the drive reported nothing: Re-read bad parts can't help");
+    assert_eq!(labels(&item), ["Fix bad sectors", "Rip again and combine", "Keep it anyway", "Skip this disc"], "the drive reported nothing: Re-read bad parts can't help");
     let m: Mismatch = serde_json::from_value(s.steps["g_check"].record.report.clone().unwrap()).unwrap();
     assert!(m.reading[0].contains("Rip again and combine reads the whole disc again"), "{:?}", m.reading);
     run.send(Command::Retry { step: "g_check".into(), item: item.id.clone(), option: "combine".into() }).await;
@@ -289,6 +298,22 @@ async fn ripping_again_and_combining_until_it_matches_redump() {
     let m: Mismatch = serde_json::from_value(c.record.report.clone().expect("the rips stay in its record")).unwrap();
     assert!(m.combined.unwrap().verified && m.files[0].sha1_ok());
     assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_choose"].detail.as_str()), ("Not needed", "verified"));
+    assert_eq!(s.steps["g_lib"].items[0].note, "~/Games/PlayStation/Lantern Keep (Europe)");
+}
+
+/// By itself, as Check is set at first: it fixes the bad sectors, then
+/// rips once more, and the combination is Redump's; nothing asked.
+#[tokio::test]
+async fn by_itself_a_bad_read_is_fixed_then_ripped_again_until_it_matches() {
+    let e = engine(vec![LANTERN_KEEP_DAMAGED]);
+    let run = e.start(&recipes::games()).unwrap();
+    let (s, asked) = drive(run, Answer::Skip).await;
+    assert!(asked.is_empty(), "{asked:?}");
+    let c = &s.steps["g_check"];
+    assert_eq!(c.items[0].note, "Verified: Lantern Keep (Europe) (Disc 1), 139 sectors re-read, 1 from a second rip");
+    assert!(c.items[0].verified);
+    let m: Mismatch = serde_json::from_value(c.record.report.clone().unwrap()).unwrap();
+    assert!(m.fixed.unwrap().verified && m.combined.unwrap().rips.len() == 2);
     assert_eq!(s.steps["g_lib"].items[0].note, "~/Games/PlayStation/Lantern Keep (Europe)");
 }
 

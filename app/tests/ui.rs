@@ -2671,6 +2671,8 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     open_id(&mut h, "g_check");
     h.get_by_label_contains("Compares the copy's checksums with Redump's list");
     app_mut(&mut h).close_tray();
+    let i = app(&h).sel;
+    app_mut(&mut h).m.set_param(i, "g_check", "if_no_match", Value::from("ask")).unwrap();
     h.run_steps(2);
     click(&mut h, "Start");
     until(&mut h, "Check to hold the dump", |a| a.m.snapshot(a.sel).steps["g_check"].items.first().is_some_and(|i| i.state == ItemState::Bad));
@@ -2690,7 +2692,8 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     h.get_by_label("15 sectors: fail their error correction");
     h.get_by_label("between 49% and 68% of the way through (ECC)");
     h.get_by_label("redumper doesn't know this drive, so it used general settings and a read offset of +0");
-    h.get_by_label_contains("15 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts can't find them. Rip again and combine reads the whole disc again");
+    h.get_by_label_contains("15 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts can't find them. Fix bad sectors reads just those sectors again, one at a time");
+    assert!(h.query_all_by_label_contains("Fix bad sectors, ").next().is_some());
     assert!(h.query_all_by_label_contains("Re-read bad parts, ").next().is_none(), "no help when the drive reported nothing");
     assert!(h.query_all_by_label_contains("Rip again and combine, ").next().is_some());
     shot(&mut h, "step-check-mismatch");
@@ -2736,6 +2739,8 @@ fn check_rips_again_and_combines_until_it_matches() {
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 1100.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
+    let i = app(&h).sel;
+    app_mut(&mut h).m.set_param(i, "g_check", "if_no_match", Value::from("ask")).unwrap();
     click(&mut h, "Start");
     until(&mut h, "Check to hold the dump", |a| a.m.snapshot(a.sel).steps["g_check"].items.first().is_some_and(|i| i.state == ItemState::Bad));
     open_id(&mut h, "g_check");
@@ -2757,6 +2762,46 @@ fn check_rips_again_and_combines_until_it_matches() {
     h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now, combined from 3 rips.");
     h.get_by_label("Combined: matches Redump");
     shot(&mut h, "step-check-combined-verified");
+}
+
+/// By itself, as Check is set at first: the card and the sidebar say it's
+/// re-reading the bad sectors, then which rip it's on, then that it's
+/// verified and how.
+#[test]
+fn check_fixes_bad_sectors_by_itself_then_rips_again() {
+    let e = env();
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    let mut h = window_on(&e, reg, true, 1.0, egui::vec2(1280.0, 1100.0), 1.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(2);
+    open_id(&mut h, "g_check");
+    h.get_by_label("If it doesn't match Redump");
+    h.get_by_label_contains("Try to fix it by itself");
+    app_mut(&mut h).close_tray();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    until(&mut h, "Check to re-read the bad sectors", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Re-reading 140 bad sectors");
+    let i = app(&h).sel;
+    app_mut(&mut h).set_view(i, (0.9, egui::vec2(-560.0, 40.0)));
+    h.run_steps(3);
+    h.get_by_label_contains("Check, Re-reading 140 bad sectors");
+    shot(&mut h, "games-check-fixing");
+    open_id(&mut h, "g_check");
+    h.get_by_label_contains("Re-reading 140 bad sectors: each is read again from the disc, on its own");
+    shot(&mut h, "step-check-fixing");
+    until(&mut h, "the second rip", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Rip 2 of 4");
+    h.run_steps(3);
+    h.get_by_label_contains("Rip 2 of 4: the whole disc is read again");
+    h.get_by_label("Bad sectors read again");
+    h.get_by_label("139 sectors read right and put in place");
+    h.get_by_label("1 sector still bad");
+    shot(&mut h, "step-check-ripping-again");
+    until(&mut h, "it to verify", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Verified");
+    open_id(&mut h, "g_check");
+    h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now: 139 sectors read again from the disc, then combined with 1 more rip.");
+    h.get_by_label_contains("Verified: Lantern Keep (Europe) (Disc 1), 139 sectors re-read, 1 from a second rip");
+    shot(&mut h, "step-check-fixed-verified");
 }
 
 #[test]

@@ -354,7 +354,8 @@ stay as they are.
 ## Game and data discs
 
 The same rule for an image of a game or data disc: Check
-(`data.rs`), its hold (`game.rs`), and combining rips (`combine.rs`).
+(`data.rs`), its hold (`game.rs`), fixing bad sectors (`fix.rs`), and
+combining rips (`combine.rs`).
 
 - **Verified only on a Redump match.** A dump is called verified only
   when its files match an entry in Redump's list. Nothing else counts:
@@ -369,6 +370,46 @@ The same rule for an image of a game or data disc: Check
   *Re-read bad parts* (redumper's `refine`) only goes back to sectors
   the drive reported, so it can't help with these, and isn't offered
   when the drive reported nothing.
+- **Fix bad sectors.** For a CD image redumper made, Check can read the
+  sectors that fail their own check again, one at a time (`fix.rs`). It
+  finds them by scanning the image's data tracks: a header address other
+  than the sector's own (LBA + 150, as BCD minutes, seconds and frames),
+  no sync, or an EDC (and, where it has one, ECC) that doesn't fit. Each
+  is read with MMC READ CD through SG_IO: `BE 00 <LBA> 00 00 01 F8 00 00`,
+  that is any sector type (a PlayStation track mixes Mode 2 form 1 and
+  form 2), one sector, and flag byte `F8`: sync, every header, user data,
+  EDC and ECC, 2,352 bytes as on the disc, no C2 bits, no subchannel. Up
+  to 10 tries each (a setting), and before every try after the first the
+  drive's cache is cleared by reading 2,400 sectors 10,000 away, as for
+  audio. A copy is put in place only if it passes its own checks; a form
+  2 sector with no EDC, which only its address can check, needs two
+  reads that agree. Each is written at its own offset in its own track
+  file, `(LBA - track start) × 2,352`. A sector that never comes back
+  passing stays as it is, and one that comes back the same on every
+  read is said to be so: it may be pressed that way.
+- **Checked against the real drive first.** On the drive that misread
+  (a MATSHITA BD-MLT UJ240AS), sectors read this way were byte for byte
+  the same as redumper's `.bin` of the same disc, which redumper builds
+  from the scrambled stream lined up by the data's sync: 176 of 176,
+  including every one of the 170 sectors the first rip had wrong, each
+  right on its first read. The fix then made both of two separate rips
+  match Redump's checksums exactly, in about 12 s each. A drive's data
+  read goes through its own error correction, so a sector pressed bad on
+  purpose normally comes back with an error or the same bad bytes, and
+  is left alone; only Redump's checksums can show it went right. To
+  check another drive: `DRT_BIN=<a .bin of the disc in the drive> cargo
+  test -p drt-steps real_read_cd -- --ignored --nocapture`, then
+  `DRT_CUE=<a copy of a rip's .cue> DRT_WANT=<Redump's SHA-1> cargo test
+  --release -p drt-steps real_fix -- --ignored --nocapture`. Both only
+  read from the drive, and never open the tray.
+- **The same disc, and the original kept.** Before changing anything, a
+  few sectors that pass their check in the image are read again; one
+  that comes back different and also passes its checks means another
+  disc is in the drive, and nothing is changed. The files a fix changes
+  are copied, as they were, to `before-fix` in the run's working folder
+  first (and a file shared by hard link with a kept rip is given its
+  own copy, so the rip isn't changed with it). The copy goes once Redump
+  verifies the result.
 - **Rip again and combine.** For a CD image redumper made, Check can rip
   the whole disc again with Rip's settings, keeping every rip in the
   run's working folder (`rip-1`, `rip-2`, …), and combine them sector by
@@ -394,6 +435,20 @@ The same rule for an image of a game or data disc: Check
 - **No match.** A combination that doesn't match stays held, saying how
   many sectors are still bad. It can be ripped and combined again, kept
   as the best combination (not verified), or skipped.
+- **If it doesn't match Redump.** Check's setting has two choices. *Try
+  to fix it by itself* (the first): Fix bad sectors; if that doesn't
+  make it match, rip again and combine, up to 3 extra rips (a setting),
+  combining after each and stopping at a match; if it still doesn't
+  match, it stops and asks, with the choices above. *Ask me*: it asks
+  straight away, offering Fix bad sectors among them. Either way, a copy
+  that doesn't match is never kept or filed without you. A fixed rip is
+  the first rip when combining, so a result reads *211 sectors re-read,
+  1 from a second rip*. For a disc Redump doesn't have, it only fixes
+  sectors that fail their own check, then holds the copy, labelled not
+  verified: no Redump entry; with nothing to stop on, it never rips
+  again by itself. The log lists each bad sector and why, how many tries
+  each took, which were put in place, which rip each combined sector
+  came from, and every checksum compared.
 - **Only where it can work.** Combining is offered only for a CD image
   (cue sheet and raw sectors) that redumper made. An ISO has no checks
   of its own per sector, and a DVD or Blu-ray drive reports what it

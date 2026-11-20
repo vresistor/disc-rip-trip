@@ -196,6 +196,9 @@ pub struct Tally {
     pub still_bad: Vec<i64>,
     /// Each rip's sectors that fail their check.
     pub bad_in: Vec<u64>,
+    /// The sectors not taken from the first rip, and which copy (by its
+    /// place among those combined) each was taken from.
+    pub from: Vec<(i64, usize)>,
 }
 
 /// Fills `buf` from `r` as far as it goes.
@@ -263,6 +266,7 @@ pub fn combine_track<R: Read>(copies: &mut [R], start: i64, data: bool, out: &mu
                 }
                 if secs[pick] != secs[0] {
                     tally.taken += 1;
+                    tally.from.push((lba, pick));
                 }
                 pick
             };
@@ -409,7 +413,7 @@ pub fn combine(rips: &[PathBuf], out: &Path, mut progress: impl FnMut(f32), stop
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A sector as a disc holds it at `lba`: `mode` 1, 2 (form 1) or 22

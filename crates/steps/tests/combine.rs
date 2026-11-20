@@ -1,9 +1,14 @@
-//! The real Check ripping a held dump again and combining the rips, with a
-//! stand-in for the rip (no drive): each rip is a made-up one-track
-//! PlayStation image whose sectors carry real addresses and EDCs, wrong
-//! in different places. A match with Redump after three rips goes on
-//! verified; rips that never match are kept as the best combination, not
-//! verified; and a disc Redump doesn't have is never called verified.
+//! The real Check fixing a held dump's bad sectors and ripping it again
+//! and combining the rips, with stand-ins for the rip and the drive: each
+//! rip is a made-up one-track PlayStation image whose sectors carry real
+//! addresses and EDCs, wrong in different places, and the drive misreads
+//! a sector a few times before it reads it right, or never does.
+//!
+//! Asked first: a match with Redump after three rips goes on verified;
+//! rips that never match are kept as the best combination, not verified;
+//! and a disc Redump doesn't have is never called verified. By itself:
+//! fixed by re-reads alone; fixed, then a second rip; never a match, so
+//! it asks; and a disc Redump doesn't have, fixed and still held.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -11,7 +16,8 @@ use drt_engine::recipe::chain;
 use drt_engine::{Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, Subject};
 use drt_steps::real::combine::{edc, msf, SECTOR};
 use drt_steps::real::data::{self, DUMP};
-use drt_steps::real::game::RipFn;
+use drt_steps::real::fix::Source;
+use drt_steps::real::game::{RipFn, SourceFn};
 use drt_steps::real::mismatch::Mismatch;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -100,9 +106,56 @@ fn stand_in(rips: Vec<Vec<u8>>) -> RipFn {
     })
 }
 
+/// A stand-in drive with the disc in: sector `lba` reads wrong (slipped or
+/// a byte off, as a seeded random draw decides) the first `misreads` of
+/// its reads, then right; `never` sectors always read a byte off.
+struct Flaky {
+    misreads: u32,
+    never: Vec<i64>,
+    reads: std::collections::HashMap<i64, u32>,
+    seed: u64,
+}
+
+impl Source for Flaky {
+    fn read(&mut self, lba: i64) -> std::io::Result<Vec<u8>> {
+        let n = self.reads.entry(lba).or_insert(0);
+        *n += 1;
+        if self.never.contains(&lba) {
+            return Ok(rip(&[], &[lba])[lba as usize * SECTOR..][..SECTOR].to_vec());
+        }
+        if *n <= self.misreads {
+            self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            return Ok(match self.seed >> 62 {
+                0 => sector(lba - 1),
+                1 => return Err(std::io::Error::other("the drive refused the command (sense 3/11/05)")),
+                _ => {
+                    let mut s = sector(lba);
+                    s[100 + (self.seed >> 40) as usize % 2000] ^= 0x08;
+                    s
+                }
+            });
+        }
+        Ok(sector(lba))
+    }
+
+    fn clear_cache(&mut self, _near: i64) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn drive(misreads: u32, never: &[i64]) -> SourceFn {
+    let never = never.to_vec();
+    Arc::new(move |_dump: &Item| Ok(Box::new(Flaky { misreads, never: never.clone(), reads: Default::default(), seed: 7 }) as Box<dyn Source>))
+}
+
 /// A run of the real Check, Redump and Choose on the first rip, Redump's
-/// list holding the disc when `listed`.
+/// list holding the disc when `listed`, Check asking first.
 fn start(base: &Path, first: &[u8], later: Vec<Vec<u8>>, listed: bool) -> (Run, Engine) {
+    start_with(base, first, later, listed, "ask", drive(0, &[]))
+}
+
+/// The same, Check doing `if_no_match` with a stand-in drive.
+fn start_with(base: &Path, first: &[u8], later: Vec<Vec<u8>>, listed: bool, if_no_match: &str, source: SourceFn) -> (Run, Engine) {
     let _ = std::fs::remove_dir_all(base);
     let main = write_rip(&base.join("dump"), first);
     let good = rip(&[], &[]);
@@ -127,11 +180,13 @@ fn start(base: &Path, first: &[u8], later: Vec<Vec<u8>>, listed: bool) -> (Run, 
     std::fs::write(base.join("cache/redump/psx.dat"), dat).unwrap();
     let mut reg = drt_steps::real();
     reg.add(Dumped { main });
-    reg.add(data::Check { rip: stand_in(later) });
+    reg.add(data::Check { rip: stand_in(later), source });
     let mut e = Engine::new(reg);
     e.work_root = base.join("runs");
-    let recipe =
-        Recipe { name: "Fixture combine".into(), root: chain([Node::step("src", "dumped"), Node::step("check", "check"), Node::step("redump", "redump"), Node::step("choose", "game-choose")]) };
+    let recipe = Recipe {
+        name: "Fixture combine".into(),
+        root: chain([Node::step("src", "dumped"), Node::step("check", "check").with("if_no_match", if_no_match), Node::step("redump", "redump"), Node::step("choose", "game-choose")]),
+    };
     drt_engine::check(&recipe.root, &e.registry).unwrap();
     (e.start(&recipe).unwrap(), e)
 }
@@ -187,7 +242,7 @@ async fn three_rips_combined_match_redump_and_go_on_verified() {
     let first = rip(&[3, 7], &[]);
     let (run, _e) = start(&base, &first, vec![rip(&[], &[3]), rip(&[9], &[])], true);
     let s = held(&run, 0).await;
-    assert_eq!(labels(&s), ["Rip again and combine", "Keep it anyway", "Skip this disc"]);
+    assert_eq!(labels(&s), ["Fix bad sectors", "Rip again and combine", "Keep it anyway", "Skip this disc"]);
     retry(&run, "combine").await;
     let s = held(&run, 2).await;
     let m: Mismatch = serde_json::from_value(s.steps["check"].record.report.clone().unwrap()).unwrap();
@@ -238,7 +293,7 @@ async fn a_game_redump_doesnt_have_is_never_called_verified() {
     let (run, _e) = start(&base, &rip(&[4], &[]), vec![rip(&[], &[])], false);
     let s = held(&run, 0).await;
     assert_eq!(s.steps["check"].status, "Not verified");
-    assert_eq!(labels(&s), ["Rip again and combine", "Keep it anyway", "Skip this disc"]);
+    assert_eq!(labels(&s), ["Fix bad sectors", "Rip again and combine", "Keep it anyway", "Skip this disc"]);
     let m: Mismatch = serde_json::from_value(s.steps["check"].record.report.clone().unwrap()).unwrap();
     assert!(m.reading[0].starts_with("Redump has no copy of this disc to compare with"), "{:?}", m.reading);
     retry(&run, "combine").await;
@@ -253,5 +308,123 @@ async fn a_game_redump_doesnt_have_is_never_called_verified() {
     assert_eq!(item.note, "kept the best combination, not verified");
     assert!(!item.verified);
     assert_eq!(std::fs::read(base.join("dump/G.bin")).unwrap(), rip(&[], &[]));
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+fn report(s: &Snapshot) -> Mismatch {
+    serde_json::from_value(s.steps["check"].record.report.clone().unwrap()).unwrap()
+}
+
+/// Waits till Check holds the dump, whatever it's done.
+async fn asks(run: &Run) -> Snapshot {
+    let mut rx = run.snapshot.clone();
+    loop {
+        let s = rx.borrow_and_update().clone();
+        if s.steps["check"].items.first().is_some_and(|i| i.state == ItemState::Bad) {
+            return s;
+        }
+        assert!(!s.finished, "finished without holding: {:?}", s.steps["check"].items);
+        rx.changed().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn by_itself_bad_sectors_read_again_make_it_match() {
+    let base = base("fix-by-itself");
+    // Rip 1 slipped at 3 and 7, a byte off at 9; the drive misreads each
+    // a few times, at random, before it reads it right.
+    let first = rip(&[3, 7], &[9]);
+    let (run, _e) = start_with(&base, &first, vec![], true, "fix", drive(3, &[]));
+    let s = finish(run).await;
+    let check = &s.steps["check"];
+    assert_eq!(check.items[0].note, "Verified: Lantern Keep (Europe) (Disc 1), 3 sectors re-read");
+    assert!(check.items[0].verified);
+    assert_eq!(check.status, "Verified");
+    assert_eq!(std::fs::read(base.join("dump/G.bin")).unwrap(), rip(&[], &[]), "fixed in place");
+    let m = report(&s);
+    let f = m.fixed.clone().unwrap();
+    assert_eq!((f.bad, f.fixed, f.left, f.verified), (3, 3, 0, true));
+    assert!(m.combined.is_none(), "no rip needed");
+    assert!(
+        m.reading[0].starts_with("Fix bad sectors read 3 sectors again, up to 10 times each, and put the 3 copies that passed their own check in place. It now matches Redump's copy."),
+        "{:?}",
+        m.reading
+    );
+    let log = check.record.log.iter().map(|l| l.line.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(log.contains("fix bad sectors: 3 of 12 data sectors fail their own check: 3 (wrong address), 7 (wrong address), 9 (fails its checksum)"), "{log}");
+    assert!(log.contains("read right on a later try, with the drive's cache cleared first"), "{log}");
+    assert!(log.contains(": all four the same"), "{log}");
+    assert_eq!(s.steps["redump"].status, "Not needed");
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn by_itself_a_sector_the_drive_never_reads_right_comes_from_a_second_rip() {
+    let base = base("fix-then-rip");
+    // The drive reads sector 5 a byte off every time; rip 2 has it right.
+    let first = rip(&[3], &[5]);
+    let (run, _e) = start_with(&base, &first, vec![rip(&[8], &[])], true, "fix", drive(1, &[5]));
+    let s = finish(run).await;
+    let check = &s.steps["check"];
+    assert_eq!(check.items[0].note, "Verified: Lantern Keep (Europe) (Disc 1), 1 sector re-read, 1 from a second rip");
+    assert!(check.items[0].verified);
+    assert_eq!(std::fs::read(base.join("dump/G.bin")).unwrap(), rip(&[], &[]));
+    let m = report(&s);
+    assert_eq!(m.fixed.as_ref().map(|f| (f.fixed, f.left)), Some((1, 1)));
+    assert_eq!(m.combined.as_ref().map(|c| (c.rips.len(), c.verified)), Some((2, true)));
+    let log = check.record.log.iter().map(|l| l.line.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(log.contains("sector 5: no good copy in 10 of 10 tries: the same as the image's on every read"), "{log}");
+    assert!(log.contains("combined: from rip 2: 1 sector (5)"), "{log}");
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn by_itself_what_never_matches_is_held_for_you_after_three_more_rips() {
+    let base = base("fix-never");
+    // Sector 5 is a byte off in every rip and on every read.
+    let bad = rip(&[2], &[5]);
+    let (run, _e) = start_with(&base, &bad, vec![rip(&[], &[5]), rip(&[4], &[5]), rip(&[], &[5])], true, "fix", drive(0, &[5]));
+    let s = asks(&run).await;
+    let check = &s.steps["check"];
+    assert_eq!(check.items[0].note, "Tried by itself (1 sector re-read, 3 more rips); still doesn't match Redump");
+    assert_eq!(check.status, "Doesn't match Redump");
+    let m = report(&s);
+    assert_eq!(m.combined.as_ref().map(|c| c.rips.len()), Some(4), "the first and three more");
+    assert_eq!(labels(&s), ["Rip again and combine again", "Keep the best combination (not verified)", "Skip this disc"]);
+    assert!(run.work().join("rip-4/G.bin").is_file() && !run.work().join("rip-5").exists());
+    retry(&run, "keep").await;
+    let s = finish(run).await;
+    let item = &s.steps["check"].items[0];
+    assert!(item.state == ItemState::Ok && !item.verified, "kept only because you said");
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn by_itself_a_game_redump_doesnt_have_is_fixed_and_still_held() {
+    let base = base("fix-unlisted");
+    let (run, _e) = start_with(&base, &rip(&[4], &[]), vec![rip(&[], &[])], false, "fix", drive(0, &[]));
+    let s = asks(&run).await;
+    let check = &s.steps["check"];
+    assert_eq!(check.items[0].note, "Tried by itself (1 sector re-read); not verified: no Redump entry");
+    assert_eq!(check.status, "Not verified");
+    assert!(!run.work().join("rip-2").exists(), "nothing to stop on, so no rips by itself");
+    let m = report(&s);
+    assert!(m.reading[0].contains("Every sector passes its own check now, but Redump has no copy to compare with, so it can't be called verified."), "{:?}", m.reading);
+    assert_eq!(std::fs::read(base.join("dump/G.bin")).unwrap(), rip(&[], &[]));
+    retry(&run, "leave_out").await;
+    let s = finish(run).await;
+    assert!(!s.steps["check"].items[0].verified);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asked_first_fix_bad_sectors_is_a_choice() {
+    let base = base("fix-asked");
+    let (run, _e) = start(&base, &rip(&[3, 7], &[]), vec![], true);
+    let s = held(&run, 0).await;
+    assert_eq!(labels(&s), ["Fix bad sectors", "Rip again and combine", "Keep it anyway", "Skip this disc"]);
+    retry(&run, "fix").await;
+    let s = finish(run).await;
+    assert_eq!(s.steps["check"].items[0].note, "Verified: Lantern Keep (Europe) (Disc 1), 2 sectors re-read");
     std::fs::remove_dir_all(base).unwrap();
 }

@@ -61,10 +61,26 @@ pub fn check_info() -> StepInfo {
         .gives(&["hashes", "name"])
         .from("compare with Redump's known-good copies")
         .param(ParamSpec::new("systems", "Compare with Redump's list for", ParamKind::Choice(redump::CHOICES)).default(redump::ALL).on_card("Look in").labels(redump::LABELS))
+        // A game Redump has whose copy doesn't match: fix bad sectors, then
+        // rip again and combine, by itself; or ask first.
+        .param(
+            ParamSpec::new("if_no_match", "If it doesn't match Redump", ParamKind::Choice(super::game::IF_NO_MATCH))
+                .default(super::game::BY_ITSELF)
+                .labels(super::game::IF_NO_MATCH_LABELS)
+                .help("By itself, it reads bad sectors again, then rips again, and asks only if that doesn't make it match."),
+        )
+        .param(ParamSpec::new("fix_tries", "Tries for each bad sector", ParamKind::Range { min: 1, max: 50 }).default(super::fix::TRIES as i64).section("Advanced"))
+        .param(
+            ParamSpec::new("extra_rips", "Extra rips at most", ParamKind::Range { min: 0, max: 10 })
+                .default(super::game::EXTRA_RIPS as i64)
+                .section("Advanced")
+                .when("if_no_match", &[super::game::BY_ITSELF]),
+        )
         // For a game whose serial Redump knows but whose hash it doesn't,
         // or a dump whose own sectors say it was read wrong. Each dump it
         // holds is offered only those that can help it.
         .retry("refine", "Re-read bad parts", "")
+        .retry("fix", "Fix bad sectors", "")
         .retry("combine", "Rip again and combine", "")
         .retry("keep", "Keep it anyway", "")
         .retry("leave_out", "Skip this disc", "")
@@ -444,11 +460,12 @@ impl Step for Image {
 /// Check, with the rip it uses to read a held dump again.
 pub struct Check {
     pub rip: super::game::RipFn,
+    pub source: super::game::SourceFn,
 }
 
 impl Default for Check {
     fn default() -> Self {
-        Check { rip: super::game::redumper_rip() }
+        Check { rip: super::game::redumper_rip(), source: super::game::drive_source() }
     }
 }
 
@@ -567,7 +584,7 @@ impl Step for Check {
             cx.status(status, detail);
             // A game Redump has under its serial, but not with this hash: suspect, held for you.
             let dump = if found.is_none() {
-                let reread = super::game::Disc { rip: self.rip.clone() };
+                let reread = super::game::Disc { rip: self.rip.clone(), source: self.source.clone() };
                 super::game::hold_if_suspect(&cx, dump, &roms, looked > 0 && failed.is_empty(), &reread).await?
             } else {
                 Some(dump)

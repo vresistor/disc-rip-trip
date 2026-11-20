@@ -10,6 +10,7 @@ pub mod cyanrip;
 pub mod data;
 pub mod discogs;
 pub mod encode;
+pub mod fix;
 pub mod fixtags;
 pub mod flush;
 pub mod game;

@@ -6,7 +6,7 @@
 //! turn, so a two-disc game is two runs on one engine, as at the drive.
 
 use crate::real::game::{self, Identity};
-use crate::real::mismatch::{Combination, RipRead};
+use crate::real::mismatch::{Combination, Fixing, RipRead};
 use crate::real::{data, media, redump};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -336,8 +336,8 @@ pub async fn check(cx: &Cx, dump: &Item, outlet: &Outlet) -> Result<bool> {
             let now: Vec<redump::Rom> = roms.iter().map(|r| redump::Rom { sha1: d.context().get(Subject::Disc, &format!("sha1 {}", r.name)).unwrap_or(&r.sha1).to_owned(), ..r.clone() }).collect();
             crate::real::mismatch::explain(&serial, &cat.by_serial(&serial), &now, log.as_deref())
         };
-        let reread = Reread { rips: Mutex::new(1), log: log.is_some(), roms: roms.clone(), last: Mutex::default() };
-        game::hold(cx, dump, &serial, &reread, Some(&cat), explain).await?
+        let reread = Reread { rips: Mutex::new(1), log: log.is_some(), roms: roms.clone(), last: Mutex::default(), fixed: Mutex::new(false) };
+        game::hold(cx, dump, &serial, &reread, Some(&cat), game::Policy::of(cx), explain).await?
     } else {
         Some(dump)
     };
@@ -347,10 +347,13 @@ pub async fn check(cx: &Cx, dump: &Item, outlet: &Outlet) -> Result<bool> {
     Ok(true)
 }
 
-/// A simulated disc read again: a re-read changes nothing; each rip again
-/// is combined with those before, and the third puts every sector right,
-/// so the combination is Redump's copy.
+/// A simulated disc read again: a re-read changes nothing; fixing bad
+/// sectors puts all but one right; each rip again is combined with those
+/// before, and the third (or, after a fix, the second) puts every sector
+/// right, so the combination is Redump's copy.
 struct Reread {
+    /// Whether bad sectors were fixed.
+    fixed: Mutex<bool>,
     rips: Mutex<usize>,
     /// Only a read with a log (a CD image redumper made) can be combined.
     log: bool,
@@ -373,22 +376,46 @@ impl game::Reread for Reread {
         self.log
     }
 
+    async fn fix(&self, cx: &Cx, dump: &Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)> {
+        let bad = RIP_BAD[0];
+        cx.item(dump, ItemState::Busy, "looking for bad sectors");
+        cx.sleep(600).await?;
+        cx.item(dump, ItemState::Busy, format!("re-reading {bad} bad sectors"));
+        cx.status(format!("Re-reading {bad} bad sectors"), "");
+        cx.sleep(1500).await?;
+        *self.fixed.lock().unwrap() = true;
+        let f = Fixing { bad, fixed: bad - 1, left: 1, left_at: vec![98_000], same: 0, tries, other_disc: false, verified: false };
+        cx.log(format!("fix bad sectors: {bad} fail their own check; {} read right and put in place; sector 98000: no good copy in {tries} tries", bad - 1));
+        // Still not Redump's: one sector left.
+        let roms = self.roms.iter().map(|r| if r.is_data() { redump::Rom { sha1: format!("f1ced000{}", &r.sha1[8..]), ..r.clone() } } else { r.clone() }).collect();
+        Ok((f, roms))
+    }
+
+    async fn settled(&self, _: &Cx, _: &Item) -> Result<()> {
+        Ok(())
+    }
+
     async fn combine(&self, cx: &Cx, dump: &Item) -> Result<(Combination, Vec<redump::Rom>)> {
         let n = {
             let mut r = self.rips.lock().unwrap();
             *r += 1;
             *r
         };
-        cx.item(dump, ItemState::Busy, format!("ripping again, rip {n}"));
         cx.sleep(1500).await?;
         cx.item(dump, ItemState::Busy, format!("combining {n} rips"));
         cx.sleep(500).await?;
-        let right = n >= 3;
+        let fixed = *self.fixed.lock().unwrap();
+        let right = n >= 3 || (fixed && n >= 2);
         let c = Combination {
-            rips: (1..=n).map(|k| RipRead { n: k, bad: RIP_BAD[(k - 1) % RIP_BAD.len()] }).collect(),
+            // After a fix, the first rip is the fixed one.
+            rips: (1..=n).map(|k| RipRead { n: k, bad: if k == 1 && fixed { 1 } else { RIP_BAD[(k - 1) % RIP_BAD.len()] } }).collect(),
             sectors: 200_000,
             differing: if right { 262 } else { 248 },
-            taken: if right { 140 } else { 131 },
+            taken: match (right, fixed) {
+                (true, true) => 1,
+                (true, false) => 140,
+                (false, _) => 131,
+            },
             no_good: if right { 0 } else { 4 },
             disagree: 0,
             still_bad: if right { 0 } else { 4 },
