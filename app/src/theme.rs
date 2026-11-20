@@ -135,7 +135,8 @@ impl Pal {
             // Deciding and checking.
             "choose" | "game-choose" | "choose-video" | "hold" | "check" => self.c_chk,
             // Making files.
-            "flac" | "mp3" | "opus" | "aac" | "vorbis" | "alac" | "wavpack" | "wav" | "replaygain" | "cue" | "lyrics-file" | "chd" | "keep" | "libcrypt" | "m3u" | "transcode" | "remux" => self.c_make,
+            "flac" | "mp3" | "opus" | "aac" | "vorbis" | "alac" | "wavpack" | "wav" | "replaygain" | "cue" | "lyrics-file" | "artwork-files" | "chd" | "keep" | "libcrypt" | "m3u" | "transcode"
+            | "remux" => self.c_make,
             // Putting them somewhere, and telling you.
             "folder" | "library" | "tell" => self.c_put,
             _ => return None,
@@ -337,6 +338,9 @@ fn glyph(step: &str, at: Pos2, size: f32, col: Color32) -> Option<Vec<Shape>> {
         "musicbrainz" | "discogs" | "gnudb" => vec![circ(11.0, 11.0, 7.0), l(&[(20.5, 20.5), (16.0, 16.0)])],
         "cd-text" => vec![l(&[(4.0, 7.0), (4.0, 4.0), (20.0, 4.0), (20.0, 7.0)]), l(&[(12.0, 4.0), (12.0, 20.0)]), l(&[(9.0, 20.0), (15.0, 20.0)])],
         "cover-art" => vec![rect(3.0, 3.0, 18.0, 18.0, 2.0), circ(9.0, 9.0, 2.0), l(&[(21.0, 15.0), (16.0, 10.0), (5.0, 21.0)])],
+        "artwork-files" => {
+            vec![rect(2.0, 7.0, 15.0, 15.0, 2.0), circ(7.0, 12.0, 1.6), l(&[(17.0, 18.0), (13.0, 14.0), (4.0, 22.0)]), l(&[(7.0, 4.0), (8.0, 2.5), (21.5, 2.5), (21.5, 16.0), (20.0, 17.0)])]
+        }
         "lyrics" | "lyrics-file" => vec![l(&[(9.0, 18.0), (9.0, 5.0), (21.0, 3.0), (21.0, 16.0)]), circ(6.0, 18.0, 3.0), circ(18.0, 16.0, 3.0)],
         "choose" => vec![l(&[(3.0, 6.0), (14.0, 6.0)]), l(&[(3.0, 12.0), (14.0, 12.0)]), l(&[(3.0, 18.0), (10.0, 18.0)]), l(&[(16.0, 16.0), (18.0, 18.0), (22.0, 14.0)])],
         "rip" => vec![l(&[(12.0, 3.0), (12.0, 14.0)]), l(&[(7.0, 10.0), (12.0, 15.0), (17.0, 10.0)]), l(&[(4.0, 17.0), (4.0, 21.0), (20.0, 21.0), (20.0, 17.0)])],

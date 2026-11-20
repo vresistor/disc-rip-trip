@@ -1342,6 +1342,152 @@ fn every_kind_of_step_sidebar() {
     shot(&mut h, "step-folder");
 }
 
+/// Cover art whose front came from another edition of the album, as the
+/// real step says it.
+struct TestEditionCover {
+    inner: std::sync::Arc<dyn drt_engine::Step>,
+    png: PathBuf,
+}
+
+#[async_trait::async_trait]
+impl drt_engine::Step for TestEditionCover {
+    fn info(&self) -> drt_engine::StepInfo {
+        self.inner.info()
+    }
+    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+        use drt_steps::real::artwork;
+        while let Some(mut disc) = inlet.recv().await {
+            let e = artwork::Elsewhere {
+                edition: artwork::Edition { id: "887fdba3-6599-4c00-80a5-ee30bcdde469".into(), ..Default::default() },
+                size: (2813, 2805),
+                words: "Polydor, Europe 1995".into(),
+                measured: 4,
+            };
+            let c = disc.context_mut();
+            c.add(drt_engine::Subject::Disc, "cover", self.png.display().to_string(), "Cover Art Archive");
+            c.add(drt_engine::Subject::Disc, artwork::COVER_RELEASE, e.edition.id.clone(), "Cover Art Archive");
+            c.add(drt_engine::Subject::Disc, artwork::COVER_FROM, e.words.clone(), "Cover Art Archive");
+            cx.made(&self.png);
+            let (status, detail) = drt_steps::real::cover_says(Some((1200, 1197)), Some(&e));
+            cx.status(status, detail);
+            outlet.send(disc).await;
+        }
+        Ok(())
+    }
+}
+
+/// A front from another edition, said on Cover art's card; and every scan
+/// saved beside the tracks, in Artwork files' sidebar.
+#[test]
+fn a_cover_from_another_edition_and_every_scan() {
+    let e = env();
+    let png = e.dir.path().join("cover.png");
+    write_cover(&png);
+    let mut reg = simulated(None);
+    let inner = reg.get("cover-art").unwrap().0;
+    reg.add(TestEditionCover { inner, png });
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
+    h.get_by_label_contains("Archive everything").click();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    let start = Instant::now();
+    while !app(&h).m.snapshot(1).finished {
+        assert!(start.elapsed() < Duration::from_secs(30), "the archive never finished");
+        let s = app(&h).m.snapshot(1);
+        if let Some((step, _)) = &s.question {
+            app(&h).m.send(1, drt_engine::Command::Answer { step: step.clone(), answer: drt_engine::Answer::Pick(0) });
+        }
+        for (id, v) in &s.steps {
+            if v.state == StepState::Hold && v.detail == "All here" {
+                app(&h).m.send(1, drt_engine::Command::Approve { step: id.clone() });
+            }
+        }
+        h.step();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    h.run_steps(5);
+    let s = snap(&h);
+    assert_eq!((s.steps["a_art"].status.as_str(), s.steps["a_art"].detail.as_str()), ("1200 × 1197", "From another edition"));
+    assert_eq!((s.steps["a_scans"].status.as_str(), s.steps["a_scans"].detail.as_str()), ("6 pictures", "From this release"));
+    let all = cards(&mut h);
+    let art = &all.iter().find(|(x, _)| x == "a_art").unwrap().1;
+    assert_eq!(art.detail, "From another edition", "whole, not cut short");
+    open_tile(&mut h, "Cover art,");
+    until(&mut h, "the cover", |a| a.covers.values().any(|c| matches!(c, drt_app::tray::Cover::Ready(..))));
+    shot(&mut h, "step-cover-edition");
+    open_tile(&mut h, "Artwork files,");
+    h.get_by_label_contains("Booklet 01.jpg");
+    shot(&mut h, "step-artwork-files");
+}
+
+/// Cover art set to let you pick: three fronts to choose from, as the real
+/// step puts them.
+struct TestPickCover {
+    inner: std::sync::Arc<dyn drt_engine::Step>,
+    pngs: Vec<PathBuf>,
+}
+
+#[async_trait::async_trait]
+impl drt_engine::Step for TestPickCover {
+    fn info(&self) -> drt_engine::StepInfo {
+        self.inner.info()
+    }
+    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+        use drt_steps::real::artwork::{cover_question, Edition, Front};
+        while let Some(mut disc) = inlet.recv().await {
+            let front = |words: &str, size, own| Front { edition: Edition::default(), size, words: words.into(), own };
+            let fronts = [front("This release", (491, 500), true), front("Polydor, Europe 1995", (2813, 2805), false), front("A&M Records 31452 3787 2, US 1995", (1902, 1858), false)];
+            let thumbs: Vec<Option<PathBuf>> = self.pngs.iter().cloned().map(Some).collect();
+            let answer = cx.ask(cover_question(&fronts, &thumbs, 1)).await?;
+            let k = match answer {
+                drt_engine::Answer::Pick(k) => k,
+                _ => 1,
+            };
+            disc.context_mut().add(drt_engine::Subject::Disc, "cover", self.pngs[k].display().to_string(), "Cover Art Archive");
+            cx.made(&self.pngs[k]);
+            cx.status(format!("picked {}", fronts[k].words), "");
+            outlet.send(disc).await;
+        }
+        Ok(())
+    }
+}
+
+/// A cover in other colours, for a second and third front.
+fn write_cover_in(path: &Path, a: [u8; 3], b: [u8; 3]) {
+    let img = image::RgbaImage::from_fn(240, 240, |x, y| if (x / 40 + y / 40) % 2 == 0 { image::Rgba([a[0], a[1], a[2], 255]) } else { image::Rgba([b[0], b[1], b[2], 255]) });
+    img.save(path).unwrap();
+}
+
+/// Let me pick the cover: the fronts as pictures side by side, the best
+/// picked to start with; another is picked by clicking it.
+#[test]
+fn a_cover_is_picked_from_pictures() {
+    let e = env();
+    let pngs: Vec<PathBuf> = (0..3).map(|k| e.dir.path().join(format!("front-{k}.png"))).collect();
+    write_cover(&pngs[0]);
+    write_cover_in(&pngs[1], [0x2f, 0x5d, 0xb8], [0xf2, 0xef, 0xe9]);
+    write_cover_in(&pngs[2], [0x18, 0x20, 0x2b], [0xe0, 0xa8, 0x30]);
+    let mut reg = simulated(None);
+    let inner = reg.get("cover-art").unwrap().0;
+    reg.add(TestPickCover { inner, pngs });
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
+    click(&mut h, "Start");
+    until(&mut h, "Which album?", |a| a.m.snapshot(0).question.as_ref().is_some_and(|(s, _)| s == "choose"));
+    app(&h).m.send(0, drt_engine::Command::Answer { step: "choose".into(), answer: drt_engine::Answer::Pick(0) });
+    until(&mut h, "Which cover?", |a| a.m.snapshot(0).question.as_ref().is_some_and(|(_, q)| q.prompt == "Which cover?"));
+    let step = snap(&h).question.unwrap().0;
+    app_mut(&mut h).open(Tray::Question { step: step.clone() });
+    h.run_steps(3);
+    until(&mut h, "the fronts", |a| a.covers.values().filter(|c| matches!(c, drt_app::tray::Cover::Ready(..))).count() >= 3);
+    shot(&mut h, "question-cover");
+    // The biggest is picked to start with.
+    assert!(h.get_by_label("Polydor, Europe 1995, 2813 × 2805").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True));
+    click(&mut h, "A&M Records 31452 3787 2, US 1995, 1902 × 1858");
+    assert!(h.get_by_label("A&M Records 31452 3787 2, US 1995, 1902 × 1858").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True));
+    click(&mut h, "Use this cover");
+    until(&mut h, "the cover picked", |a| a.m.snapshot(0).steps[&step].status == "picked A&M Records 31452 3787 2, US 1995");
+}
+
 /// In a narrow window nothing in the sidebar runs off its sides.
 #[test]
 fn the_sidebar_keeps_inside_a_narrow_window() {

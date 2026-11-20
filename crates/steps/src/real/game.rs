@@ -663,7 +663,7 @@ impl Step for Choose {
                 why = "its hash is Redump's";
                 Some(cands[0].clone())
             } else {
-                let options = cands.iter().map(|c| Choice { label: c.title.clone(), detail: c.detail.clone(), destructive: false }).collect();
+                let options = cands.iter().map(|c| Choice { label: c.title.clone(), detail: c.detail.clone(), destructive: false, picture: None }).collect();
                 let guess = cands.first().map(|c| c.title.clone()).unwrap_or_else(|| data::dump_fields(dump.context()).name);
                 let details = Some(BTreeMap::from([("name".to_owned(), guess)]));
                 let prompt = if cands.is_empty() { "What is this game?" } else { "Which game? None matched exactly." };

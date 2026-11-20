@@ -23,6 +23,7 @@ const AUDIO_ONLY: &[&str] = &[
     "rip",
     "cue",
     "lyrics-file",
+    "artwork-files",
     "replaygain",
     "flac",
     "mp3",
@@ -44,9 +45,9 @@ const DISC_LOOKUPS: &[(&str, &str)] =
     &[("musicbrainz", "audio-cd"), ("cd-text", "audio-cd"), ("discogs", "audio-cd"), ("gnudb", "audio-cd"), ("tmdb", "video-disc"), ("redump", "check"), ("cover-art", "choose"), ("lyrics", "choose")];
 const CHOOSE: &[&str] = &["choose", "choose-video", "game-choose"];
 /// Make files: only after one of these is there anything to hold.
-const MAKES_FILES: &[&str] = &["flac", "mp3", "opus", "aac", "alac", "vorbis", "wav", "wavpack", "cue", "lyrics-file", "chd", "keep", "transcode", "remux"];
+const MAKES_FILES: &[&str] = &["flac", "mp3", "opus", "aac", "alac", "vorbis", "wav", "wavpack", "cue", "lyrics-file", "artwork-files", "chd", "keep", "transcode", "remux"];
 /// Write beside files a Folder filed, so only after one.
-const BESIDE_FILED: &[&str] = &["cue", "lyrics-file", "libcrypt", "m3u"];
+const BESIDE_FILED: &[&str] = &["cue", "lyrics-file", "artwork-files", "libcrypt", "m3u"];
 /// Only make sense on a DVD or Blu-ray.
 const VIDEO_ONLY: &[&str] = &["video-disc", "tmdb", "choose-video", "rip-video", "transcode", "remux"];
 
@@ -207,6 +208,9 @@ fn the_plus_still_offers_what_belongs() {
         assert!(lib.contains(&"cue") && !lib.contains(&"lyrics-file"), "{which}: {lib:?}");
         let alib = at(&recipes::archive(), "a_lib");
         assert!(alib.contains(&"lyrics-file"), "{which}: {alib:?}");
+        // Every scan beside the filed tracks: once there are filed tracks
+        // of a chosen album, and not before.
+        assert!(lib.contains(&"artwork-files") && alib.contains(&"artwork-files"), "{which}: {lib:?}");
         assert!(!lib.contains(&"libcrypt") && !lib.contains(&"m3u"), "{which}: {lib:?}");
 
         // After Choose: no second Choose, no lookups that identify the
@@ -227,7 +231,7 @@ fn the_plus_still_offers_what_belongs() {
 
         let rip = at(&cd, "rip");
         assert!(rip.contains(&"flac") && rip.contains(&"next-disc"), "{which}: {rip:?}");
-        assert!(!rip.contains(&"cue") && !rip.contains(&"lyrics-file"), "{which}: nothing filed to describe yet: {rip:?}");
+        assert!(!rip.contains(&"cue") && !rip.contains(&"lyrics-file") && !rip.contains(&"artwork-files"), "{which}: nothing filed to describe yet: {rip:?}");
         assert!(!rip.contains(&"replaygain") && !rip.contains(&"folder"), "{which}: nothing to file or level yet: {rip:?}");
 
         let flac = at(&cd, "flac");

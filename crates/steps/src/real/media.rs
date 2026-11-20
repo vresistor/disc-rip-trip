@@ -505,7 +505,11 @@ pub(crate) mod tests {
 /// A picture's width and height, from its header: PNG or JPEG (what the
 /// Cover Art Archive gives). `None` for anything else.
 pub fn picture_size(path: &Path) -> Option<(u32, u32)> {
-    let b = std::fs::read(path).ok()?;
+    picture_size_of(&std::fs::read(path).ok()?)
+}
+
+/// [`picture_size`], from the picture's first bytes: a header is enough.
+pub fn picture_size_of(b: &[u8]) -> Option<(u32, u32)> {
     if b.starts_with(b"\x89PNG") {
         let b: &[u8; 24] = b.first_chunk()?;
         let w = u32::from_be_bytes(b[16..20].try_into().ok()?);

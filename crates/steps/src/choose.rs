@@ -37,7 +37,7 @@ impl Step for Choose {
                 why = if cands.len() == 1 { "only one".into() } else { format!("best match {:.2}", cands[0].score) };
                 Some(cands[0].clone())
             } else {
-                let options = cands.iter().map(|c| Choice { label: c.title.clone(), detail: c.detail.clone(), destructive: false }).collect();
+                let options = cands.iter().map(|c| Choice { label: c.title.clone(), detail: c.detail.clone(), destructive: false, picture: None }).collect();
                 let details = Some(prefill(disc.context(), &cands));
                 let prompt = if found { "Which album is this?" } else { "What is this disc?" };
                 let q = Question { prompt: prompt.into(), shape: QuestionShape::PickOne { options, preselected: 0, details, skip: true } };

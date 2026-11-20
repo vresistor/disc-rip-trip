@@ -389,6 +389,11 @@ async fn the_most_complex_recipe_runs_and_joins_at_the_end() {
     assert!(cue.iter().all(|f| f.path.starts_with("~/Music/FLAC/")), "beside the filed FLACs: {cue:?}");
     assert_eq!(s.steps["a_lrc"].status, "14 .lrc files", "an .lrc for each track with synced lyrics");
     assert_eq!(s.steps["a_lrc"].count(ItemState::Skipped), 3);
+    // Every scan, in an Artwork folder beside the filed FLACs.
+    let scans = &s.steps["a_scans"];
+    assert_eq!((scans.status.as_str(), scans.detail.as_str(), scans.count(ItemState::Ok)), ("6 pictures", "From this release", 6));
+    assert!(scans.record.files.iter().all(|f| f.path.starts_with("~/Music/FLAC/") && f.path.contains("/Artwork/")), "{:?}", scans.record.files);
+    assert!(scans.record.files.iter().any(|f| f.path.ends_with("/Artwork/Front.jpg")));
     assert_eq!((s.steps["a_lyr"].status.as_str(), s.steps["a_lyr"].detail.as_str()), ("14/17 synced", "none for 3, 10, 15"));
     assert_eq!(s.steps["a_lyr"].count(ItemState::Skipped), 3, "tracks without lyrics are left out of its strip");
     assert_eq!(s.steps["a_rg"].status, "\u{2212}7.3 dB");
@@ -466,7 +471,7 @@ fn the_data_disc_recipe_type_checks_and_its_steps_follow_from_one_another() {
 #[test]
 fn image_and_chd_share_their_settings_with_the_real_steps() {
     let (sim, real) = (simulated(None), drt_steps::real());
-    for kind in ["data-disc", "image", "check", "chd", "keep", "folder", "discogs", "gnudb", "lyrics", "lyrics-file", "cue", "replaygain", "tell", "cover-art", "flac", "mp3"] {
+    for kind in ["data-disc", "image", "check", "chd", "keep", "folder", "discogs", "gnudb", "lyrics", "lyrics-file", "artwork-files", "cue", "replaygain", "tell", "cover-art", "flac", "mp3"] {
         let (a, b) = (sim.info(kind).unwrap(), real.info(kind).unwrap());
         let keys = |i: &drt_engine::StepInfo| i.params.iter().map(|p| p.key).collect::<Vec<_>>();
         assert_eq!((a.input, a.output, keys(&a)), (b.input, b.output, keys(&b)), "{kind}");

@@ -31,6 +31,8 @@ pub enum ItemKind {
     VideoFile,
     /// A text file made beside the rest (a cue sheet).
     TextFile,
+    /// A picture saved beside the rest (a scan of the booklet).
+    PictureFile,
     /// Taken by a step that takes any file (Folder), and what branches
     /// giving different kinds of file join into. Never an item's own kind.
     /// Recipes and snapshots written when every file was one kind, `file`,
@@ -56,7 +58,7 @@ impl ItemKind {
 
     /// Any file, of whatever kind.
     pub fn is_file(self) -> bool {
-        matches!(self, ItemKind::AudioFile | ItemKind::ImageFile | ItemKind::VideoFile | ItemKind::TextFile | ItemKind::AnyFile)
+        matches!(self, ItemKind::AudioFile | ItemKind::ImageFile | ItemKind::VideoFile | ItemKind::TextFile | ItemKind::PictureFile | ItemKind::AnyFile)
     }
 
     /// Any disc, whether or not a kind step has said what it is.
@@ -127,7 +129,7 @@ mod tests {
     #[test]
     fn the_old_single_file_kind_still_reads() {
         assert_eq!(serde_json::from_str::<ItemKind>("\"file\"").unwrap(), ItemKind::AnyFile);
-        for k in [ItemKind::AudioFile, ItemKind::ImageFile, ItemKind::VideoFile, ItemKind::TextFile, ItemKind::AnyFile] {
+        for k in [ItemKind::AudioFile, ItemKind::ImageFile, ItemKind::VideoFile, ItemKind::TextFile, ItemKind::PictureFile, ItemKind::AnyFile] {
             assert_eq!(serde_json::from_str::<ItemKind>(&serde_json::to_string(&k).unwrap()).unwrap(), k);
         }
         assert_eq!(serde_json::to_string(&ItemKind::AudioFile).unwrap(), "\"audio_file\"");

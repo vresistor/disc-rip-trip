@@ -2,6 +2,7 @@
 //! Same names, parameters and outputs as the simulated ones, so a recipe
 //! runs on either.
 
+pub mod artwork;
 pub mod chd;
 pub mod cue;
 pub mod cyanrip;
@@ -47,6 +48,7 @@ pub fn register(r: &mut Registry) {
     r.add(CoverArt);
     r.add(lyrics::Lyric);
     r.add(lyrics::LyricsFile);
+    r.add(artwork::ArtworkFiles);
     r.add(Rip::with_flush(std::sync::Arc::new(flush::read_sectors)));
     r.add(cue::CueSheet);
     r.add(replaygain::ReplayGain);
@@ -381,9 +383,10 @@ pub fn signed_offset(g: &dyn Fn(&str) -> Option<serde_json::Value>) -> String {
     }
 }
 
-/// Cover art's description, shared with the simulated step. Its one
-/// setting is about its own output: how big a picture to fetch, which is
-/// the picture every encoder after it embeds.
+/// Cover art's description, shared with the simulated step. Its settings
+/// are about its own output: how big a picture to fetch, which is the
+/// picture every encoder after it embeds, and whether a bigger scan of the
+/// same front, from another edition of the album, may stand in.
 pub fn cover_art_info() -> StepInfo {
     StepInfo::new("cover-art", "Cover art", Group::LookUp, ItemKind::AudioDisc, ItemKind::AudioDisc)
         .needs(&["release"])
@@ -395,11 +398,65 @@ pub fn cover_art_info() -> StepInfo {
             "Small (500 px)",
             "Original, as uploaded",
         ]))
+        .param(ParamSpec::new("bigger", "Use a bigger cover from another edition", ParamKind::Toggle).default(true).help("When this release's front is small or missing, another pressing's is used."))
+        .param(ParamSpec::new("pick", "Let me pick the cover", ParamKind::Toggle).default(false).help("Shows every edition's front to choose from before it's used."))
         .summary(|g| match g("size").and_then(|v| v.as_str().map(str::to_owned)).as_deref() {
             Some("Original") => "original size".into(),
             Some(s) => format!("up to {s}"),
             None => String::new(),
         })
+}
+
+/// The longer side a cover size asks for: none for the original.
+pub fn wanted_px(size: &str) -> Option<u32> {
+    match size {
+        "Original" => None,
+        "500 px" => Some(500),
+        _ => Some(1200),
+    }
+}
+
+/// Whether the chosen release's own front (its size, if it has one) falls
+/// short of what was asked for, so another edition's may be looked for.
+pub fn falls_short(own: Option<(u32, u32)>, want: Option<u32>) -> bool {
+    match (own, want) {
+        (None, _) => true,
+        (Some((w, h)), Some(want)) => w.max(h) < want,
+        (Some(_), None) => false,
+    }
+}
+
+/// What Cover art's card says: the picture's size, and that it came from
+/// another edition when it did.
+pub fn cover_says(size: Option<(u32, u32)>, elsewhere: Option<&artwork::Elsewhere>) -> (String, String) {
+    let status = size.map_or("Found".to_owned(), |(w, h)| format!("{w} × {h}"));
+    // The card has room for this much; its sidebar and record say which.
+    (status, if elsewhere.is_some() { "From another edition".to_owned() } else { String::new() })
+}
+
+/// Puts every front there is to you, as pictures, and gives the other
+/// edition you picked (`None`: the release's own, or only one to pick
+/// from). The one it would take by itself is picked to start with.
+async fn pick_cover(cx: &Cx, archive: &artwork::Online, release: &str, group: Option<&str>, size: &str, dir: &Path) -> Result<Option<artwork::Elsewhere>> {
+    let fronts = artwork::fronts(archive, release, group).await?;
+    if fronts.len() < 2 {
+        return Ok(None);
+    }
+    let mut thumbs = vec![];
+    for f in &fronts {
+        let at = dir.join("covers to pick").join(f.edition.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>());
+        std::fs::create_dir_all(&at)?;
+        let _net = cx.lane(LaneKind::Network("Cover Art Archive".into())).await;
+        thumbs.push(musicbrainz::front_cover(&f.edition.id, "250 px", &at).await.ok().flatten().map(|(p, _)| p));
+    }
+    let pre = artwork::best_front(&fronts, wanted_px(size), cx.flag("bigger"));
+    let answer = cx.ask(artwork::cover_question(&fronts, &thumbs, pre)).await?;
+    let k = match answer {
+        drt_engine::Answer::Pick(k) if k < fronts.len() => k,
+        _ => pre,
+    };
+    cx.log(format!("you picked {} ({} × {})", fronts[k].words, fronts[k].size.0, fronts[k].size.1));
+    Ok(fronts[k].elsewhere(fronts.len() - 1))
 }
 
 struct CoverArt;
@@ -419,18 +476,93 @@ impl Step for CoverArt {
                 Some(id) => {
                     cx.status("", "Fetching the front");
                     let dir = cx.work()?;
+                    let size = cx.text("size");
                     let got = {
                         let _net = cx.lane(LaneKind::Network("Cover Art Archive".into())).await;
-                        musicbrainz::front_cover(&id, &cx.text("size"), &dir).await
+                        musicbrainz::front_cover(&id, &size, &dir).await
                     };
                     match got {
-                        Ok(Some((dest, bytes))) => {
-                            disc.context_mut().add(Subject::Disc, "cover", dest.display().to_string(), "Cover Art Archive");
-                            cx.made(&dest);
-                            let _ = bytes;
-                            cx.status(media::picture_size(&dest).map_or("Found".to_owned(), |(w, h)| format!("{w} × {h}")), "");
+                        Ok(own) => {
+                            let own_px = own.as_ref().and_then(|(p, _)| media::picture_size(p));
+                            if let Some((w, h)) = own_px {
+                                cx.log(format!("this release's front: {w} × {h}"));
+                            }
+                            let group = disc.context().get(Subject::Disc, "musicbrainz_releasegroupid").map(str::to_owned);
+                            let mut elsewhere = None;
+                            let mut found = own;
+                            let archive = artwork::Online::new(&cx);
+                            // Another edition's front to take instead: the one you
+                            // pick, or a bigger one when the release's own falls short.
+                            let target = if cx.flag("pick") {
+                                cx.status("", "Looking at other editions");
+                                let picked = tokio::select! {
+                                    p = pick_cover(&cx, &archive, &id, group.as_deref(), &size, &dir) => p,
+                                    _ = cx.cancelled() => return Ok(()),
+                                };
+                                match picked {
+                                    Ok(p) => p,
+                                    Err(err) => {
+                                        cx.log(format!("couldn't put the fronts to you: {err}"));
+                                        None
+                                    }
+                                }
+                            } else if falls_short(own_px, wanted_px(&size)) && cx.flag("bigger") {
+                                match group {
+                                    Some(group) => {
+                                        cx.status("", "Looking at other editions");
+                                        let longer_than = own_px.map_or(0, |(w, h)| w.max(h));
+                                        let search = tokio::select! {
+                                            s = artwork::bigger_front(&archive, &id, &group, longer_than) => s,
+                                            _ = cx.cancelled() => return Ok(()),
+                                        };
+                                        match search {
+                                            Ok(Some(e)) => Some(e),
+                                            Ok(None) => {
+                                                cx.log("no other edition has a bigger front");
+                                                None
+                                            }
+                                            Err(err) => {
+                                                cx.log(format!("couldn't look at other editions: {err}"));
+                                                None
+                                            }
+                                        }
+                                    }
+                                    None => None,
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(e) = target {
+                                cx.status("", "Fetching the other edition's front");
+                                let got = {
+                                    let _net = cx.lane(LaneKind::Network("Cover Art Archive".into())).await;
+                                    musicbrainz::front_cover(&e.edition.id, &size, &dir).await
+                                };
+                                match got {
+                                    Ok(Some(f)) => {
+                                        cx.log(format!("{} ({}, {} × {}, of {} measured)", artwork::from_another(&e.words, e.px()), e.edition.id, e.size.0, e.size.1, e.measured));
+                                        found = Some(f);
+                                        elsewhere = Some(e);
+                                    }
+                                    Ok(None) => cx.log(format!("{} has no front after all", e.edition.id)),
+                                    Err(err) => cx.log(format!("couldn't fetch {}'s front: {err}", e.edition.id)),
+                                }
+                            }
+                            match found {
+                                Some((dest, _)) => {
+                                    let c = disc.context_mut();
+                                    c.add(Subject::Disc, "cover", dest.display().to_string(), "Cover Art Archive");
+                                    if let Some(e) = &elsewhere {
+                                        c.add(Subject::Disc, artwork::COVER_RELEASE, e.edition.id.clone(), "Cover Art Archive");
+                                        c.add(Subject::Disc, artwork::COVER_FROM, e.words.clone(), "Cover Art Archive");
+                                    }
+                                    cx.made(&dest);
+                                    let (status, detail) = cover_says(media::picture_size(&dest), elsewhere.as_ref());
+                                    cx.status(status, detail);
+                                }
+                                None => cx.status("Nothing found", "the archive has no front cover"),
+                            }
                         }
-                        Ok(None) => cx.status("Nothing found", "the archive has no front cover"),
                         Err(e) => lookup_skipped(&cx, &disc, e.to_string()),
                     }
                 }
@@ -1379,10 +1511,11 @@ impl Step for Place {
                     root.join(format!("{}.{ext}", rel.display()))
                 }
                 // A file that isn't a track (a cue sheet) goes beside the
-                // tracks, under its own name.
+                // tracks, under its own name; a scan, in their Artwork folder.
                 None => {
                     let rel = template::render(&names, &fields_in(file.context(), 1, ""));
                     let dir = rel.parent().map(|p| root.join(p)).unwrap_or_else(|| root.clone());
+                    let dir = if file.kind == ItemKind::PictureFile { dir.join(artwork::FOLDER) } else { dir };
                     dir.join(src.file_name().unwrap_or_default())
                 }
             };
@@ -1434,11 +1567,7 @@ impl Step for Place {
                 _ => folder.clone(),
             };
             let Ok(answer) = cx.ask(name_taken(taken.len(), &place)).await else { return Ok(()) };
-            let choice = match answer {
-                drt_engine::Answer::Pick(0) => Taken::Replace,
-                drt_engine::Answer::Pick(2) | drt_engine::Answer::Skip => Taken::Skip,
-                _ => Taken::KeepBoth,
-            };
+            let choice = taken_choice(answer);
             let _f = cx.lane(LaneKind::File(folder.clone())).await;
             for (file, src, dest) in taken {
                 if choice == Taken::Skip {
@@ -1554,10 +1683,19 @@ enum Taken {
     Skip,
 }
 
+/// The answer to [`name_taken`].
+fn taken_choice(answer: drt_engine::Answer) -> Taken {
+    match answer {
+        drt_engine::Answer::Pick(0) => Taken::Replace,
+        drt_engine::Answer::Pick(2) | drt_engine::Answer::Skip => Taken::Skip,
+        _ => Taken::KeepBoth,
+    }
+}
+
 /// The one question a Folder asks when names are taken: *3 files already
 /// in Parquet Courts / Wide Awake!*. Keep both is picked: it loses nothing.
 pub fn name_taken(n: usize, place: &str) -> drt_engine::Question {
-    let choice = |l: &str, d: &str, destructive| drt_engine::Choice { label: l.into(), detail: d.into(), destructive };
+    let choice = |l: &str, d: &str, destructive| drt_engine::Choice { label: l.into(), detail: d.into(), destructive, picture: None };
     let files = if n == 1 { "1 file".to_owned() } else { format!("{n} files") };
     drt_engine::Question {
         prompt: format!("{files} already in {place}"),

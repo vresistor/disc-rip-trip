@@ -116,6 +116,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
             (Tray::Question { .. }, Body::PerItem) => per_item(app, ui, p, snap),
             (Tray::Question { step }, Body::Choose) => choose(app, ui, p, snap, step, t),
             (Tray::Question { step }, Body::Answers) => answers(app, ui, p, snap, step),
+            (Tray::Question { step }, Body::Pictures) => pictures(app, ui, p, snap, step),
             (Tray::Step { id, focus }, body) => match tab {
                 Some(Tab::Progress) if *body == Body::Choose => choose(app, ui, p, snap, id, t),
                 Some(Tab::Progress) => result(app, ui, p, snap, id, t),
@@ -313,7 +314,7 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     }
     // With nothing else to show, the facts it found.
     if let Some(c) = &ctx {
-        let facts: Vec<&drt_engine::Fact> = c.found_by(id).filter(|f| f.key != "cover").collect();
+        let facts: Vec<&drt_engine::Fact> = c.found_by(id).filter(|f| !matches!(f.key.as_str(), "cover" | "cover_release" | "cover_from")).collect();
         if !facts.is_empty() && !has_items(id, &v, &info, Some(c)) && v.record.decided.is_none() && v.record.files.is_empty() {
             heading(ui, p, "Found");
             fact_table(ui, p, &facts);
@@ -384,6 +385,8 @@ enum Body {
     Choose,
     /// The question's own answers, a button for each.
     Answers,
+    /// Answers that are pictures (covers), side by side.
+    Pictures,
     Value,
     /// A choice for each item.
     PerItem,
@@ -418,7 +421,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     say: q.prompt.clone(),
                     // A button for each answer, in the body with what it does.
                     acts: if *skip { vec![Act::Skip] } else { vec![] },
-                    body: Body::Answers,
+                    body: if options.iter().any(|o| o.picture.is_some()) { Body::Pictures } else { Body::Answers },
                     rename: None,
                     remove: false,
                 }),
@@ -3297,6 +3300,11 @@ fn cover(app: &mut App, ui: &mut Ui, p: &Pal, v: &StepView, ctx: Option<&Context
             }
         }
     });
+    // Where it came from, when that isn't the chosen release.
+    if let Some(from) = ctx.and_then(|c| c.get(Subject::Disc, "cover_from")) {
+        ui.add_space(8.0);
+        ui.add(egui::Label::new(RichText::new(format!("From another edition: {from}")).font(font(13.0, 400)).color(p.muted)).wrap());
+    }
     // The images on the archive's page for the release, when it came from
     // there.
     if let Some(url) = ctx.filter(|_| source == "Cover Art Archive").and_then(crate::links::cover) {
@@ -3343,6 +3351,69 @@ fn answers(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, step: &str) {
             app.m.send(app.sel, Command::Answer { step: step.to_owned(), answer: Answer::Pick(k) });
         }
         ui.add_space(6.0);
+    }
+}
+
+/// Answers that are pictures: each shown as it is, side by side, with
+/// what it is and its size under it. One is picked to start with; a click
+/// picks another, and *Use this cover* answers.
+fn pictures(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, step: &str) {
+    let Some((_, q)) = &snap.question else { return };
+    let QuestionShape::PickOne { options, preselected, .. } = &q.shape else { return };
+    let pick = *app.pick.get_or_insert(*preselected);
+    let w = ui.available_width();
+    // As many across as fit, at least two, never wider than 200.
+    let gap = 12.0;
+    let across = ((w + gap) / (150.0 + gap)).floor().max(2.0);
+    let side = ((w - gap * (across - 1.0)) / across).min(200.0);
+    let per_row = across as usize;
+    for row in options.chunks(per_row).enumerate() {
+        let (r, chunk) = row;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (j, o) in chunk.iter().enumerate() {
+                let k = r * per_row + j;
+                ui.vertical(|ui| {
+                    ui.set_width(side);
+                    let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+                    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, k == pick, format!("{}, {}", o.label, o.detail)));
+                    ui.painter().rect_filled(rect, 6.0, p.surface);
+                    if let Some(path) = &o.picture {
+                        let path = expand(path);
+                        load_cover(app, ui.ctx(), &path);
+                        match &app.covers[&path] {
+                            Cover::Ready(tex, [iw, ih]) => {
+                                let (iw, ih) = (*iw as f32, *ih as f32);
+                                let s = side / iw.max(ih);
+                                let img = Rect::from_center_size(rect.center(), vec2(iw * s, ih * s));
+                                egui::Image::new((tex.id(), img.size())).corner_radius(6).paint_at(ui, img);
+                            }
+                            Cover::Loading => {}
+                            Cover::Failed => {
+                                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Can't show this image", font(12.5, 400), p.subtle);
+                            }
+                        }
+                    }
+                    if k == pick {
+                        ui.painter().rect_stroke(rect.expand(3.0), 8.0, Stroke::new(2.5, p.action), egui::StrokeKind::Outside);
+                    } else if resp.hovered() {
+                        ui.painter().rect_stroke(rect.expand(2.0), 7.0, Stroke::new(1.0, p.line), egui::StrokeKind::Outside);
+                    }
+                    if resp.clicked() {
+                        app.pick = Some(k);
+                    }
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(RichText::new(&o.label).font(font(13.0, if k == pick { 600 } else { 500 })).color(p.ink)).wrap());
+                    ui.label(RichText::new(&o.detail).font(font(12.5, 400)).color(p.muted));
+                });
+            }
+        });
+        ui.add_space(14.0);
+    }
+    if Btn::new("", "Use this cover").look(Look::Primary).show(ui, p).clicked() {
+        app.m.send(app.sel, Command::Answer { step: step.to_owned(), answer: Answer::Pick(pick) });
+        app.pick = None;
     }
 }
 

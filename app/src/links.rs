@@ -43,7 +43,8 @@ pub fn entry(c: &Candidate) -> Option<(&'static str, String)> {
 /// The cover's page: the Cover Art Archive's images of the release it
 /// was fetched for, as MusicBrainz shows them.
 pub fn cover(c: &Context) -> Option<String> {
-    let id = c.get(Subject::Disc, "musicbrainz_albumid").filter(|i| is_mbid(i))?;
+    // The edition the front came from, when it isn't the chosen release.
+    let id = c.get(Subject::Disc, "cover_release").or(c.get(Subject::Disc, "musicbrainz_albumid")).filter(|i| is_mbid(i))?;
     Some(format!("https://musicbrainz.org/release/{id}/cover-art"))
 }
 

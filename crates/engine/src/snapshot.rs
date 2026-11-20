@@ -173,7 +173,7 @@ impl StepView {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Choice {
     pub label: String,
     pub detail: String,
@@ -181,6 +181,10 @@ pub struct Choice {
     /// button is drawn in the bad colour.
     #[serde(default)]
     pub destructive: bool,
+    /// A picture of it, by path (a cover to pick): the answers are shown
+    /// as pictures side by side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -346,7 +350,7 @@ mod tests {
                     ItemChoice { id: "title-1".into(), label: "Title 1".into(), detail: "50:12".into(), preselected: Some(0) },
                     ItemChoice { id: "title-5".into(), label: "Title 5".into(), detail: "duplicate of title 2".into(), preselected: None },
                 ],
-                options: vec![Choice { label: "S03E01".into(), detail: "Mr. Ruggerio's Neighborhood".into(), destructive: false }],
+                options: vec![Choice { label: "S03E01".into(), detail: "Mr. Ruggerio's Neighborhood".into(), destructive: false, picture: None }],
             },
         };
         let json = serde_json::to_string(&q).unwrap();

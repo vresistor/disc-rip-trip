@@ -35,7 +35,10 @@ impl Step for Asker {
         let q = Question {
             prompt: format!("{}?", cx.id()),
             shape: QuestionShape::PickOne {
-                options: vec![Choice { label: "a".into(), detail: String::new(), destructive: false }, Choice { label: "b".into(), detail: String::new(), destructive: false }],
+                options: vec![
+                    Choice { label: "a".into(), detail: String::new(), destructive: false, picture: None },
+                    Choice { label: "b".into(), detail: String::new(), destructive: false, picture: None },
+                ],
                 preselected: 0,
                 details: None,
                 skip: false,

@@ -52,6 +52,7 @@ pub fn register(r: &mut Registry, bad_track: Option<u32>) {
     r.add(ReplayGain);
     r.add(CueSheet);
     r.add(LyricsFile);
+    r.add(ArtworkFiles);
     r.add(Tell);
     r.add(crate::real::NextDisc { real: false });
     crate::game_sim::register(r);
@@ -675,6 +676,46 @@ impl Step for LyricsFile {
             let _ = none;
             cx.status(format!("{written} .lrc file{}", if written == 1 { "" } else { "s" }), "");
         }
+        Ok(())
+    }
+}
+
+/// Artwork files, with the scans a release of the album might have.
+struct ArtworkFiles;
+
+/// The simulated release's scans: name and size.
+pub const SCANS: [(&str, u64); 6] = [("Front.jpg", 2_412_000), ("Back.jpg", 2_208_000), ("Booklet 01.jpg", 3_105_000), ("Booklet 02.jpg", 3_087_000), ("Disc.jpg", 1_644_000), ("Tray.jpg", 1_902_000)];
+
+#[async_trait]
+impl Step for ArtworkFiles {
+    fn info(&self) -> StepInfo {
+        crate::real::artwork::files_info()
+    }
+
+    async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        let Some(first) = inlet.recv().await else { return Ok(()) };
+        let dir = first.path.as_deref().and_then(|p| p.parent()).map(|p| p.join(crate::real::artwork::FOLDER)).unwrap_or_default();
+        let n = SCANS.len();
+        cx.expect(n);
+        let items: Vec<Item> = SCANS.iter().enumerate().map(|(k, (name, _))| Item::new(format!("picture-{}", k + 1), ItemKind::PictureFile, *name, None, None).knowing(&first)).collect();
+        for it in &items {
+            cx.item(it, ItemState::Waiting, "");
+        }
+        let mut bytes = 0;
+        for (k, (it, (name, size))) in items.iter().zip(SCANS).enumerate() {
+            cx.status(format!("{k} of {n}"), name);
+            cx.item(it, ItemState::Busy, "downloading");
+            cx.progress(Some(k as f32 / n as f32));
+            cx.sleep(250).await?;
+            let dest = dir.join(name);
+            cx.made_sized(&dest, size);
+            bytes += size;
+            cx.item(it, ItemState::Ok, format!("{:.1} MB", size as f64 / 1e6));
+            outlet.send(it.becomes(ItemKind::PictureFile, Some(dest))).await;
+        }
+        cx.progress(None);
+        while inlet.recv().await.is_some() {}
+        crate::real::artwork::files_say(&cx, n, bytes, None);
         Ok(())
     }
 }

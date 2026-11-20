@@ -44,14 +44,14 @@ impl Options {
             for e in episodes {
                 roles.push(Role::Episode(e.number));
                 let mins = e.runtime_mins.map(|m| format!(", {m} min")).unwrap_or_default();
-                choices.push(Choice { label: format!("S{season:02}E{:02}", e.number), detail: format!("{}{mins}", e.name), destructive: false });
+                choices.push(Choice { label: format!("S{season:02}E{:02}", e.number), detail: format!("{}{mins}", e.name), destructive: false, picture: None });
             }
         } else {
             roles.push(Role::Film);
-            choices.push(Choice { label: c.map(|c| c.title.clone()).unwrap_or_else(|| "The film".into()), detail: "the film".into(), destructive: false });
+            choices.push(Choice { label: c.map(|c| c.title.clone()).unwrap_or_else(|| "The film".into()), detail: "the film".into(), destructive: false, picture: None });
         }
         roles.push(Role::Extra);
-        choices.push(Choice { label: "Extra".into(), detail: "kept with the bonus material".into(), destructive: false });
+        choices.push(Choice { label: "Extra".into(), detail: "kept with the bonus material".into(), destructive: false, picture: None });
         Options { roles, choices }
     }
 
@@ -95,7 +95,7 @@ impl ChooseVideo {
             cx.decided(c.as_ref(), why);
             return Ok(c);
         }
-        let options = cands.iter().map(|c| Choice { label: c.title.clone(), detail: c.detail.clone(), destructive: false }).collect();
+        let options = cands.iter().map(|c| Choice { label: c.title.clone(), detail: c.detail.clone(), destructive: false, picture: None }).collect();
         let label = disc.get(Subject::Disc, facts::LABEL).unwrap_or("").to_owned();
         let best = cands.first();
         let get = |k: &str| best.and_then(|b| b.facts.iter().find(|f| f.key == k)).map(|f| f.value.clone()).unwrap_or_default();

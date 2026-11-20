@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(l.groups[0].name, "For the phone");
         let tell = l.tile("a_tell").unwrap().rect;
         let into_tell = l.wires.iter().filter(|w| w.to == (tell.x, tell.mid_y())).count();
-        assert_eq!(into_tell, 6, "NAS, Backup, the cue sheet, the .lrc files, MP3's library and the phone group");
+        assert_eq!(into_tell, 7, "NAS, Backup, the cue sheet, the .lrc files, the scans, MP3's library and the phone group");
         let phone = l.tile("a_ph").unwrap().rect;
         assert!(l.groups[0].rect.right() > phone.right());
     }

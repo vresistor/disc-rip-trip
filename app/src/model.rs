@@ -1478,7 +1478,7 @@ fn libraries(node: &Node) -> Vec<(String, String)> {
     fn line(nodes: &[Node], last: &mut Option<String>) -> bool {
         for n in nodes {
             match n {
-                Node::Step { step, .. } if step == "cue" || step == "lyrics-file" => return false,
+                Node::Step { step, .. } if step == "cue" || step == "lyrics-file" || step == "artwork-files" => return false,
                 Node::Step { id, step, .. } if step == "folder" || step == "library" => *last = Some(id.clone()),
                 Node::Step { .. } => {}
                 Node::Chain { nodes } if !line(nodes, last) => return false,
@@ -1797,6 +1797,7 @@ pub fn plain_misfit(reg: &drt_engine::Registry, root: &Node, e: &drt_engine::Che
         K::ImageFile => "an image file",
         K::VideoFile => "video files",
         K::TextFile => "a text file",
+        K::PictureFile => "pictures",
         K::AnyFile => "files",
         K::Any => "something",
     };

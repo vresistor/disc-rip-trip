@@ -9,7 +9,7 @@ use drt_engine::{Candidate, Fact, Subject};
 use serde::Deserialize;
 use std::time::Duration;
 
-const API: &str = "https://musicbrainz.org/ws/2";
+pub const API: &str = "https://musicbrainz.org/ws/2";
 pub const AGENT: &str = super::net::AGENT;
 const SOURCE: &str = "MusicBrainz";
 
@@ -100,6 +100,12 @@ fn credit(c: &[ArtistCredit]) -> String {
 }
 
 async fn fetch<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T> {
+    Ok(serde_json::from_slice(&fetch_bytes(url).await?)?)
+}
+
+/// A MusicBrainz answer, as it came: through the throttle, asking again
+/// while it's busy.
+pub async fn fetch_bytes(url: &str) -> Result<Vec<u8>> {
     let client = super::net::client(Duration::from_secs(20))?;
     // MusicBrainz answers 503 when it's busy or we've asked too quickly, and
     // asks for another try a little later: a few, waiting longer each time
@@ -110,7 +116,7 @@ async fn fetch<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T> {
         let r = client.get(url).send().await?;
         let status = r.status().as_u16();
         if r.status().is_success() {
-            return super::net::json(r, super::net::JSON_MAX).await;
+            return super::net::body(r, super::net::JSON_MAX).await;
         }
         tries += 1;
         if !matches!(status, 429 | 503) || tries >= BUSY_TRIES {
@@ -155,6 +161,8 @@ pub fn cover_suffix(size: &str) -> &'static str {
     match size {
         "Original" => "",
         "500 px" => "-500",
+        // Only to show beside others, when you pick the cover.
+        "250 px" => "-250",
         _ => "-1200",
     }
 }

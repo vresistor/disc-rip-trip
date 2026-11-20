@@ -62,6 +62,7 @@ pub fn archive() -> Recipe {
                         // Beside the FLACs in the library, from their names.
                         Node::step("a_cue", "cue"),
                         Node::step("a_lrc", "lyrics-file"),
+                        Node::step("a_scans", "artwork-files"),
                     ]),
                 ]),
                 chain([Node::step("a_mp3", "mp3"), Node::step("a_mlib", "folder").labelled("Library").with("folder", "~/Music/MP3")]),
