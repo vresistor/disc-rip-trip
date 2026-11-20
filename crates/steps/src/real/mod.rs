@@ -608,16 +608,17 @@ impl Reads {
         self.crcs.iter().enumerate().any(|(j, b)| !b.is_empty() && self.fresh.get(j).copied().unwrap_or(false) && self.crcs[..j].contains(b))
     }
 
-    /// Two reads with the same checksum, cache cleared or not.
-    fn same_checksum(&self) -> bool {
-        self.crcs.iter().enumerate().any(|(j, b)| !b.is_empty() && self.crcs[..j].contains(b))
+    /// The last read has the same checksum as one before it, cache
+    /// cleared or not.
+    fn last_matches(&self) -> bool {
+        self.crcs.split_last().is_some_and(|(b, before)| !b.is_empty() && before.contains(b))
     }
 
     /// Why a track isn't settled, as its note.
     fn unsettled(&self) -> String {
         if self.crcs.iter().all(String::is_empty) {
             "read failed".to_owned()
-        } else if self.same_checksum() {
+        } else if self.last_matches() {
             NOT_CLEARED.to_owned()
         } else {
             self.damage()
@@ -1628,6 +1629,22 @@ mod tests {
         assert_eq!(settled_note(None, true).as_deref(), Some("✓ two reads agree"));
         assert!(!is_accurate("✓ two reads agree") && !is_accurate("✓ combined from 3 reads"));
         assert_eq!(settled_note(None, false), None);
+    }
+
+    #[test]
+    fn reads_agree_only_after_the_cache_was_cleared() {
+        let reads = |crcs: &[&str], fresh: &[bool]| Reads { crcs: crcs.iter().map(|c| c.to_string()).collect(), fresh: fresh.to_vec(), ..Reads::default() };
+        assert!(reads(&["X", "X"], &[true, true]).agree());
+        let r = reads(&["X", "X"], &[true, false]);
+        assert!(!r.agree());
+        assert_eq!(r.unsettled(), NOT_CLEARED);
+        // Cleared afterwards, the same again: agreed.
+        assert!(reads(&["X", "X", "X"], &[true, false, true]).agree());
+        // Cleared afterwards and different: damage, not the cache.
+        let r = reads(&["X", "X", "Y"], &[true, false, true]);
+        assert!(!r.agree());
+        assert_ne!(r.unsettled(), NOT_CLEARED);
+        assert_eq!(reads(&["", ""], &[true, true]).unsettled(), "read failed");
     }
 
     #[test]

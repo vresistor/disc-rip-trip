@@ -88,10 +88,11 @@ left, what the row shows beside it on the right:
 | Note | Row shows | Means |
 |---|---|---|
 | *✓ 12* | *Verified 12* | The checksum matches 12 other rips in AccurateRip (its *confidence*). Proof; nothing more is read. |
-| *✓ two reads agree* | *Reads agree* · no AccurateRip match | AccurateRip has no match (or the disc isn't in it), but two reads give the same checksum. |
+| *✓ two reads agree* | *Reads agree* · no AccurateRip match | AccurateRip has no match (or the disc isn't in it), but two reads give the same checksum, the later one read after clearing the drive's cache (below). |
 | *✓ best of 5 reads* | *Best of 5* | Every sample settled by a majority of careful reads. Better than any one read, not proof. |
 | *kept anyway, not verified* | *Kept anyway* · not verified | Kept by hand without proof. |
 | *439 samples differ, 0:17–0:43* | *Damaged* · Reads differ at 0:17–0:43 (439 samples) | The reads don't agree: the disc is damaged there. Needs you. |
+| *the drive's cache couldn't be cleared* | *Unverified* · The drive's cache couldn't be cleared | The last read agrees with one before it, but the cache couldn't be cleared first, so it may be the drive's memory. Needs you. |
 
 Runs from before November 2026 recorded *✓ combined from 5 reads* and
 *kept, unverified*; they're still read the same way.
@@ -155,8 +156,8 @@ honest, as long as the drive's real cache is no bigger than the model.
 process, and the model knows nothing of what came before: both its ends
 start at 9999999 (`p_block.c` 427–428), so the first read of each
 process only probes the sector before the track, timed. It doesn't know
-what the previous read left in the drive. Between our
-reads, only the order of reading protects us: a re-read starts at the
+what the previous read left in the drive. Before the clearing below,
+only the order of reading protected us between reads: a re-read starts at the
 track's first sector, while the drive holds the last sectors the
 previous read took, the track's end (and its read-ahead past it). By the
 time the re-read reaches the end, the drive has refilled its memory from
@@ -219,9 +220,9 @@ whatever the drive held of the track is gone and the re-read has to come
 off the disc. This is EAC's approach, and it doesn't depend on knowing
 the cache's size. The code is `flush.rs`.
 
-- **How:** MMC READ CD (0xBE) through SG_IO, as Audio CD's look at the
-  disc already does, 26 sectors at a time, any sector type, user data
-  only. Read-only.
+- **How:** MMC READ CD (0xBE) through SG_IO, as Data disc's look at a
+  disc already asks the drive what it holds (`media.rs`), 26 sectors at
+  a time, any sector type, user data only. Read-only.
 - **Where:** within the disc's audio, as the TOC gives it, never past the
   lead-out. 2,400 sectors after the track if there's room, else as far
   before it. Failing both (a disc of one track, or a short one), the
