@@ -621,8 +621,8 @@ impl Step for Rip {
         if let Some(frames) = pregap.filter(|_| only.is_empty() || only.contains(&0)) {
             let mut probe = Item::track(0, HIDDEN).knowing(&disc);
             probe.context_mut().add(Subject::Part(0), "length", (frames / 44_100).to_string(), "Rip");
-            cx.item(&probe, ItemState::Waiting, "");
-            rip_says(&cx, format!("Track 0 · {HIDDEN}"));
+            // No row of its own unless there's something there.
+            rip_says(&cx, "Checking the gap before track 1");
             let eta0 = Eta { started: std::time::Instant::now(), total: 0.0, read: std::sync::Mutex::new(0.0) };
             let mut reads = Reads { crcs: vec![], last: PathBuf::new(), files: vec![] };
             let first_read = self.read(&cx, &opts(first, None), &mut probe, n, &dir, &mut reads, &eta0, "reading").await;
@@ -632,7 +632,10 @@ impl Step for Rip {
             match first_read.as_ref().map(|_| is_silent(&reads.last)) {
                 Ok(Ok(true)) => {
                     cx.log(format!("track 1's pregap ({} s) is digital silence: not kept", frames / 44_100));
-                    cx.item(&probe, ItemState::Skipped, "digital silence, not kept");
+                    // Silence: nothing was found, so it isn't a track; the
+                    // row the read made goes, and no count includes it.
+                    let id = probe.id.clone();
+                    cx.view(|v| v.items.retain(|i| i.id != id));
                 }
                 _ => {
                     wanted.insert(0, 0);

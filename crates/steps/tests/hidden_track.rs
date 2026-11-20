@@ -174,8 +174,9 @@ async fn a_hidden_track_is_track_0_when_it_holds_audio_and_only_then() {
     let (s, got, calls) = run(&b, "silence").await;
     assert_eq!(got.iter().map(|i| i.index.unwrap()).collect::<Vec<_>>(), [1, 2]);
     assert_eq!(got[0].context().get(Subject::Disc, "selected"), Some("2"));
-    let zero = s.steps["rip"].items.iter().find(|i| i.id == "track-0").unwrap();
-    assert_eq!((zero.state, zero.note.as_str()), (ItemState::Skipped, "digital silence, not kept"));
+    // No row and no count for it: silence before track 1 isn't a track.
+    assert!(s.steps["rip"].items.iter().all(|i| i.id != "track-0"), "{:?}", s.steps["rip"].items);
+    assert_eq!(s.steps["rip"].items.len(), 2);
     assert_eq!(calls.lines().filter(|l| l.contains("-l 0")).count(), 1, "read once to look: {calls}");
     std::fs::remove_dir_all(&b).unwrap();
 
