@@ -111,6 +111,113 @@ track that still isn't settled waits for you, and its row offers:
 - **Keep it anyway:** filed, marked not verified.
 - **Skip this track:** not filed.
 
+## Re-reads and the drive's cache
+
+Some drives keep the audio they've just read in memory and hand it back
+on the next read of the same sectors without going to the disc. A
+re-read served that way agrees with the first read whatever the disc
+holds, and *✓ two reads agree* would mean nothing. Checked on 20
+November 2026 against cyanrip 0.9.3 and libcdio-paranoia 10.2+2.0.2 (the
+versions `scripts/build-cyanrip.sh` builds), and on the MATSHITA BD-MLT
+UJ240AS.
+
+**What our reads do.** Rip's first read passes `-P 0` (unless the recipe
+asks for careful), its re-reads `-P 3`. cyanrip turns 0 into
+`PARANOIA_MODE_DISABLE` and 3 into `PARANOIA_MODE_FULL` without
+`NEVERSKIP` (`src/cyanrip_main.c`, 104–109, set at 182). cyanrip itself
+does nothing about the drive's cache: each read seeks to the track's
+start and reads on (573). Its own repeat mode, `-Z`, which we don't use,
+doesn't either (750–800).
+
+**What paranoia does.** It keeps a model of the drive's cache, 1200
+sectors (2.8 MB, 16 s of audio) unless told otherwise
+(`lib/paranoia/p_block.h` 34, `p_block.c` 427–429; cyanrip never calls
+`paranoia_cachemodel_size`). It reads that many sectors at a time
+(`paranoia.c` 2669), and before each such read, at every level including
+0, it checks whether the read starts inside what the drive may hold; if
+so it reads one sector further back to make the drive seek, and times
+it. A seek under 6 ms means the drive answered from memory, and paranoia
+reports `PARANOIA_CB_CACHEERR` (`paranoia.c` 114, 2598–2621, called at
+2738). That is how level 3's own re-reads inside one process stay
+honest, as long as the drive's real cache is no bigger than the model.
+
+**What it can't see.** The model starts empty in every process
+(`cdcache_begin`/`cdcache_end` start at 9999999, `p_block.c` 427–428),
+and every one of our reads is its own cyanrip process. So paranoia knows
+nothing about what the previous read left in the drive. Between our
+reads, only the order of reading protects us: a re-read starts at the
+track's first sector, while the drive holds the last sectors the
+previous read took, the track's end (and its read-ahead past it). By the
+time the re-read reaches the end, the drive has refilled its memory from
+the disc. That holds for any track longer than the drive's cache plus
+its read-ahead. A track shorter than that could be handed back whole
+from memory.
+
+**What cyanrip shows.** paranoia's counts, at the end of each run's
+output: `Paranoia status counts:` then lines like `READ: 336`, and
+`CACHEERR: n` when there were any (`src/cyanrip_log.c` 327–353, counted
+by `status_cb`, `cyanrip_main.c` 336–342). Rip doesn't read them yet.
+
+**This drive.** `cd-paranoia -A` (Fedora's libcdio-paranoia
+10.2+2.0.2, in a container): *Approximate random access cache size: 160
+sector(s)*, *Drive cache tests as contiguous*, *Drive readahead past
+read cursor: 24 sector(s)*, *Cache tail cursor tied to read cursor*, and
+*Drive tests OK with Paranoia*. So it caches audio, 184 sectors at most
+(2.5 s), well under paranoia's model. One thing wasn't tested: re-reading
+the cached sectors was slower than reading the disc (15.67 ms a sector
+against 0.76), so `-A` skipped its test that a backward seek empties the
+cache (*Cache access insufficiently faster than media access*,
+`src/cachetest.c` 785–787). Then track 3 (105 s) read twice with Rip's
+exact arguments, `-P 0` then `-P 3`, offset +103: the same samples
+(byte-identical WAVs, EAC CRC `FD03A15A`, AccurateRip v2 match at
+confidence 30), no `CACHEERR` in either. Nor in the 13 first reads kept
+from an earlier run.
+
+**So, today.** With this drive, *two reads agree* is sound for every
+track of 2.5 s or more, which is every real track: the Red Book's
+shortest is 4 s (300 sectors). The exposed case is the hidden track
+before track 1, which can be any length, and a drive with a bigger
+cache: on a drive that holds, say, 10 s of audio, a short track's
+re-read could be the drive's memory. Only this drive has been measured.
+
+**What others do.** whipper reads every track twice, each in its own
+`cd-paranoia` process at full paranoia, and compares CRCs
+(`whipper/program/cdparanoia.py` 476–484, 526–535, at commit
+`71251a0`), as we do. It runs `cd-paranoia -A` on request (`whipper
+drive analyze`, `whipper/command/drive.py` 32–58), stores the result per
+drive, and only writes it into the log as *Defeat audio cache*
+(`cdparanoia.py` 583–626, `whipper/result/logger.py` 43); ripping is
+the same either way. EAC is closed; its own pages say its feature test
+detects a drive that caches audio, that the option must then be set,
+and that the drive's cache is then flushed between reads, "in newer
+versions" by reading sectors elsewhere, which makes secure mode much
+slower ([feature detection](https://exactaudiocopy.de/automatic-feature-detection-technology/),
+[extraction](https://exactaudiocopy.de/extraction-technology/)). That
+is the vendor's description, not code we could read.
+
+**Recommended fix** (not built yet):
+
+1. **Read somewhere else first.** Before every re-read that will be
+   compared, read 2400 sectors (twice paranoia's model, 5.6 MB) from a
+   part of the disc at least that far from the track, and throw them
+   away, over SG_IO as the TOC read already does; about two seconds at
+   this drive's speed. It
+   costs nothing on a drive that doesn't cache, and it doesn't depend
+   on knowing the cache's size. This is EAC's approach.
+2. **Read paranoia's counts.** Parse `CACHEERR` from each read's output
+   and record it with the read. A re-read with any doesn't count towards
+   *two reads agree*; the row says why.
+3. **A test that catches it.** With a track shorter than the drive's
+   cache (a hidden track of a second or two, or a drive with a large
+   cache): read it, read it again at once, and time the second read; a
+   read many times faster than the disc can turn means memory. Then do
+   the same after (1) and check the time is the disc's. In the unit
+   tests, a stand-in cyanrip that prints `CACHEERR: 3` must leave the
+   track unsettled.
+
+Until (1) is in, a hidden track of under 3 s settled by two reads that
+agree should be taken with that in mind.
+
 ## Encoding
 
 - **Nothing changes the samples** on the way to a lossless file: no
