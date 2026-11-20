@@ -398,8 +398,12 @@ pub fn cover_art_info() -> StepInfo {
             "Small (500 px)",
             "Original, as uploaded",
         ]))
-        .param(ParamSpec::new("bigger", "Use a bigger cover from another edition", ParamKind::Toggle).default(true).help("When this release's front is small or missing, another edition's is used."))
-        .param(ParamSpec::new("pick", "Let me pick the cover", ParamKind::Toggle).default(false).help("Shows every edition's front to choose from before it's used."))
+        .param(
+            ParamSpec::new("cover", "Which cover", ParamKind::Choice(COVER_HOW))
+                .default(COVER_HOW[0])
+                .labels(&["This edition's, or a bigger one if it's small", "Only this edition's", "The biggest of any edition", "Let me pick"])
+                .help("Let me pick shows every edition's front, so you can pass over a bad scan."),
+        )
         .summary(|g| match g("size").and_then(|v| v.as_str().map(str::to_owned)).as_deref() {
             Some("Original") => "original size".into(),
             Some(s) => format!("up to {s}"),
@@ -438,6 +442,18 @@ pub fn cover_says(size: Option<(u32, u32)>, elsewhere: Option<&artwork::Elsewher
 /// with the release's own front.
 const EDITIONS_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How Cover art picks the front: `own-or-bigger` (the default), `own`,
+/// `biggest` of every edition's, or `ask`.
+pub const COVER_HOW: &[&str] = &["own-or-bigger", "own", "biggest", "ask"];
+
+/// Every edition's front, and the biggest of them: another edition's, or
+/// `None` when the release's own is the biggest (or there's nothing).
+async fn biggest_cover(archive: &artwork::Online, release: &str, group: Option<&str>) -> Result<Option<artwork::Elsewhere>> {
+    let fronts = artwork::fronts(archive, release, group).await?;
+    let k = artwork::best_front(&fronts, None, true, true);
+    Ok(fronts.get(k).and_then(|f| f.elsewhere(fronts.len().saturating_sub(1))))
+}
+
 /// Puts every front there is to you, as pictures, and gives what you
 /// picked: another edition's, or `Some(None)` for the release's own. `None`
 /// when there's nothing to choose between, so Cover art goes by itself. The
@@ -455,7 +471,7 @@ async fn pick_cover(cx: &Cx, archive: &artwork::Online, release: &str, group: Op
         let _net = cx.lane(LaneKind::Network("Cover Art Archive".into())).await;
         thumbs.push(musicbrainz::front_cover(&f.edition.id, "250 px", &at).await.ok().flatten().map(|(p, _)| p));
     }
-    let pre = artwork::best_front(&fronts, wanted_px(size), cx.flag("bigger"));
+    let pre = artwork::best_front(&fronts, wanted_px(size), true, false);
     let answer = cx.ask(artwork::cover_question(&fronts, &thumbs, pre)).await?;
     let k = match answer {
         drt_engine::Answer::Pick(k) if k < fronts.len() => k,
@@ -501,7 +517,8 @@ impl Step for CoverArt {
                             // pick, or a bigger one when the release's own falls short.
                             // `Some`: you were asked (and picked this); `None`: there was
                             // nothing to ask, so it goes by itself.
-                            let picked = if cx.flag("pick") {
+                            let how = cx.text("cover");
+                            let picked = if how == "ask" {
                                 cx.status("", "Looking at other editions");
                                 let picked = tokio::select! {
                                     p = pick_cover(&cx, &archive, &id, group.as_deref(), &size, &dir) => p,
@@ -519,7 +536,19 @@ impl Step for CoverArt {
                             };
                             let target = if let Some(p) = picked {
                                 p
-                            } else if falls_short(own_px, wanted_px(&size)) && cx.flag("bigger") {
+                            } else if how == "biggest" {
+                                cx.status("", "Looking at other editions");
+                                let search = tokio::select! {
+                                    s = tokio::time::timeout(EDITIONS_WAIT, biggest_cover(&archive, &id, group.as_deref())) => {
+                                        s.unwrap_or_else(|_| Err(anyhow!("no answer within {} s", EDITIONS_WAIT.as_secs())))
+                                    }
+                                    _ = cx.cancelled() => return Ok(()),
+                                };
+                                search.unwrap_or_else(|err| {
+                                    cx.log(format!("couldn't look at other editions: {err}"));
+                                    None
+                                })
+                            } else if how != "own" && falls_short(own_px, wanted_px(&size)) {
                                 match group {
                                     Some(group) => {
                                         cx.status("", "Looking at other editions");

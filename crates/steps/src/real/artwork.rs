@@ -384,8 +384,12 @@ pub async fn fronts(a: &dyn Archive, release: &str, group: Option<&str>) -> Resu
 }
 
 /// The front Cover art would take by itself: the release's own unless it
-/// falls short of `want` and `bigger` lets a bigger one stand in.
-pub fn best_front(fronts: &[Front], want: Option<u32>, bigger: bool) -> usize {
+/// falls short of `want` and `bigger` lets a bigger one stand in; or, with
+/// `biggest`, the biggest of all, the release's own on a tie.
+pub fn best_front(fronts: &[Front], want: Option<u32>, bigger: bool, biggest: bool) -> usize {
+    if biggest {
+        return fronts.iter().enumerate().max_by_key(|(k, f)| (f.px(), f.own, std::cmp::Reverse(*k))).map_or(0, |(k, _)| k);
+    }
     let own = fronts.iter().position(|f| f.own);
     let biggest = fronts.iter().enumerate().filter(|(_, f)| !f.own).max_by_key(|(k, f)| (f.px(), std::cmp::Reverse(*k))).map(|(k, _)| k);
     match (own, biggest) {
@@ -957,10 +961,13 @@ pub mod tests {
             [("This release", 500), ("Polydor, Europe 1995", 2813), ("A&M Records 31452 3787 2, US 1995", 1902), ("Polydor 537 882-2, Brazil", 601), ("Polydor, UK 1995, Matrix: “IFPI L002”", 599)]
         );
         // 1200 px asked: the biggest; 500 px: its own is enough; told not to look elsewhere: its own.
-        assert_eq!(best_front(&f, Some(1200), true), 1);
-        assert_eq!(best_front(&f, Some(500), true), 0);
-        assert_eq!(best_front(&f, Some(1200), false), 0);
-        assert_eq!(best_front(&f[1..], Some(1200), false), 0, "none of its own: the biggest there is");
+        assert_eq!(best_front(&f, Some(1200), true, false), 1);
+        assert_eq!(best_front(&f, Some(500), true, false), 0);
+        assert_eq!(best_front(&f, Some(1200), false, false), 0);
+        assert_eq!(best_front(&f[1..], Some(1200), false, false), 0, "none of its own: the biggest there is");
+        // The biggest of any edition, whatever size was asked for.
+        assert_eq!(best_front(&f, Some(500), false, true), 1);
+        assert_eq!(best_front(&f[..1], Some(500), false, true), 0, "only its own");
         let thumbs: Vec<Option<PathBuf>> = (0..f.len()).map(|k| Some(PathBuf::from(format!("/w/{k}.jpg")))).collect();
         let q = cover_question(&f, &thumbs, 1);
         assert_eq!(q.prompt, "Which cover?");
