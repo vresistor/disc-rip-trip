@@ -955,11 +955,17 @@ impl Model {
     }
 
     /// Whether *Open tray* is offered for the recipe's drive: one is
-    /// named and connected, and no offset is being measured on it (that
-    /// holds the drive with no run to stop).
+    /// named and connected.
     pub fn can_open_tray(&self, i: usize) -> bool {
         let drive = self.drive(i);
-        !drive.is_empty() && self.is_connected(&drive) && !self.finding.keys().any(|&j| self.drive(j) == drive)
+        !drive.is_empty() && self.is_connected(&drive)
+    }
+
+    /// Whether the offset is being measured on the recipe's drive: that
+    /// reads the disc with no run to stop, so the tray waits till it's done.
+    pub fn measuring_on_drive(&self, i: usize) -> bool {
+        let drive = self.drive(i);
+        self.finding.iter().any(|(&j, &measure)| measure && self.drive(j) == drive)
     }
 
     /// Whether the recipe's drive's tray is being opened just now.
@@ -973,7 +979,7 @@ impl Model {
     /// and the tray opens. Off the window's thread.
     pub fn open_tray(&mut self, i: usize) {
         let drive = self.drive(i);
-        if !self.can_open_tray(i) || !self.opening.lock().unwrap().insert(drive.clone()) {
+        if !self.can_open_tray(i) || self.measuring_on_drive(i) || !self.opening.lock().unwrap().insert(drive.clone()) {
             return;
         }
         let released: Vec<_> = self

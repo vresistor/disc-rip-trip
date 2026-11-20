@@ -1194,9 +1194,12 @@ impl Rip {
     #[allow(clippy::too_many_arguments)]
     async fn read(&self, cx: &Cx, o: &RipOptions<'_>, item: &mut Item, n: u32, dir: &Path, reads: &mut Reads, eta: &Eta, what: &str) -> Result<Verdict> {
         let t = item.index.unwrap();
+        // Held from here till cyanrip has exited: the tray waits for it.
+        // Taken before looking, so a tray asked for meanwhile is seen.
+        let hold = cx.drive_read();
         // Nothing starts once the tray was asked to open, until you ask
         // again; nor on an empty drive.
-        if cx.drive_released() {
+        if hold.tray_opened() {
             return Err(Interrupted(TRAY_OPENED).into());
         }
         let dev = o.device.to_owned();
@@ -1205,8 +1208,6 @@ impl Rip {
             cx.log(format!("track {t}: no disc in the drive, so no read"));
             return Err(Interrupted(NO_DISC).into());
         }
-        // Held from here till cyanrip has exited: the tray waits for it.
-        let hold = cx.drive_read();
         let attempt = reads.crcs.len() + 1;
         cx.item(item, ItemState::Busy, what);
         cx.drive_says(StepState::Busy, if attempt == 1 { "Reading" } else { "Re-reading" }, &format!("track {t}"));

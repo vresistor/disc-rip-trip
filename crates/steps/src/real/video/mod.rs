@@ -550,15 +550,15 @@ impl RipVideo {
         let Some(id) = id else { bail!("the scan didn't list this title") };
         let n = attempts.entry(item.id.clone()).or_default();
         *n += 1;
-        // Nothing starts once the tray was asked to open, until you ask again.
-        if cx.drive_released() {
+        // Held till makemkvcon has exited: the tray waits for it. Nothing
+        // starts once the tray was asked to open, until you ask again.
+        let hold = cx.drive_read();
+        if hold.tray_opened() {
             return Err(super::Interrupted(super::TRAY_OPENED).into());
         }
         let dir = cx.work()?.join("rip").join(format!("title-{part:02}-{n}"));
         cx.item(item, ItemState::Busy, "reading");
         cx.drive_says(StepState::Busy, "Reading", &format!("title {part}"));
-        // Opening the tray stops it.
-        let hold = cx.drive_read();
         let file = with_key(cx, || {
             makemkv::rip(launcher, dev, id, minlength, &dir, hold.stop(), |f, doing| {
                 cx.item(item, ItemState::Busy, format!("{} {}%", doing.to_lowercase(), (f * 100.0) as u32));

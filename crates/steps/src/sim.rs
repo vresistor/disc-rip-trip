@@ -341,13 +341,14 @@ impl Step for Rip {
                 cx.raw(format!("Ripping track {n}, 0.0% [------------------------------] (avg speed:  0.00x)"));
                 // Opening the tray stops the read, as cyanrip's is; and
                 // none starts after it till you ask.
-                let cut = cx.drive_released() || {
-                    let hold = cx.drive_read();
+                let hold = cx.drive_read();
+                let cut = hold.tray_opened() || {
                     tokio::select! {
                         r = cx.sleep(TRACKS.get(n as usize - 1).map_or(150, |t| t.1) as u64 * 12) => { r?; false }
                         _ = hold.stop() => true,
                     }
                 };
+                drop(hold);
                 if cx.stopped() {
                     return Ok(());
                 }

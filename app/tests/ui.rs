@@ -4028,7 +4028,6 @@ fn open_tray_from_the_drive_and_from_rip_mid_read() {
         (3..=12).contains(&r.count(ItemState::Ok)) && r.count(ItemState::Busy) == 1
     });
     open_id(&mut h, "rip");
-    shot(&mut h, "sidebar-rip-open-tray");
     click(&mut h, "Open tray");
     until(&mut h, "the read to stop", |a| {
         let r = &a.m.snapshot(0).steps["rip"];

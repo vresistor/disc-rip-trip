@@ -358,6 +358,8 @@ enum Act {
     /// Stop any read on the recipe's drive and open its tray.
     OpenTray {
         busy: bool,
+        /// The offset is being measured: the tray waits till that's done.
+        measuring: bool,
     },
     AskRemove,
     Remove,
@@ -522,7 +524,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                         plan.colour = Pal::get(app.dark).subtle;
                     }
                     if app.m.can_open_tray(i) {
-                        plan.acts.push(Act::OpenTray { busy: app.m.opening_tray(i) });
+                        plan.acts.push(Act::OpenTray { busy: app.m.opening_tray(i), measuring: app.m.measuring_on_drive(i) });
                     }
                     let missing = app.m.findable_missing(i).iter().any(|m| m.step == *id);
                     // Not while the drive is reading: its settings are locked.
@@ -559,7 +561,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     };
                     // While it has the drive: stop and take the disc out.
                     if app.m.ripping(i) && app.m.shows_newest(i) && app.m.can_open_tray(i) {
-                        plan.acts.push(Act::OpenTray { busy: app.m.opening_tray(i) });
+                        plan.acts.push(Act::OpenTray { busy: app.m.opening_tray(i), measuring: app.m.measuring_on_drive(i) });
                     }
                     // One track's choices are on its row, not here too;
                     // several get one button for them all.
@@ -885,10 +887,11 @@ fn header(app: &mut App, ui: &mut Ui, p: &Pal, plan: &Plan, t: f64) {
                     let label = if *busy { "Measuring…" } else { "Measure offset" };
                     Btn::new("", label).look(if primary { Look::Primary } else { Look::Plain }).enabled(!busy && !app.m.finding.contains_key(&i)).show(ui, p).clicked()
                 }
-                Act::OpenTray { busy } => Btn::new("next-disc", if *busy { "Opening…" } else { "Open tray" })
-                    .enabled(!busy)
+                Act::OpenTray { busy, measuring } => Btn::new("next-disc", if *busy { "Opening…" } else { "Open tray" })
+                    .enabled(!busy && !measuring)
                     .show(ui, p)
-                    .on_hover_text("Stops any read on this drive; a track being read waits for you")
+                    .on_hover_text(if *measuring { "Measuring the offset: the tray can open once that's done" } else { "Stops any read on this drive; a track being read waits for you" })
+                    .on_disabled_hover_text(if *measuring { "Measuring the offset: the tray can open once that's done" } else { "Opening the tray" })
                     .clicked(),
                 // The one thing to do with a step this build doesn't have.
                 Act::AskRemove if plan.body == Body::None && plan.pill.as_ref().is_some_and(|x| x.0 == "Not available") => danger(ui, p, "Remove"),
