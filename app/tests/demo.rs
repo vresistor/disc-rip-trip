@@ -1,8 +1,8 @@
 //! The pictures in the docs, rendered headless from the real window on
-//! simulated steps. Both tests are ignored; run them by hand:
+//! simulated steps. The tests here are ignored; run them by hand:
 //!
 //! ```sh
-//! cargo test -p drt-app --test demo -- --ignored --test-threads 1
+//! cargo test --release -p drt-app --test demo -- --ignored --test-threads 1
 //! ```
 //!
 //! `docs_screenshots` writes `target/docs-shots/<name>-<light|dark>.png`,
@@ -13,21 +13,26 @@
 //! and `picker-popover` (`edit-picker`). `social-light` is
 //! `docs/social-preview.png`.
 //!
-//! `demo_video` writes `target/demo/frame-00000.png`…, 30 frames a second
-//! of a simulated CD going through the CD recipe, with motion on. Then:
+//! `demo_video` and `demo_video_retry` write `target/demo-cd/` and
+//! `target/demo-retry/`: `frame-00000.png`…, 30 frames a second of a
+//! simulated CD in the CDs recipe, with motion and Follow on and a caption
+//! at each step that matters. The first goes from Start to the next disc
+//! and the files let through; the second is a track that doesn't match.
+//! Then, for each (`cd` → `demo`, `retry` → `demo-retry`):
 //!
 //! ```sh
-//! ffmpeg -framerate 30 -i target/demo/frame-%05d.png -c:v libvpx-vp9 \
-//!   -crf 30 -b:v 0 -row-mt 1 -pix_fmt yuv420p docs/demo.webm
-//! ffmpeg -framerate 30 -i target/demo/frame-%05d.png -vf fps=15 \
-//!   -c:v libwebp_anim -q:v 75 -compression_level 6 -loop 0 docs/demo.webp
-//! rm -r target/demo
+//! ffmpeg -framerate 30 -i target/demo-cd/frame-%05d.png -c:v libvpx-vp9 \
+//!   -crf 32 -b:v 0 -row-mt 1 -pix_fmt yuv420p docs/demo.webm
+//! ffmpeg -framerate 30 -i target/demo-cd/frame-%05d.png \
+//!   -vf fps=12,scale=1120:-1:flags=lanczos -c:v libwebp_anim -q:v 70 \
+//!   -compression_level 6 -loop 0 docs/demo.webp
+//! rm -r target/demo-cd
 //! ```
 
 use drt_app::{App, Deps, Model, Store, Tray, Window};
 use drt_engine::{Engine, ItemState, Setting};
 use drt_steps::{recipes, simulated};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -46,6 +51,20 @@ fn env() -> Env {
 /// The window on simulated steps, both drives measured, every recipe on
 /// the first; `fps` sets how far egui's clock moves each step.
 fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, size: egui::Vec2, ppp: f32, fps: f32, motion: bool) -> Harness<'a, Window> {
+    let app = make_app(e, reg, time_scale, motion);
+    let mut h = Harness::builder()
+        .with_size(size)
+        .with_pixels_per_point(ppp)
+        .with_step_dt(1.0 / fps)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts()))
+        .wgpu_setup(renderer())
+        .build_eframe(|_| Window(app));
+    h.run_steps(3);
+    h
+}
+
+fn make_app(e: &Env, reg: drt_engine::Registry, time_scale: f64, motion: bool) -> App {
     let mut engine = Engine::new(reg);
     engine.time_scale = time_scale;
     engine.work_root = e.dir.path().join("work");
@@ -71,16 +90,7 @@ fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, size: egui::V
     model.repeat_limit = Some(0);
     let mut app = App::new(model, false);
     app.motion = motion;
-    let mut h = Harness::builder()
-        .with_size(size)
-        .with_pixels_per_point(ppp)
-        .with_step_dt(1.0 / fps)
-        .with_render_cursor(false)
-        .with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts()))
-        .wgpu_setup(renderer())
-        .build_eframe(|_| Window(app));
-    h.run_steps(3);
-    h
+    app
 }
 
 /// As in `ui.rs`: no debug object names, which the Vulkan loader can't
@@ -203,73 +213,381 @@ fn docs_screenshots() {
     }
 }
 
+/// The window with a caption over its canvas, for the demo videos.
+struct Demo {
+    w: Window,
+    caption: Option<String>,
+    /// The last caption, kept while it fades out.
+    last: String,
+}
+
+impl eframe::App for Demo {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        eframe::App::ui(&mut self.w, ui, frame);
+        if let Some(c) = &self.caption {
+            self.last = c.clone();
+        }
+        let ctx = ui.ctx().clone();
+        let k = ctx.animate_bool_with_time(ui.scope_id().with("caption"), self.caption.is_some(), 0.3);
+        if k <= 0.0 {
+            return;
+        }
+        // Over the canvas, above its zoom bar; dark in light and dark.
+        let canvas = self.w.0.canvas_rect();
+        let a = |x: f32| (x * k) as u8;
+        egui::Area::new(ui.scope_id().with("caption-area"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - 56.0 + 8.0 * (1.0 - k)))
+            .show(&ctx, |ui| {
+                egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(22, 26, 34, a(235.0))).corner_radius(10).inner_margin(egui::Margin::symmetric(16, 10)).show(ui, |ui| {
+                    ui.set_max_width((canvas.width() - 48.0).min(560.0));
+                    ui.add(egui::Label::new(egui::RichText::new(&self.last).font(drt_app::theme::font(16.0, 500)).color(egui::Color32::from_white_alpha(a(255.0)))).wrap());
+                });
+            });
+    }
+
+    fn clear_color(&self, v: &egui::Visuals) -> [f32; 4] {
+        self.w.clear_color(v)
+    }
+}
+
+/// The demo's window: 1120×700 at twice the pixels, so its words read
+/// when the README shrinks it; Follow on, the canvas a little zoomed out.
+fn demo_window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64) -> Harness<'a, Demo> {
+    let w = Window(make_app(e, reg, time_scale, true));
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1120.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / FPS as f32)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts()))
+        .wgpu_setup(renderer())
+        .build_eframe(|_| Demo { w, caption: None, last: String::new() });
+    h.run_steps(3);
+    let a = &mut h.state_mut().w.0;
+    a.follow = true;
+    a.m.repeat_limit = Some(1);
+    // The CDs recipe, the whole of it.
+    let i = a.m.recipes.iter().position(|r| r.name == "CDs").unwrap();
+    a.select(i);
+    h.run_steps(3);
+    h.get_by_label("Fit to window").click_accesskit();
+    h.run_steps(30);
+    h
+}
+
+/// Its start, close enough to read: 80%, the drive at the left.
+fn close_up(a: &App) -> drt_app::canvas::View {
+    let lay = a.layout(a.sel);
+    let z = 0.8;
+    drt_app::canvas::View { zoom: z, pan: egui::vec2(24.0, ((700.0 - 52.0 - 40.0 - lay.height * z) / 2.0).max(16.0)) }
+}
+
+const FPS: f64 = 30.0;
+
+/// Records frames: the engine and egui run in step with the video, a
+/// frame saved for each `speed` steps (2 is twice as fast).
+struct Rec {
+    dir: PathBuf,
+    t0: Instant,
+    /// Seconds of engine and egui time so far.
+    t: f64,
+    acc: f64,
+    saved: usize,
+    late: f64,
+    slow: f64,
+}
+
+impl Rec {
+    fn new(name: &str, slow: f64) -> Rec {
+        let dir = target(&format!("demo-{name}"));
+        for f in std::fs::read_dir(&dir).unwrap().flatten() {
+            let _ = std::fs::remove_file(f.path());
+        }
+        Rec { dir, t0: Instant::now(), t: 0.0, acc: 0.0, saved: 0, late: 0.0, slow }
+    }
+
+    fn tick(&mut self, h: &mut Harness<Demo>, speed: f64, caption: Option<&str>) {
+        self.tick_while(h, speed, caption, |_| true);
+    }
+
+    /// As `tick`, but the frame is kept only while `keep` holds after
+    /// the step; says whether it did.
+    fn tick_while(&mut self, h: &mut Harness<Demo>, speed: f64, caption: Option<&str>, keep: impl Fn(&App) -> bool) -> bool {
+        h.state_mut().caption = caption.map(str::to_owned);
+        self.t += 1.0 / FPS;
+        // Keep the engine's time and the video's in step.
+        let due = self.t0 + Duration::from_secs_f64(self.t * self.slow);
+        match due.checked_duration_since(Instant::now()) {
+            Some(wait) => std::thread::sleep(wait),
+            None => self.late = self.late.max(Instant::now().duration_since(due).as_secs_f64()),
+        }
+        h.step();
+        if !keep(&h.state().w.0) {
+            return false;
+        }
+        self.acc += 1.0 / speed;
+        if self.acc >= 1.0 - 1e-9 {
+            self.acc -= 1.0;
+            h.render().unwrap().save(self.dir.join(format!("frame-{:05}.png", self.saved))).unwrap();
+            self.saved += 1;
+        }
+        true
+    }
+
+    fn done(&self) {
+        eprintln!("{}: {} frames ({:.1} s), {:.1} s behind at most", self.dir.display(), self.saved, self.saved as f64 / FPS, self.late);
+    }
+}
+
+fn demo<'h>(h: &'h Harness<Demo>) -> &'h App {
+    &h.state().w.0
+}
+
+fn demo_mut<'h>(h: &'h mut Harness<'_, Demo>) -> &'h mut App {
+    &mut h.state_mut().w.0
+}
+
+/// A CD from start to finish: the lookups, Choose asking, the rip, the
+/// next disc, then the first's files let through into the library.
 #[test]
 #[ignore = "renders the demo video's frames; run by hand"]
 fn demo_video() {
-    const FPS: f64 = 30.0;
-    // Wall seconds per second of video: rendering and saving a frame takes
-    // longer than a thirtieth of a second, so the engine runs this much
-    // slower and every frame lands on its own moment.
-    const SLOW: f64 = 9.0;
-    let dir = target("demo");
-    for f in std::fs::read_dir(&dir).unwrap().flatten() {
-        let _ = std::fs::remove_file(f.path());
-    }
+    // Wall seconds per second of engine time: rendering and saving a
+    // frame takes longer than a thirtieth of a second.
+    const SLOW: f64 = 12.0;
     let e = env();
-    let mut h = window(&e, simulated(None), 0.4 * SLOW, egui::vec2(1280.0, 720.0), 1.0, FPS as f32, true);
-    app_mut(&mut h).m.repeat_limit = Some(1);
-    pick(&mut h, "CDs");
-    // Fit glides; let it settle before the first frame.
-    h.run_steps(30);
-    let t0 = Instant::now();
-    let mut started = None::<f64>;
-    let mut asked_at = None::<f64>;
-    let mut answered = false;
-    let mut late = 0.0f64;
-    let mut second_disc = None::<f64>;
-    for k in 0..(50.0 * FPS) as usize {
-        let t = k as f64 / FPS;
-        // Keep the engine's time and the video's in step.
-        let due = t0 + Duration::from_secs_f64(t * SLOW);
-        match due.checked_duration_since(Instant::now()) {
-            Some(wait) => std::thread::sleep(wait),
-            None => late = late.max(Instant::now().duration_since(due).as_secs_f64()),
-        }
-        let i = app(&h).sel;
-        if started.is_none() && t >= 1.5 {
-            h.get_by_label("Start").click_accesskit();
-            started = Some(t);
-        }
-        if asked_at.is_none() && matches!(app(&h).tray, Some(Tray::Question { .. })) {
-            asked_at = Some(t);
-        }
-        if let (Some(a), false) = (asked_at, answered) {
-            if t >= a + 1.6 && t < a + 1.7 {
-                // The second release first, to show the choice moving.
-                if let Some(n) = h.get_all_by_role(egui::accesskit::Role::RadioButton).nth(1) {
-                    n.click_accesskit();
+    let mut h = demo_window(&e, simulated(None), 0.4 * SLOW);
+    let i = demo(&h).sel;
+    let mut rec = Rec::new("cd", SLOW);
+    #[derive(PartialEq, Debug)]
+    enum P {
+        Ready,
+        LookUp,
+        Asking,
+        Rip,
+        Fast,
+        NextDisc,
+        ToHold,
+        Hold,
+        Filing,
+    }
+    let mut p = P::Ready;
+    let mut at = 0.0;
+    let mut first = None::<u64>;
+    let mut end = None::<f64>;
+    let start = Instant::now();
+    loop {
+        assert!(start.elapsed() < Duration::from_secs(1200), "the demo never finished, at {p:?}");
+        let t = rec.t;
+        let since = t - at;
+        let a = demo(&h);
+        let mut next = None;
+        let (speed, caption): (f64, Option<&str>) = match p {
+            P::Ready => {
+                if (3.0..3.0 + 1.0 / FPS).contains(&since) {
+                    let to = close_up(a);
+                    demo_mut(&mut h).glide_to(i, to, 0.9);
                 }
-            }
-            if t >= a + 2.6 && t < a + 2.7 {
-                if let Some(n) = h.get_all_by_role(egui::accesskit::Role::RadioButton).next() {
-                    n.click_accesskit();
+                if since >= 4.2 {
+                    h.get_by_label("Start").click_accesskit();
+                    next = Some(P::LookUp);
                 }
+                (1.0, Some("The CDs recipe: each step a CD goes through, left to right"))
             }
-            if t >= a + 3.4 {
-                h.get_by_label("Use this one").click_accesskit();
-                answered = true;
+            P::LookUp => {
+                if matches!(a.tray, Some(Tray::Question { .. })) {
+                    next = Some(P::Asking);
+                }
+                (1.5, Some("Start: it reads the disc and looks it up"))
             }
-        }
-        // The next disc is in: show it for a few seconds, then stop.
-        if second_disc.is_none() && answered && app(&h).m.runs.get(&i).is_some_and(|v| v.len() > 1) {
-            second_disc = Some(t);
-        }
-        if second_disc.is_some_and(|s| t >= s + 5.0) {
+            P::Asking => {
+                let radios = || h.get_all_by_role(egui::accesskit::Role::RadioButton).filter(|n| !n.accesskit_node().label().is_some_and(|l| l.starts_with("Appearance")));
+                if (3.0..3.0 + 1.0 / FPS).contains(&since) {
+                    if let Some(n) = radios().nth(1) {
+                        n.click_accesskit();
+                    }
+                }
+                if (4.2..4.2 + 1.0 / FPS).contains(&since) {
+                    if let Some(n) = radios().next() {
+                        n.click_accesskit();
+                    }
+                }
+                if let Some(b) = h.query_by_label("Use this one").filter(|_| since >= 5.5) {
+                    b.click_accesskit();
+                    next = Some(P::Rip);
+                }
+                (1.0, Some("Not sure which album it is, so it asks. The best match is already picked."))
+            }
+            P::Rip => {
+                if since >= 5.0 {
+                    next = Some(P::Fast);
+                }
+                (1.0, Some("Each track is read, and checked against AccurateRip"))
+            }
+            P::Fast => {
+                if a.m.runs.get(&i).is_some_and(|v| v.len() > 1) {
+                    // The first disc stays on the canvas; the next shows
+                    // in the list.
+                    first = a.m.runs[&i].first().map(|r| r.id);
+                    demo_mut(&mut h).show_run(i, first);
+                    next = Some(P::NextDisc);
+                }
+                (4.0, if since < 1.0 { Some("Each track is read, and checked against AccurateRip") } else { None })
+            }
+            P::NextDisc => {
+                if since >= 5.0 {
+                    next = Some(P::ToHold);
+                }
+                (1.0, Some("Next disc: out comes this CD and in goes the next, under CDs in the list. This one carries on."))
+            }
+            P::ToHold => {
+                let held = a.m.runs[&i].iter().find(|r| Some(r.id) == first).is_some_and(|r| r.snap.steps["hold"].detail == "All here");
+                if held {
+                    demo_mut(&mut h).open(Tray::Step { id: "hold".into(), focus: None });
+                    next = Some(P::Hold);
+                }
+                (3.0, None)
+            }
+            P::Hold => {
+                if since >= 4.0 {
+                    if let Some(b) = h.get_all_by_role(egui::accesskit::Role::Button).find(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("Let ") && l.ends_with(" through"))) {
+                        b.click_accesskit();
+                    }
+                    next = Some(P::Filing);
+                }
+                (1.0, Some("Hold keeps the files back until you've had a look"))
+            }
+            P::Filing => {
+                // Done once the library has them, before the canvas goes
+                // back to the next disc.
+                let filed = a.m.runs[&i].iter().find(|r| Some(r.id) == first).is_none_or(|r| r.snap.finished || r.snap.steps["lib1"].state == drt_engine::StepState::Ok);
+                if filed && end.is_none() {
+                    end = Some(t);
+                }
+                // The canvas whole again, to see the library fill.
+                if since >= 0.4 && demo(&h).tray.is_some() {
+                    demo_mut(&mut h).close_tray();
+                }
+                (1.0, Some("Let through: the tracks go into your library, named and tagged"))
+            }
+        };
+        if end.is_some_and(|e| t >= e + 2.0) {
             break;
         }
-        h.step();
-        h.render().unwrap().save(dir.join(format!("frame-{k:05}.png"))).unwrap();
+        // Not a frame of the canvas going back to the next disc.
+        if !rec.tick_while(&mut h, speed, caption, |a| first.is_none() || !a.m.shows_newest(i)) {
+            break;
+        }
+        if let Some(n) = next {
+            eprintln!("{:.1} s: {n:?}", rec.t);
+            p = n;
+            at = rec.t;
+        }
     }
-    eprintln!("{} frames, {:.1} s behind at most", std::fs::read_dir(&dir).unwrap().count(), late);
-    assert!(answered && second_disc.is_some(), "the video didn't get to the next disc");
+    rec.done();
+}
+
+/// When a track doesn't match: through to Rip asking about track 9, then
+/// read again.
+#[test]
+#[ignore = "renders the demo video's frames; run by hand"]
+fn demo_video_retry() {
+    const SLOW: f64 = 12.0;
+    let e = env();
+    let mut h = demo_window(&e, simulated(Some(9)), 0.4 * SLOW);
+    demo_mut(&mut h).m.repeat_limit = Some(0);
+    let i = demo(&h).sel;
+    let to = close_up(demo(&h));
+    demo_mut(&mut h).set_view(i, (to.zoom, to.pan));
+    h.run_steps(2);
+    let mut rec = Rec::new("retry", SLOW);
+    #[derive(PartialEq, Debug)]
+    enum P {
+        Ready,
+        LookUp,
+        Fast,
+        NoMatch,
+        Faster,
+        Asks,
+        Again,
+        Agrees,
+    }
+    let mut p = P::Ready;
+    let mut at = 0.0;
+    let start = Instant::now();
+    loop {
+        assert!(start.elapsed() < Duration::from_secs(1200), "the demo never finished, at {p:?}");
+        let since = rec.t - at;
+        let a = demo(&h);
+        let snap = a.m.snapshot(i);
+        let rip = &snap.steps["rip"];
+        let nine = rip.items.iter().find(|it| it.id == "track-9").map(|it| it.state);
+        let mut next = None;
+        let (speed, caption): (f64, Option<&str>) = match p {
+            P::Ready => {
+                if since >= 2.5 {
+                    h.get_by_label("Start").click_accesskit();
+                    next = Some(P::LookUp);
+                }
+                (1.0, Some("This CD has a scratch on track 9"))
+            }
+            P::LookUp => {
+                if let Some(b) = h.query_by_label("Use this one").filter(|_| since > 0.5) {
+                    b.click_accesskit();
+                    next = Some(P::Fast);
+                }
+                (3.0, Some("This CD has a scratch on track 9"))
+            }
+            P::Fast => {
+                if nine == Some(ItemState::Bad) {
+                    next = Some(P::NoMatch);
+                }
+                (4.0, None)
+            }
+            P::NoMatch => {
+                if since >= 3.5 {
+                    next = Some(P::Faster);
+                }
+                (1.0, Some("Track 9 doesn't match AccurateRip. The rip goes on with the rest."))
+            }
+            P::Faster => {
+                if rip.state == drt_engine::StepState::Bad {
+                    demo_mut(&mut h).open(Tray::Step { id: "rip".into(), focus: None });
+                    next = Some(P::Asks);
+                }
+                (4.0, None)
+            }
+            P::Asks => {
+                if since >= 5.0 {
+                    h.get_by_label("Read again, Broken Bricks").click_accesskit();
+                    next = Some(P::Again);
+                }
+                (1.0, Some("Then it waits for you: read it again, keep it, or skip it"))
+            }
+            P::Again => {
+                if nine == Some(ItemState::Ok) {
+                    next = Some(P::Agrees);
+                }
+                (1.0, Some("Read again, carefully"))
+            }
+            P::Agrees => {
+                if since >= 4.0 {
+                    break;
+                }
+                (1.0, Some("Two reads agree: the track is good, and goes on with the rest"))
+            }
+        };
+        rec.tick(&mut h, speed, caption);
+        if let Some(n) = next {
+            eprintln!("{:.1} s: {n:?}", rec.t);
+            p = n;
+            at = rec.t;
+        }
+    }
+    for _ in 0..20 {
+        rec.tick(&mut h, 1.0, None);
+    }
+    rec.done();
 }
