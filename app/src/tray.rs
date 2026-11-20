@@ -1667,6 +1667,8 @@ struct Row {
     hover: Option<String>,
     /// The row opens something under it (a track's lyrics): open or not.
     toggle: Option<bool>,
+    /// Its file opens from a quiet *Open* at its end (a picture).
+    open: bool,
     /// The file's size, in a column of its own before the verdict, and
     /// that column's width (the list's widest).
     size: Option<String>,
@@ -1693,6 +1695,7 @@ impl Row {
             progress: None,
             hover: None,
             toggle: None,
+            open: false,
             widest: vec![],
             size: None,
             size_w: 0.0,
@@ -1923,6 +1926,13 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
         x += 4.0;
     }
     let mut right = rect.right() - 6.0;
+    // A file it stands for, opened from a quiet link at its end.
+    let mut open_file = false;
+    if r.open {
+        let (lr, c) = crate::widgets::link_at(ui, p, right, cy, "Open", &format!("Open, {}", r.title), "Open full size");
+        open_file = c;
+        right = lr.left() - 10.0;
+    }
     // A row that opens: its chevron at the end, turning as it opens.
     if let Some(open) = r.toggle {
         crate::widgets::chevron(&pt, pos2(right - 7.0, cy), 14.0, if open { 0.0 } else { -std::f32::consts::FRAC_PI_2 }, p.muted);
@@ -2083,6 +2093,9 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
             .inner;
         ui.add_space(10.0);
         bottom = placed.bottom() + 10.0;
+    }
+    if open_file {
+        clicked = r.item.clone().map(|i| (i, OPEN.to_owned()));
     }
     if r.attn {
         let all = Rect::from_min_max(rect.min, pos2(rect.right(), bottom));
@@ -2337,6 +2350,10 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
                     if r.attn {
                         retries(&mut r, &info);
                     }
+                    // A picture it saved opens at full size.
+                    if info.output == drt_engine::ItemKind::PictureFile && it.state == ItemState::Ok && picture_file(&v.record.files, &it.label).is_some() {
+                        r.open = true;
+                    }
                     r
                 })
                 .collect();
@@ -2362,8 +2379,23 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
         }
     };
     for (item, option) in clicked {
+        if option == OPEN {
+            let label = v.items.iter().find(|it| it.id == item).map(|it| it.label.as_str()).unwrap_or_default();
+            if let Some(f) = picture_file(&v.record.files, label) {
+                app.m.open(&expand(&f.path));
+            }
+            continue;
+        }
         app.m.send(i, Command::Retry { step: id.into(), item, option });
     }
+}
+
+/// A row's *Open*, which opens its file rather than retrying anything.
+const OPEN: &str = "open-file";
+
+/// The picture file a row stands for, by its name.
+fn picture_file<'a>(files: &'a [drt_engine::Made], label: &str) -> Option<&'a drt_engine::Made> {
+    files.iter().find(|f| file_name(&f.path) == label && expand(&f.path).is_absolute())
 }
 
 /// Lyrics: each track and what it found; a row with lyrics opens them
@@ -3232,13 +3264,16 @@ fn cover(app: &mut App, ui: &mut Ui, p: &Pal, v: &StepView, ctx: Option<&Context
     load_cover(app, ui.ctx(), &path);
     let side = room(ui).min(220.0);
     let state = &app.covers[&path];
+    let mut open = false;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 16.0;
         match state {
             Cover::Ready(tex, [w, h]) => {
                 let (w, h) = (*w as f32, *h as f32);
                 let s = side / w.max(h);
-                ui.add(egui::Image::new((tex.id(), vec2(w * s, h * s))).corner_radius(6).alt_text("The cover"));
+                // A click opens it at full size, in the system's viewer.
+                let resp = ui.add(egui::Image::new((tex.id(), vec2(w * s, h * s))).corner_radius(6).alt_text("The cover").sense(Sense::click()));
+                open = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open full size").clicked();
             }
             Cover::Loading => {
                 let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
@@ -3251,6 +3286,15 @@ fn cover(app: &mut App, ui: &mut Ui, p: &Pal, v: &StepView, ctx: Option<&Context
             }
         }
     });
+    if matches!(state, Cover::Ready(..)) {
+        ui.add_space(6.0);
+        let label = "Open full size";
+        let (r, _) = ui.allocate_exact_size(vec2(crate::widgets::link_width(ui, label), 20.0), Sense::hover());
+        open |= crate::widgets::link_at(ui, p, r.right(), r.center().y, label, label, &path.display().to_string()).1;
+    }
+    if open {
+        app.m.open(&path);
+    }
     // Where it came from, when that isn't the chosen release.
     if let Some(from) = ctx.and_then(|c| c.get(Subject::Disc, "cover_from")) {
         ui.add_space(8.0);
@@ -3361,6 +3405,14 @@ fn pictures(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, step: &str) {
                     ui.add_space(6.0);
                     ui.add(egui::Label::new(RichText::new(&o.label).font(font(13.0, if k == pick { 600 } else { 500 })).color(p.ink)).wrap());
                     ui.label(RichText::new(&o.detail).font(font(12.5, 400)).color(p.muted));
+                    // Seeing one at full size doesn't pick it.
+                    if let Some(path) = o.picture.as_deref().map(expand).filter(|f| f.is_absolute()) {
+                        let label = "Open full size";
+                        let (r, _) = ui.allocate_exact_size(vec2(crate::widgets::link_width(ui, label), 20.0), Sense::hover());
+                        if crate::widgets::link_at(ui, p, r.right(), r.center().y, label, &format!("Open full size: {}", o.label), &path.display().to_string()).1 {
+                            app.m.open(&path);
+                        }
+                    }
                 });
             }
         });

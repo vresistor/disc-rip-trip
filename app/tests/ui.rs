@@ -1398,7 +1398,7 @@ fn a_cover_from_another_edition_and_every_scan() {
     write_cover(&png);
     let mut reg = simulated(None);
     let inner = reg.get("cover-art").unwrap().0;
-    reg.add(TestEditionCover { inner, png });
+    reg.add(TestEditionCover { inner, png: png.clone() });
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     h.get_by_label_contains("Archive everything").click();
     h.run_steps(2);
@@ -1428,12 +1428,21 @@ fn a_cover_from_another_edition_and_every_scan() {
     open_tile(&mut h, "Cover art,");
     until(&mut h, "the cover", |a| a.covers.values().any(|c| matches!(c, drt_app::tray::Cover::Ready(..))));
     shot(&mut h, "step-cover-edition");
+    // It opens at full size, from its link or the picture itself.
+    click(&mut h, "Open full size");
+    assert_eq!(e.opened.lock().unwrap().last(), Some(&png), "the cover opened");
+    h.get_by_label("The cover").click();
+    h.run_steps(2);
+    assert_eq!(e.opened.lock().unwrap().len(), 2, "a click on the picture opens it too");
     click(&mut h, "Settings");
     assert!(h.query_all_by_label_contains("Which cover").count() > 0);
     shot(&mut h, "step-cover-settings");
     open_tile(&mut h, "Artwork files,");
-    h.get_by_label_contains("Booklet 01.jpg");
     shot(&mut h, "step-artwork-files");
+    // Each scan opens from its row.
+    click(&mut h, "Open, Booklet 01.jpg");
+    let opened = e.opened.lock().unwrap().last().cloned().unwrap();
+    assert!(opened.is_absolute() && opened.ends_with("Artwork/Booklet 01.jpg"), "the scan opened: {opened:?}");
 }
 
 /// Cover art set to let you pick: three fronts to choose from, as the real
@@ -1485,7 +1494,7 @@ fn a_cover_is_picked_from_pictures() {
     write_cover_in(&pngs[2], [0x18, 0x20, 0x2b], [0xe0, 0xa8, 0x30]);
     let mut reg = simulated(None);
     let inner = reg.get("cover-art").unwrap().0;
-    reg.add(TestPickCover { inner, pngs });
+    reg.add(TestPickCover { inner, pngs: pngs.clone() });
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     click(&mut h, "Start");
     until(&mut h, "Which album?", |a| a.m.snapshot(0).question.as_ref().is_some_and(|(s, _)| s == "choose"));
@@ -1498,9 +1507,13 @@ fn a_cover_is_picked_from_pictures() {
     shot(&mut h, "question-cover");
     // The biggest is picked to start with.
     assert!(h.get_by_label("Polydor, Europe 1995, 2813 × 2805").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True));
+    // Opening one at full size doesn't pick it.
+    click(&mut h, "Open full size: A&M Records 31452 3787 2, US 1995");
+    assert!(pngs.contains(e.opened.lock().unwrap().last().unwrap()), "a front opened");
+    assert!(h.get_by_label("Polydor, Europe 1995, 2813 × 2805").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True));
     click(&mut h, "A&M Records 31452 3787 2, US 1995, 1902 × 1858");
     assert!(h.get_by_label("A&M Records 31452 3787 2, US 1995, 1902 × 1858").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True));
-    click(&mut h, "Use this cover");
+    h.get_by_label("Use this cover").click_accesskit();
     until(&mut h, "the cover picked", |a| a.m.snapshot(0).steps[&step].status == "picked A&M Records 31452 3787 2, US 1995");
 }
 
@@ -4212,4 +4225,74 @@ fn a_ps1_recipe_is_built_by_hand_with_its_side_by_side_steps_joined() {
     click(&mut h, "Save");
     assert!(app(&h).m.cant_start(i).is_none(), "{:?}", app(&h).m.cant_start(i));
     shot(&mut h, "ps1-saved");
+}
+
+/// Follow, at the foot of the canvas: on, it's kept for next time; a drag
+/// turns it off.
+#[test]
+fn follow_is_switched_on_remembered_and_dragged_off() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    assert!(!app(&h).follow, "off to start with");
+    assert_eq!(h.get_by_label("Follow").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    click(&mut h, "Follow");
+    assert!(app(&h).follow);
+    assert_eq!(h.get_by_label("Follow").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(std::fs::read_to_string(e.dir.path().join("config/follow")).unwrap(), "on");
+    // Another window on the same settings starts with it on.
+    assert!(window(&e, None, true, 0.0).state().0.follow);
+    // Dragging the canvas by hand stops it.
+    let canvas = egui::pos2(700.0, 450.0);
+    h.hover_at(canvas);
+    h.step();
+    h.drag_at(canvas);
+    h.step();
+    h.hover_at(canvas + egui::vec2(30.0, 10.0));
+    h.step();
+    h.drop_at(canvas + egui::vec2(40.0, 10.0));
+    h.run_steps(2);
+    assert!(!app(&h).follow, "a drag turns Follow off");
+    // So does zooming with the buttons.
+    click(&mut h, "Follow");
+    click(&mut h, "Zoom in");
+    assert!(!app(&h).follow, "zooming by hand turns Follow off");
+}
+
+/// With Follow on, the canvas goes to where things are happening, even
+/// from far off and zoomed in; with it off, it stays where you left it.
+#[test]
+fn follow_brings_the_latest_step_into_view() {
+    fn inside(a: &App, step: &str) -> bool {
+        let r = a.layout(0).tile(step).unwrap().rect;
+        let v = a.views_of(0);
+        let (min, max) = (v.pan + egui::vec2(r.x, r.y) * v.zoom, v.pan + egui::vec2(r.right(), r.y + r.h) * v.zoom);
+        let c = a.canvas_rect();
+        min.x >= 0.0 && min.y >= 0.0 && max.x <= c.width() && max.y <= c.height()
+    }
+    for on in [true, false] {
+        let e = env();
+        let mut h = window(&e, None, true, 0.0);
+        app_mut(&mut h).follow = on;
+        click(&mut h, "Start");
+        until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
+        h.run_steps(10);
+        let step = snap(&h).question.unwrap().0;
+        assert!(inside(app(&h), &step), "the step asking is in view");
+        click(&mut h, "Use this one");
+        // Zoomed in on the drive, the rest of the recipe off to the right.
+        app_mut(&mut h).set_view(0, (2.0, egui::vec2(40.0, 40.0)));
+        until(&mut h, "Hold to wait for you", |a| a.m.snapshot(0).steps["hold"].state == StepState::Hold && a.m.snapshot(0).steps["rip"].state == StepState::Ok);
+        h.run_steps(120);
+        let a = app(&h);
+        let last = a.followed().expect("something happened").to_owned();
+        assert_eq!(last, "hold", "the step waiting for you comes first");
+        let v = a.views_of(0);
+        if on {
+            assert!(inside(a, &last), "{last} is in view with Follow on");
+            assert!(v.zoom <= 2.0, "it only zooms out");
+        } else {
+            assert!(!inside(a, &last), "{last} is left alone with Follow off");
+            assert_eq!((v.zoom, v.pan), (2.0, egui::vec2(40.0, 40.0)), "without Follow, the view stays");
+        }
+    }
 }

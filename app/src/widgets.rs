@@ -283,6 +283,37 @@ pub fn segmented(ui: &mut Ui, p: &Pal, name: &str, options: &[&str], chosen: Opt
     clicked
 }
 
+/// A small on/off switch with its words after it, as quiet as the
+/// buttons beside it.
+pub fn switch(ui: &mut Ui, p: &Pal, label: &str, on: bool, f: FontId) -> Response {
+    let fg = if on { p.ink } else { p.muted };
+    let g = ui.painter().layout_no_wrap(label.to_owned(), f, fg);
+    let track = vec2(24.0, 14.0);
+    let pad = vec2(6.0, 4.0);
+    let size = vec2(track.x + 6.0 + g.size().x, g.size().y.max(track.y)) + pad * 2.0;
+    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Switch, true, on, label));
+    let hov = crate::motion::tween(ui.ctx(), resp.id.with("hover"), resp.hovered(), 0.09, crate::motion::cubic_out);
+    let k = crate::motion::tween(ui.ctx(), resp.id.with("on"), on, 0.14, crate::motion::cubic_out);
+    let pt = ui.painter();
+    if resp.is_pointer_button_down_on() {
+        pt.rect_filled(r, 6.0, mix(p.ink, 0.10, p.raised));
+    } else if hov > 0.0 {
+        pt.rect_filled(r, 6.0, mix(p.bg, hov, p.bg.gamma_multiply(0.0)));
+    }
+    let tr = egui::Rect::from_min_size(pos2(r.left() + pad.x, r.center().y - track.y / 2.0), track);
+    pt.rect_filled(tr, track.y / 2.0, mix(p.action, k, p.faint));
+    let knob = track.y / 2.0 - 2.0;
+    let cx = tr.left() + track.y / 2.0 + k * (track.x - track.y);
+    pt.circle_filled(pos2(cx, tr.center().y), knob, if on { p.action_ink } else { p.raised });
+    pt.galley(pos2(tr.right() + 6.0, r.center().y - g.size().y / 2.0), g, fg);
+    focus_ring(ui, &resp, r, 6.0, p);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
 /// Whether Esc was what just took a field's focus: then what was typed
 /// is put back, not kept.
 pub fn escaped(ui: &egui::Ui) -> bool {

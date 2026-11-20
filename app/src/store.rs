@@ -123,6 +123,21 @@ impl Store {
         Ok(())
     }
 
+    /// Whether the canvas follows what's happening: "on" or "off".
+    pub fn load_follow(&self) -> Option<bool> {
+        match std::fs::read_to_string(self.dir.join("follow")).ok()?.trim() {
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        }
+    }
+
+    pub fn save_follow(&self, on: bool) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join("follow"), if on { "on" } else { "off" })?;
+        Ok(())
+    }
+
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         if self.settings_unreadable.is_some() {
             return Ok(());

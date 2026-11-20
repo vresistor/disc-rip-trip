@@ -92,6 +92,13 @@ pub struct App {
     cue_key: Option<(usize, u64)>,
     cue_seen: HashMap<String, StepState>,
     pub cues: HashMap<String, (StepState, f64)>,
+    /// Follow: the canvas keeps the step where something last happened in
+    /// view. Remembered; a drag or a zoom by hand turns it off.
+    pub follow: bool,
+    /// The step that last began, finished or began to ask, and when.
+    follow_last: Option<(String, f64)>,
+    /// When Follow last moved the camera.
+    follow_moved: f64,
     /// The +s that would offer nothing, for the tree they were worked out
     /// on: they aren't drawn.
     dead_pluses: Option<(drt_engine::Node, std::collections::HashSet<drt_engine::Spot>)>,
@@ -187,6 +194,7 @@ impl App {
     }
 
     pub fn new(m: Model, dark: bool) -> App {
+        let follow = m.store.load_follow().unwrap_or(false);
         App {
             m,
             side_last: None,
@@ -220,6 +228,9 @@ impl App {
             cue_key: None,
             cue_seen: HashMap::new(),
             cues: HashMap::new(),
+            follow,
+            follow_last: None,
+            follow_moved: f64::NEG_INFINITY,
             dead_pluses: None,
             band: Vec::new(),
             title_field: None,
@@ -308,9 +319,69 @@ impl App {
             if !fresh && was.is_some_and(|w| w != st) && matches!(st, StepState::Ok | StepState::Bad | StepState::Needs) {
                 self.cues.insert(id.clone(), (st, self.now));
             }
+            // Follow goes to the latest change, a step that asks first.
+            if !fresh && was.is_some_and(|w| w != st) && matches!(st, StepState::Busy | StepState::Ok | StepState::Bad | StepState::Needs) {
+                let asking = self.follow_last.as_ref().is_some_and(|(f, _)| f != id && self.cue_seen.get(f) == Some(&StepState::Needs));
+                if st == StepState::Needs || !asking {
+                    self.follow_last = Some((id.clone(), self.now));
+                }
+            }
         }
         let now = self.now;
         self.cues.retain(|_, (_, t0)| now - *t0 < 1.0);
+    }
+
+    /// Turns Follow on or off, and remembers it.
+    pub fn set_follow(&mut self, on: bool) {
+        self.follow = on;
+        self.follow_moved = f64::NEG_INFINITY;
+        if let Err(e) = self.m.store.save_follow(on) {
+            eprintln!("couldn't save Follow: {e:#}");
+        }
+    }
+
+    /// The step where something last happened, which Follow goes to.
+    pub fn followed(&self) -> Option<&str> {
+        self.follow_last.as_ref().map(|(id, _)| id.as_str())
+    }
+
+    /// Follow: once the latest change has settled a moment, glides just
+    /// far enough to bring its step into view, zooming out only if it
+    /// wouldn't fit. A step that asks you goes first; otherwise it moves
+    /// at most every second or so, so several busy steps don't pull it
+    /// about.
+    fn follow_step(&mut self, i: usize, lay: &drt_layout::Layout, area: egui::Vec2) {
+        const SETTLE: f64 = 0.35;
+        const GAP: f64 = 1.2;
+        if !self.follow || self.editing || self.popover.is_some() {
+            return;
+        }
+        // A step asking now wins over the latest change.
+        let asking = self.cue_seen.iter().filter(|(_, s)| **s == StepState::Needs).map(|(id, _)| id.clone()).min_by_key(|id| lay.tile(id).map(|t| t.rect.x as i64));
+        let (id, settled) = match (asking, &self.follow_last) {
+            (Some(a), Some((l, at))) if *l == a => (a, self.now - at >= SETTLE),
+            (Some(a), _) => (a, true),
+            (None, Some((l, at))) => (l.clone(), self.now - at >= SETTLE && self.now - self.follow_moved >= GAP),
+            (None, None) => return,
+        };
+        let Some(tp) = lay.tile(&id) else { return };
+        if !settled {
+            return;
+        }
+        let from = self.glide.filter(|g| g.0 == i).map_or(self.views_of(i), |g| g.2);
+        let mut to = from;
+        // Zoom out only if the tile is too big for the canvas as it is.
+        let room = (area.x - 48.0) / tp.rect.w;
+        let room = room.min((area.y - 48.0) / tp.rect.h);
+        if to.zoom > room {
+            let c = egui::Pos2::ZERO + area / 2.0;
+            to.zoom_about(egui::Pos2::ZERO, c, room);
+        }
+        to.reveal(tp.rect, area);
+        if (to.pan - from.pan).length() > 0.5 || (to.zoom - from.zoom).abs() > 0.001 {
+            self.glide_to(i, to, 0.6);
+            self.follow_moved = self.now;
+        }
     }
 
     pub fn view(&mut self, i: usize) -> &mut View {
@@ -1164,8 +1235,10 @@ impl App {
                 self.glide_to(i, to, 0.18);
             }
         }
-        self.step_glide(i);
         self.watch_cues(i, snap);
+        // Above the zoom bar, which sits over the canvas's foot.
+        self.follow_step(i, &lay, vec2(final_w, rect.height() - 40.0));
+        self.step_glide(i);
         let open = match &self.tray {
             Some(Tray::Step { id, .. }) => Some(id.clone()),
             Some(Tray::Question { step }) => Some(step.clone()),
@@ -1195,9 +1268,11 @@ impl App {
         let marks = Marks { open: open.as_deref(), editing, plus_open: plus_open.as_ref(), doomed: &doomed, round, cues: &self.cues, dead, cards: &cards, t, root: &root };
         let before = *view;
         let clicked = canvas::show(ui, rect, view, &lay, snap, p, marks);
-        // A drag or a scroll takes the camera back from a glide.
+        // A drag or a scroll takes the camera back from a glide, and from
+        // Follow.
         if *view != before {
             self.glide = None;
+            self.follow = false;
         }
         match clicked {
             Some(Click::Tile(id)) => self.tile_clicked(id),
@@ -1299,24 +1374,33 @@ impl App {
                     // Each glides there (at once without motion).
                     let mut to = self.glide.filter(|g| g.0 == i).map_or(self.views_of(i), |g| g.2);
                     let z = to.zoom;
+                    // Zooming by hand stops Follow.
                     if Btn::new("minus", "").name("Zoom out").look(Look::Quiet).font(f.clone()).show(ui, p).clicked() {
                         to.zoom_about(o, centre, z / 1.25);
                         self.glide_to(i, to, 0.14);
+                        self.follow = false;
                     }
                     let pct = format!("{:.0}%", self.views_of(i).zoom * 100.0);
                     if Btn::new("", &pct).name("Actual size").look(Look::Quiet).font(f.clone()).show(ui, p).clicked() {
                         to.zoom_about(o, centre, 1.0);
                         self.glide_to(i, to, 0.24);
+                        self.follow = false;
                     }
                     if Btn::new("plus", "").name("Zoom in").look(Look::Quiet).font(f.clone()).show(ui, p).clicked() {
                         to.zoom_about(o, centre, z * 1.25);
                         self.glide_to(i, to, 0.14);
+                        self.follow = false;
                     }
                     // Its words where there's room; on a narrow canvas, the icon.
                     let words = if canvas.width() >= 360.0 { "Fit to window" } else { "" };
-                    if Btn::new("fit", words).name("Fit to window").look(Look::Quiet).font(f).show(ui, p).clicked() {
+                    if Btn::new("fit", words).name("Fit to window").look(Look::Quiet).font(f.clone()).show(ui, p).clicked() {
                         to.fit(lay, vec2(canvas.width(), canvas.height() - cover));
                         self.glide_to(i, to, 0.24);
+                    }
+                    ui.add_space(4.0);
+                    let tip = "Keep the step that's working, or waiting for you, in view";
+                    if crate::widgets::switch(ui, p, "Follow", self.follow, f).on_hover_text(tip).clicked() {
+                        self.set_follow(!self.follow);
                     }
                 });
             });
