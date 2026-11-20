@@ -107,7 +107,17 @@ track that still isn't settled waits for you, and its row offers:
   read, not only the careful ones. A sample where no value has a majority
   keeps the most common one (the earliest read's on a tie); the row says
   how many samples were *uncertain*, and the track is filed as kept.
-- **Read again slowly:** as *Read again*, at 4×.
+- **Read again slowly:** as *Read again*, at 4×. Some drives won't change
+  speed (the MATSHITA UJ240AS is one): cyanrip says *Speed: default
+  (unchangeable)* when it reads the disc, and with `-S` it stops before
+  reading, exit 1, with *Device does not support changing speeds!* (or
+  *cdio error: 405: Option not supported by drive* from a drive that
+  claims it can and then refuses; `cyanrip_main.c` 158–171). Rip then
+  reads at the drive's own speed and says so in the log: *this drive
+  won't read slower; read at its usual speed*. It knows from the start
+  when cyanrip said so on reading the disc, and otherwise from the first
+  refusal, for the rest of the run. The button still says *Read again
+  slowly*: its words are fixed for the step.
 - **Keep it anyway:** filed, marked not verified.
 - **Skip this track:** not filed.
 

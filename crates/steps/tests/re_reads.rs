@@ -1,7 +1,8 @@
 //! Rip's re-reads, with a stand-in for cyanrip (`DRT_CYANRIP`) and for
 //! clearing the drive's cache, so no drive is touched: every read after a
 //! track's first is preceded by clearing the cache, a re-read without it
-//! can't settle a track by agreeing.
+//! can't settle a track by agreeing, and *Read again slowly* on a drive
+//! that won't change speed reads at the drive's own.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -166,6 +167,10 @@ fn order(log: &Path) -> Vec<String> {
         .collect()
 }
 
+fn calls(log: &Path) -> usize {
+    order(log).iter().filter(|c| c.starts_with("read")).count()
+}
+
 fn notes(s: &Snapshot) -> Vec<(ItemState, String)> {
     s.steps["rip"].items.iter().map(|i| (i.state, i.note.clone())).collect()
 }
@@ -186,7 +191,7 @@ async fn end(run: Run, s: Setup) {
 
 // One test, so the stand-in's environment is never shared between two at once.
 #[tokio::test(flavor = "multi_thread")]
-async fn re_reads_clear_the_drives_cache_first() {
+async fn re_reads_clear_the_drives_cache_first_and_slow_ones_fall_back_to_its_speed() {
     if std::process::Command::new("python3").arg("-V").output().is_err() {
         eprintln!("no python3 for the stand-in: skipped");
         return;
@@ -229,5 +234,34 @@ async fn re_reads_clear_the_drives_cache_first() {
     retry(&run, "track-2", "combine").await;
     let snap = settled(&run, &s.log, 5).await;
     assert_eq!(notes(&snap)[1], (ItemState::Bad, drt_steps::real::NOT_CLEARED.into()), "{:?}", order(&s.log));
+    end(run, s).await;
+
+    // Read again slowly, on a drive that refuses: read at its own speed,
+    // said so, and not asked again for the second read.
+    let s = setup("slowly-refused", "differ", true, false);
+    let run = start(&s, Arc::new(AtomicBool::new(true)));
+    settled(&run, &s.log, 0).await;
+    assert_eq!(calls(&s.log), 4);
+    retry(&run, "track-1", "slowly").await;
+    let snap = settled(&run, &s.log, 4).await;
+    assert_eq!(order(&s.log)[6..], ["flush", "read 1 P3 S4", "read 1 P3", "flush", "read 1 P3"]);
+    let log = logged(&snap);
+    assert_eq!(log.matches("track 1: this drive won't read slower; read at its usual speed").count(), 1, "{log}");
+    assert!(notes(&snap)[0].1.contains("samples differ"), "a refused speed isn't a failed read: {:?}", notes(&snap));
+    // The next slow read knows already.
+    retry(&run, "track-2", "slowly").await;
+    let snap = settled(&run, &s.log, 7).await;
+    assert!(!order(&s.log)[11..].iter().any(|c| c.contains("S4")), "{:?}", order(&s.log));
+    assert!(logged(&snap).contains("track 2: this drive won't read slower"), "{}", logged(&snap));
+    end(run, s).await;
+
+    // A drive cyanrip already said reads at one speed: never asked.
+    let s = setup("slowly-fixed", "differ", true, true);
+    let run = start(&s, Arc::new(AtomicBool::new(true)));
+    settled(&run, &s.log, 0).await;
+    retry(&run, "track-1", "slowly").await;
+    let snap = settled(&run, &s.log, 4).await;
+    assert!(!order(&s.log).iter().any(|c| c.contains("S4")), "{:?}", order(&s.log));
+    assert!(logged(&snap).contains("track 1: this drive won't read slower; read at its usual speed"), "{}", logged(&snap));
     end(run, s).await;
 }

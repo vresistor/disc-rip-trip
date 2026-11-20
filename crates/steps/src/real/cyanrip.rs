@@ -24,6 +24,9 @@ pub struct DiscInfo {
     pub album: String,
     pub performer: String,
     pub tracks: Vec<TrackInfo>,
+    /// The drive reads at one speed only: cyanrip's `Speed: default
+    /// (unchangeable)`, and `-S` would fail.
+    pub fixed_speed: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -69,6 +72,8 @@ pub fn parse_info(text: &str) -> DiscInfo {
             if !v.trim_matches('0').is_empty() {
                 d.mcn = v.into();
             }
+        } else if let Some(v) = field(line, "Speed:") {
+            d.fixed_speed = v.contains("unchangeable");
         } else if let Some(v) = field(line, "Album:") {
             if !v.starts_with("Unknown disc") {
                 d.album = v.into();
@@ -167,6 +172,28 @@ pub fn rip_args(o: &RipOptions<'_>, track: u32) -> Vec<String> {
     a
 }
 
+/// The drive wouldn't change speed for `-S`. cyanrip 0.9.3 stops before
+/// reading anything, exit 1, saying `Device does not support changing
+/// speeds!` when the drive doesn't claim it can (`cyanrip_main.c` 158–162;
+/// the MATSHITA UJ240AS does this), or `cdio error: 405: Option not
+/// supported by drive` when it claims to and then refuses (165–171,
+/// libcdio-paranoia's `cdio_cddap_speed_set`).
+#[derive(Debug)]
+pub struct SpeedRefused;
+
+impl std::fmt::Display for SpeedRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the drive won't change speed")
+    }
+}
+
+impl std::error::Error for SpeedRefused {}
+
+/// Whether cyanrip's output says the drive refused the speed asked for.
+pub fn speed_refused(text: &str) -> bool {
+    text.contains("Device does not support changing speeds!") || text.contains("405: Option not supported by drive")
+}
+
 /// Rips one track to WAV in `dir`. `progress` gets 0 to 1 as it reads.
 pub async fn rip_track(o: &RipOptions<'_>, track: u32, dir: &Path, stop: impl std::future::Future<Output = ()>, mut progress: impl FnMut(f32)) -> Result<TrackRip> {
     std::fs::create_dir_all(dir)?;
@@ -179,6 +206,9 @@ pub async fn rip_track(o: &RipOptions<'_>, track: u32, dir: &Path, stop: impl st
     })
     .await?;
     let file = dir.join(format!("{track:02}.wav"));
+    if o.speed.is_some() && !status.success() && speed_refused(&text) {
+        return Err(SpeedRefused.into());
+    }
     if !status.success() || !text.contains("ripped and encoded successfully") || !file.exists() {
         return Err(anyhow!("cyanrip failed on track {track}: {}", tool::last_meaningful_line(&text).unwrap_or("no output")));
     }
@@ -279,6 +309,20 @@ Tracks ripped accurately: 0/6
         assert_eq!(d.tracks[0].seconds(), 1257);
         assert_eq!(d.tracks[0].title, "");
         assert_eq!(d.tracks[1].title, "Suzy Lee");
+        assert!(!d.fixed_speed);
+    }
+
+    #[test]
+    fn a_drive_that_wont_change_speed_is_known_by_what_cyanrip_says() {
+        // What cyanrip 0.9.3 printed on the MATSHITA UJ240AS, `-I` without
+        // and with `-S 4`.
+        assert!(parse_info("DiscID:  x\nSpeed:          default (unchangeable)\n").fixed_speed);
+        assert!(!parse_info("DiscID:  x\nSpeed:          default (changeable)\n").fixed_speed);
+        assert!(speed_refused("Checking /dev/sr0 for cdrom...\n\nOpening drive...\nDevice does not support changing speeds!\n"));
+        assert!(speed_refused("Opening drive...\ncdio error: 405: Option not supported by drive\n"));
+        assert!(!speed_refused("Track 3 ripped and encoded successfully!\n"));
+        let e: anyhow::Error = SpeedRefused.into();
+        assert!(e.is::<SpeedRefused>());
     }
 
     #[test]

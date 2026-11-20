@@ -226,6 +226,10 @@ impl Step for AudioCd {
                 if !info.mcn.is_empty() {
                     c.add(Subject::Disc, "barcode", info.mcn.clone(), disc);
                 }
+                // The drive won't read slower: *Read again slowly* knows.
+                if info.fixed_speed {
+                    c.add(Subject::Disc, "fixed_speed", "1", "the drive");
+                }
                 // What CD-Text said, kept aside: the CD-Text step offers it
                 // as a candidate.
                 if !info.album.is_empty() {
@@ -498,6 +502,8 @@ struct Reads {
     files: Vec<PathBuf>,
     /// The files of the reads that came off the disc: the ones that vote.
     voters: Vec<PathBuf>,
+    /// The drive refused to read slower, and read at its own speed.
+    slower_refused: bool,
 }
 
 /// Where two reads of the same track differ: how many sample frames, and
@@ -746,6 +752,9 @@ impl Step for Rip {
         }
         cx.drive_says(StepState::Idle, "Waiting", "");
 
+        // Whether this drive reads at one speed only: cyanrip says so when
+        // it reads the disc, or a slow read finds out.
+        let mut no_slower = disc.context().get(Subject::Disc, "fixed_speed") == Some("1");
         while !bad.is_empty() {
             cx.state(StepState::Bad);
             let notes: Vec<(u32, String)> = bad
@@ -805,13 +814,24 @@ impl Step for Rip {
                 }
                 option => {
                     cx.state(StepState::Busy);
-                    let speed = (option == "slowly").then_some(4);
+                    let slowly = option == "slowly";
+                    // A drive that won't change speed reads at its own: the
+                    // disc says so from the start, or the first try did.
+                    if slowly && no_slower {
+                        cx.log(format!("track {}: {NO_SLOWER}", item.index.unwrap()));
+                    }
+                    let mut speed = (slowly && !no_slower).then_some(4);
+                    let what = if slowly && no_slower { "re-reading at the drive's usual speed" } else { "re-reading" };
                     // Two more careful reads, until any two agree. A scratch
                     // the drive reads differently every time won't converge,
                     // so this stops early rather than spending the evening.
                     let mut note = None;
                     for _ in 0..2 {
-                        let v = self.read(&cx, &opts(3, speed), &mut item, n, &dir, &mut reads, &eta, "re-reading").await;
+                        let v = self.read(&cx, &opts(3, speed), &mut item, n, &dir, &mut reads, &eta, what).await;
+                        if reads.slower_refused {
+                            no_slower = true;
+                            speed = None;
+                        }
                         note = settled_note(accurate(&v), reads.agree());
                         if note.is_some() {
                             break;
@@ -906,6 +926,10 @@ pub fn settled_note(accurate: Option<u32>, agree: bool) -> Option<String> {
 /// cleared before them, so they may be the drive's memory, not the disc.
 pub const NOT_CLEARED: &str = "the drive's cache couldn't be cleared";
 
+/// What Rip says when *Read again slowly* meets a drive that won't change
+/// speed.
+pub const NO_SLOWER: &str = "this drive won't read slower; read at its usual speed";
+
 /// A track's note once *Keep it anyway* kept it unproven.
 pub const KEPT: &str = "kept anyway, not verified";
 
@@ -942,17 +966,30 @@ impl Rip {
         };
         cx.item(item, ItemState::Busy, what);
         let shown = &*item;
-        let r = cyanrip::rip_track(o, t, &into, cx.cancelled(), |p| {
-            cx.item(shown, ItemState::Busy, format!("{what} {}%", (p * 100.0) as u32));
-            cx.progress(Some((t.saturating_sub(1) as f32 + p) / n as f32));
-            // Time left for the whole disc, from how fast it's reading.
-            if first {
-                if let Some(left) = eta.left(len * p) {
-                    cx.view(|v| v.detail = format!("Track {t} · {} · {} left", shown.label, mins(left)));
+        let mut o = RipOptions { ..*o };
+        let r = loop {
+            let r = cyanrip::rip_track(&o, t, &into, cx.cancelled(), |p| {
+                cx.item(shown, ItemState::Busy, format!("{what} {}%", (p * 100.0) as u32));
+                cx.progress(Some((t.saturating_sub(1) as f32 + p) / n as f32));
+                // Time left for the whole disc, from how fast it's reading.
+                if first {
+                    if let Some(left) = eta.left(len * p) {
+                        cx.view(|v| v.detail = format!("Track {t} · {} · {} left", shown.label, mins(left)));
+                    }
                 }
+            })
+            .await;
+            match r {
+                // The drive won't change speed: read at its own, and say so.
+                Err(e) if o.speed.is_some() && e.is::<cyanrip::SpeedRefused>() => {
+                    cx.log(format!("track {t}: {NO_SLOWER}"));
+                    reads.slower_refused = true;
+                    o.speed = None;
+                }
+                r => break r,
             }
-        })
-        .await;
+        };
+        let o = &o;
         if first {
             eta.add(len);
         }
