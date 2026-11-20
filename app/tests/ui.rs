@@ -3914,6 +3914,346 @@ fn rip_shows_the_time_left_for_the_track_and_the_disc_and_its_speed_at_1920() {
     rip_pace(egui::vec2(1920.0, 1080.0), "-1920");
 }
 
+// ---- Rip for game, data and video discs ------------------------------------------------------
+
+/// Where a held Rip stops, to be looked at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum At {
+    /// redumper's first pass under way, with errors.
+    Reading,
+    /// Read, its bad parts re-read.
+    Done,
+    /// Sectors left unreadable: it needs you.
+    Failed,
+}
+
+/// Image, a game's Rip or a video Rip as the real ones report (their notes,
+/// redumper's and MakeMKV's lines), held at one moment.
+struct HeldRip {
+    info: drt_engine::StepInfo,
+    at: At,
+    /// Set once it's there.
+    held: Arc<std::sync::atomic::AtomicBool>,
+}
+
+const CD_SECTORS: u64 = 332_999;
+
+impl HeldRip {
+    /// The first pass, from sector `from` for `secs` at 8× (600 sectors a
+    /// second), as redumper prints it and Image reports it.
+    async fn read(cx: &drt_engine::Cx, item: &drt_engine::Item, from: u64, secs: f32, scsi: u64, c2: u64) {
+        use drt_steps::real::redumper;
+        cx.log("*** DUMP (time check: 0s)");
+        cx.status("", "Reading");
+        let mut at = from;
+        for k in 0..=(secs * 4.0) as u32 {
+            if k > 0 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                at += 150;
+            }
+            let line = redumper::progress_line(at, CD_SECTORS, true, scsi, c2);
+            cx.raw(&line);
+            let p = redumper::parse_progress(&line).unwrap();
+            cx.item(item, ItemState::Busy, redumper::progress_note(&p));
+            cx.progress(Some(p.fraction));
+        }
+    }
+
+    async fn dump(&self, disc: &drt_engine::Item, outlet: &drt_engine::Outlet, cx: &drt_engine::Cx) -> anyhow::Result<()> {
+        use drt_engine::{Item, ItemKind};
+        let item = Item::new(drt_steps::real::data::DUMP, ItemKind::Dump, disc.label.clone(), None, None).knowing(disc);
+        cx.log(format!("redumper dump --drive=/dev/sr0 --retries=20 --image-name={}", disc.label));
+        match self.at {
+            At::Reading => {
+                Self::read(cx, &item, 141_500, 4.5, 2, 37).await;
+            }
+            At::Done | At::Failed => {
+                for l in ["*** DUMP (time check: 0s)", "media errors:", "SCSI: 105840 samples", "C2: 211731 samples", "Q: 2641", "*** END (time check: 348s)"] {
+                    cx.log(l);
+                }
+                cx.status("", "Re-reading bad parts");
+                cx.log("*** REFINE (time check: 52s)");
+                tokio::time::sleep(Duration::from_millis(1100)).await;
+                if self.at == At::Done {
+                    for l in [
+                        "correction statistics:",
+                        "SCSI: 105840 samples",
+                        "C2: 211731 samples",
+                        "Q: 0 sectors",
+                        "*** END (time check: 52s)",
+                        "*** SPLIT (time check: 0s)",
+                        "*** END (time check: 12s)",
+                        "*** INFO (time check: 0s)",
+                        "*** END (time check: 1s)",
+                    ] {
+                        cx.log(l);
+                    }
+                    cx.progress(None);
+                    cx.item(&item, ItemState::Ok, "✓ 682 MB, bad parts re-read");
+                    cx.status("682 MB", "bad parts re-read");
+                    outlet.send(item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))))).await;
+                } else {
+                    for l in [
+                        "correction statistics:",
+                        "SCSI: 104076 samples",
+                        "C2: 211731 samples",
+                        "Q: 0 sectors",
+                        "*** END (time check: 52s)",
+                        "*** SPLIT (time check: 0s)",
+                        "errors detected, track: 1, sectors: {SKIP: 3, C2: 0}, samples: {SKIP: 1764, C2: 0}",
+                        "error: data errors detected, unable to continue",
+                    ] {
+                        cx.log(l);
+                    }
+                    cx.progress(None);
+                    cx.log("image: 3 unreadable sectors");
+                    cx.item(&item, ItemState::Bad, "3 unreadable sectors");
+                    cx.state(StepState::Bad);
+                    cx.status("", "3 unreadable sectors");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn titles(&self, disc: &drt_engine::Item, outlet: &drt_engine::Outlet, cx: &drt_engine::Cx) -> anyhow::Result<()> {
+        use drt_engine::{ItemKind, Subject};
+        use drt_steps::real::video;
+        let items = video::rip_items(disc);
+        for i in &items {
+            cx.item(i, ItemState::Waiting, "");
+        }
+        let len = |i: &drt_engine::Item| i.context().get(Subject::Part(i.index.unwrap_or(0)), video::facts::LENGTH).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let busy = if self.at == At::Done { items.len() } else { 1.min(items.len().saturating_sub(1)) };
+        for (k, item) in items.iter().enumerate() {
+            if k < busy || (self.at == At::Failed && k != 1) {
+                if self.at == At::Failed && k > 1 && k < busy {
+                    continue;
+                }
+                cx.item(item, ItemState::Ok, format!("✓ {}, {}", video::hms(len(item)), drt_steps::real::media::size(len(item) as u64 * 4_200_000)));
+                outlet.send(item.becomes(ItemKind::Title, Some(PathBuf::from(format!("title-{k:02}.mkv"))))).await;
+            }
+        }
+        match self.at {
+            At::Done => cx.status(video::titles_word(items.len()), ""),
+            At::Reading => {
+                let it = &items[busy];
+                cx.status(format!("{busy} of {}", video::titles_word(items.len())), it.label.clone());
+                cx.item(it, ItemState::Busy, "saving to mkv file 20%");
+                tokio::time::sleep(Duration::from_millis(3200)).await;
+                cx.item(it, ItemState::Busy, "saving to mkv file 23%");
+                cx.progress(Some(0.4));
+            }
+            At::Failed => {
+                if let Some(it) = items.get(1) {
+                    cx.item(it, ItemState::Bad, "Couldn't copy the video: read error at 61%");
+                }
+                cx.state(StepState::Bad);
+                cx.status(video::titles_word(items.len() - 1), format!("{} couldn't be read", items.get(1).map_or("", |i| i.label.as_str())));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl drt_engine::Step for HeldRip {
+    fn info(&self) -> drt_engine::StepInfo {
+        self.info.clone()
+    }
+    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+        let Some(disc) = inlet.recv().await else { return Ok(()) };
+        if self.info.kind == "rip-video" {
+            self.titles(&disc, &outlet, &cx).await?;
+        } else {
+            self.dump(&disc, &outlet, &cx).await?;
+        }
+        self.held.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Done ends; the others stay where they are.
+        if self.at != At::Done {
+            cx.cancelled().await;
+        }
+        Ok(())
+    }
+}
+
+/// The window with a held Rip for a kind of disc (`data`, `game`,
+/// `video` for a season's disc, `film` for one title), started and held at
+/// `at`, its sidebar open.
+fn held_rip<'a>(e: &Env, kind: &str, at: At, size: egui::Vec2) -> (Harness<'a, Window>, &'static str) {
+    use drt_steps::real::{data, game, video};
+    let mut reg = simulated(None);
+    let (info, recipe, id) = match kind {
+        "data" => (data::image_info(), "Data discs", "d_image"),
+        "game" => {
+            reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::COLONY_WARS_1]));
+            (game::rip_info(), "Games", "g_rip")
+        }
+        _ => {
+            video::sim::register(&mut reg, if kind == "film" { video::sim::SimDisc::Film } else { video::sim::SimDisc::Season });
+            (video::rip_info(), "Films and TV", "v_rip")
+        }
+    };
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    reg.add(HeldRip { info, at, held: ready.clone() });
+    let mut h = window_on(e, reg, true, 0.0, size, 1.0);
+    app(&h).m.engine.settings.lock().unwrap().set_app("tmdb", "api_key", Setting::chosen(Value::from("test-key")));
+    h.get_by_label_contains(&format!("{recipe},")).click();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    if kind == "video" {
+        until(&mut h, "which episode", |a| matches!(a.tray, Some(Tray::Question { .. })));
+        h.get_by_label("Use these").click_accesskit();
+        h.run_steps(2);
+    }
+    until(&mut h, &format!("{kind} held"), |_| ready.load(std::sync::atomic::Ordering::SeqCst));
+    if at == At::Done {
+        until(&mut h, "Rip to finish", |a| a.m.snapshot(a.sel).steps[id].state == StepState::Ok);
+    }
+    h.run_steps(3);
+    open_id(&mut h, id);
+    (h, id)
+}
+
+/// The times on Rip's card (*Reading · 6 min left · 8.0×*, *Video 2 ·
+/// 1:25 left · disc 5 min left · 16.2×*), checked to be the sidebar's too,
+/// under what's being read.
+fn times_said(h: &Harness<Window>) -> String {
+    let card = h.get_by_label_contains("Rip, ").accesskit_node().label().unwrap();
+    let line = card.split(", ").find(|s| s.contains(" left")).unwrap_or_else(|| panic!("no times on the card: {card}"));
+    let times = line.split_once(" · ").map(|(_, t)| t).unwrap_or(line).to_owned();
+    h.get_by_label(&times);
+    times
+}
+
+/// Whether a list row says all of `parts`.
+fn row_says(h: &Harness<Window>, parts: &[&str]) -> bool {
+    h.get_all_by_role(Role::ListItem).filter_map(|n| n.accesskit_node().label()).any(|l| parts.iter().all(|p| l.contains(p)))
+}
+
+/// The Rip sidebar of each kind of disc in each state, as
+/// `rip-<kind>-<state>[tag]`, checked for what it should say.
+fn disc_rip_shots(size: egui::Vec2, tag: &str) {
+    for kind in ["data", "game", "video"] {
+        for (at, word) in [(At::Reading, "reading"), (At::Done, "done"), (At::Failed, "failed")] {
+            let e = env();
+            let (mut h, _) = held_rip(&e, kind, at, size);
+            let label = if kind == "data" { "ENCARTA98" } else { "SLES_008.60" };
+            match (kind, at) {
+                // The disc as a ring, how far; beside it the pass, the time
+                // left and the speed; the errors met so far on its row.
+                ("data" | "game", At::Reading) => {
+                    let ring = h.get_by_label_contains("The disc, 4").accesskit_node().label().unwrap();
+                    assert!(ring.ends_with("% read"), "{ring}");
+                    h.get_by_label("Pass 1 · Reading");
+                    let times = times_said(&h);
+                    assert!(times.ends_with('×'), "{times}");
+                    h.get_by_label_contains("Sector 14");
+                    assert!(row_says(&h, &["Read the disc", "SCSI 2, C2 37", "Reading"]), "the errors so far");
+                }
+                ("data" | "game", At::Done) => {
+                    h.get_by_label("The disc, 682 MB read");
+                    h.get_by_label("Bad parts re-read");
+                    assert!(row_says(&h, &["Read the disc", "SCSI 105840, C2 211731", "Errors"]));
+                    assert!(row_says(&h, &["Re-read bad parts", "All put right"]));
+                    assert!(row_says(&h, &["Check every sector", "None wrong"]));
+                    // Only what Rip knows: nothing of Redump's here (Check, on
+                    // the canvas, says whether it matches).
+                    assert!(!row_says(&h, &["Redump"]) && !row_says(&h, &["erified"]));
+                }
+                ("data" | "game", At::Failed) => {
+                    h.get_by_label("The disc, 3 unreadable");
+                    assert!(row_says(&h, &[label, "3 sectors couldn't be read"]));
+                    assert!(row_says(&h, &["Re-read bad parts", "SCSI 1764 left", "Some left"]));
+                    assert!(row_says(&h, &["Write the tracks", "3 skipped"]));
+                    h.get_by_label(&format!("Re-read bad parts, {label}"));
+                    h.get_by_label(&format!("Keep it anyway, {label}"));
+                    // A game's disc can't be left out; a data disc's can.
+                    assert_eq!(h.query_by_label(&format!("Skip this disc, {label}")).is_some(), kind == "data");
+                }
+                // The titles as tracks: a ring, the one being read with its
+                // time left and the disc's, each title a row with its length.
+                (_, At::Reading) => {
+                    h.get_by_label("The disc, 1/4 read");
+                    h.get_by_label("Video 2 of 4");
+                    let times = times_said(&h);
+                    assert!(times.contains(" min left"), "{times}");
+                    assert!(row_says(&h, &["1, S03E01", "Read 12.7 GB"]));
+                    assert!(row_says(&h, &["2, S03E02", "Reading 23%"]));
+                    assert!(row_says(&h, &["3, S03E03", "Waiting"]));
+                }
+                (_, At::Done) => {
+                    h.get_by_label("The disc, 4/4 read");
+                    h.get_by_label("All 4 read");
+                }
+                (_, At::Failed) => {
+                    h.get_by_label("3 of 4 read");
+                    assert!(row_says(&h, &["S03E02", "Not read", "Read error at 61%"]));
+                    h.get_by_label("Read again, S03E02 Proshai, Livushka");
+                    h.get_by_label("Skip this video, S03E02 Proshai, Livushka");
+                }
+            }
+            shot(&mut h, &format!("rip-{kind}-{word}{tag}"));
+        }
+    }
+    // One title: the emptiest list.
+    let e = env();
+    let (mut h, _) = held_rip(&e, "film", At::Done, size);
+    h.get_by_label("The disc, 1/1 read");
+    h.get_by_label("Read");
+    shot(&mut h, &format!("rip-film-done{tag}"));
+}
+
+/// A data disc with sectors it couldn't read, settled each way from the
+/// image's row: re-read, kept, skipped.
+#[test]
+fn an_image_that_needs_you_is_settled_from_its_row() {
+    for (option, word) in [("Re-read bad parts", "reread"), ("Keep it anyway", "kept"), ("Skip this disc", "skipped")] {
+        let e = env();
+        let mut h = window_on(&e, simulated(Some(1)), true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
+        h.get_by_label_contains("Data discs,").click();
+        h.run_steps(2);
+        click(&mut h, "Start");
+        until(&mut h, "the bad sectors", |a| a.m.snapshot(a.sel).steps["d_image"].state == StepState::Bad);
+        open_id(&mut h, "d_image");
+        h.get_by_label("The disc, 3 unreadable");
+        assert!(row_says(&h, &["ENCARTA98", "3 sectors couldn't be read"]));
+        assert!(row_says(&h, &["Read the disc", "SCSI 1764", "Errors"]));
+        click(&mut h, &format!("{option}, ENCARTA98"));
+        until(&mut h, "the image settled", |a| !matches!(a.m.snapshot(a.sel).steps["d_image"].items[0].state, ItemState::Bad | ItemState::Busy));
+        h.run_steps(3);
+        open_id(&mut h, "d_image");
+        match word {
+            "reread" => {
+                h.get_by_label("Bad parts re-read");
+                assert!(row_says(&h, &["Re-read bad parts", "All put right"]));
+                assert!(row_says(&h, &["Check every sector", "None wrong"]));
+            }
+            "kept" => {
+                h.get_by_label("The disc, 682 MB kept");
+                h.get_by_label("Kept with 3 unreadable sectors left blank");
+            }
+            _ => {
+                h.get_by_label("The disc, Skipped ");
+                h.get_by_label("No image kept");
+            }
+        }
+        // Nothing left to do on its row.
+        assert!(h.query_by_label(&format!("{option}, ENCARTA98")).is_none());
+        shot(&mut h, &format!("rip-data-{word}"));
+    }
+}
+
+#[test]
+fn a_disc_s_rip_shows_its_progress_and_verdicts() {
+    disc_rip_shots(egui::vec2(1280.0, 720.0), "");
+}
+
+#[test]
+fn a_disc_s_rip_shows_its_progress_and_verdicts_at_1920() {
+    disc_rip_shots(egui::vec2(1920.0, 1080.0), "-1920");
+}
+
 #[test]
 fn a_folder_s_progress_lists_each_filed_file_once() {
     let e = env();

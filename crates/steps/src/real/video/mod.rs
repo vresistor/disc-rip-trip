@@ -477,7 +477,8 @@ impl Step for RipVideo {
         {
             let _drive = cx.lane(LaneKind::Drive).await;
             for (i, item) in items.iter().enumerate() {
-                cx.status(titles_word(done), item.label.clone());
+                // How many are read so far, of how many.
+                cx.status(format!("{done} of {}", titles_word(total)), item.label.clone());
                 match self.rip(&cx, &launcher, &dev, item, &mut attempts, i, total).await {
                     Ok(file) => {
                         done += 1;
@@ -521,7 +522,6 @@ impl Step for RipVideo {
             }
         }
         cx.state(StepState::Busy);
-        let _ = total;
         cx.status(titles_word(done), "");
         Ok(())
     }

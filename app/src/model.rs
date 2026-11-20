@@ -648,24 +648,56 @@ impl Model {
 
     /// Rip's card while it reads: the track, its time left, the disc's,
     /// and the speed; once read, how long it took and at what speed, if it
-    /// has nothing else to say.
+    /// has nothing else to say. A disc's image (Image, a game's Rip) the
+    /// same while a pass reads the drive, its speed from the sectors; a
+    /// video disc's titles from their sizes, when the scan gave them.
     fn rip_pace(&self, i: usize, snap: &mut Snapshot) {
         let Some(run) = self.shown_run(i) else { return };
-        let rips: Vec<String> = snap.steps.iter().filter(|(_, v)| v.step == "rip").map(|(k, _)| k.clone()).collect();
+        let rips: Vec<String> = snap.steps.iter().filter(|(_, v)| matches!(v.step.as_str(), "rip" | "image" | "game-rip" | "rip-video")).map(|(k, _)| k.clone()).collect();
         if rips.is_empty() {
             return;
         }
         let c = run.run.context();
-        let length = |n: u32| c.get(drt_engine::Subject::Part(n), "length").and_then(|l| l.parse::<f32>().ok());
+        let media = c.get(drt_engine::Subject::Disc, "media").unwrap_or("").to_owned();
+        let part = |n: u32, key: &str| c.get(drt_engine::Subject::Part(n), key).and_then(|l| l.parse::<f32>().ok());
         let mut paces = self.pace.lock().unwrap();
         for id in rips {
             let Some(v) = snap.steps.get_mut(&id) else { continue };
             let key = (i, run.id, id.clone());
-            if v.items.iter().any(|it| it.state == ItemState::Busy) {
+            let kind = v.step.clone();
+            let dump = matches!(kind.as_str(), "image" | "game-rip");
+            // A disc's image: only while a pass reads the drive, and by the
+            // sectors its note says.
+            let phase = v.detail.clone();
+            let reads = !dump || matches!(phase.as_str(), "Reading" | "Re-reading bad parts");
+            let busy = v.items.iter().find(|it| it.state == ItemState::Busy);
+            let disc_1x = busy.and_then(|it| crate::pace::sectors(&it.note)).and_then(|(_, of)| crate::pace::seconds_at_1x(&media, of));
+            // A title's length for its speed: its size at 1× if known (a
+            // drive's speed), else none (a speed against playing time
+            // isn't the drive's).
+            let one_x = crate::pace::one_x(&media);
+            let length = |n: u32| match kind.as_str() {
+                "image" | "game-rip" => disc_1x,
+                "rip-video" => part(n, "bytes").zip(one_x).map(|(b, x)| b / x),
+                _ => part(n, "length"),
+            };
+            if busy.is_some() && reads {
                 let (pace, last) = paces.entry(key).or_default();
                 *last = pace.read(&v.items, &v.detail, length, std::time::Instant::now());
                 if let Some(r) = last {
-                    v.detail = r.line();
+                    if kind == "rip-video" {
+                        r.unit = "Video";
+                    }
+                    v.detail = if dump {
+                        let times = r.times();
+                        if times.is_empty() {
+                            phase
+                        } else {
+                            format!("{phase} · {times}")
+                        }
+                    } else {
+                        r.line()
+                    };
                 }
                 // The times count down between Rip's own news.
                 if let Some(ctx) = &self.ctx {
@@ -673,7 +705,7 @@ impl Model {
                 }
             } else {
                 paces.remove(&key);
-                if v.detail.is_empty() && v.state == StepState::Ok {
+                if v.detail.is_empty() && v.state == StepState::Ok && kind == "rip" {
                     if let Some(said) = read_in(v, length) {
                         v.detail = said;
                     }

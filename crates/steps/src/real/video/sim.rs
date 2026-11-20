@@ -232,7 +232,7 @@ impl Step for Rip {
         let _drive = cx.lane(LaneKind::Drive).await;
         for (n, item) in items.iter().enumerate() {
             let part = item.index.unwrap_or(0);
-            cx.status(super::titles_word(n), item.label.clone());
+            cx.status(format!("{n} of {}", super::titles_word(items.len())), item.label.clone());
             cx.drive_says(StepState::Busy, "Reading", &format!("video {part}"));
             for pct in [25, 50, 75, 100] {
                 cx.item(item, ItemState::Busy, format!("saving to MKV file {pct}%"));

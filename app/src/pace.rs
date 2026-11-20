@@ -10,6 +10,8 @@ use std::time::Instant;
 /// What's shown while Rip reads.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Reading {
+    /// What it reads one at a time: *Track* (the default), *Video*.
+    pub unit: &'static str,
     /// The track being read.
     pub track: u32,
     /// Its time left: *0:56*, *3 min*.
@@ -40,10 +42,11 @@ impl Reading {
     /// The card's line: *Track 6 · 0:56 left · disc 12 min left · 8.2×*.
     pub fn line(&self) -> String {
         let times = self.times();
+        let unit = if self.unit.is_empty() { "Track" } else { self.unit };
         if times.is_empty() {
-            format!("Track {}", self.track)
+            format!("{unit} {}", self.track)
         } else {
-            format!("Track {} · {times}", self.track)
+            format!("{unit} {} · {times}", self.track)
         }
     }
 }
@@ -79,9 +82,42 @@ pub fn rips_estimate(detail: &str) -> Option<f32> {
     }
 }
 
-/// How far along a note says an item is: *reading 43%* is 0.43.
+/// How far along a note says an item is: *reading 43%* is 0.43; *43%,
+/// sector 143300 of 332999* is to the sector.
 pub fn percent(note: &str) -> Option<f32> {
+    if let Some((at, of)) = sectors(note).filter(|s| s.1 > 0) {
+        return Some((at as f32 / of as f32).clamp(0.0, 1.0));
+    }
     note.split(|c: char| !(c.is_ascii_digit() || c == '%' || c == '.')).find_map(|w| w.strip_suffix('%')?.parse::<f32>().ok()).map(|n| (n / 100.0).clamp(0.0, 1.0))
+}
+
+/// The sectors a note says it's at: *43%, sector 143300 of 332999*.
+pub fn sectors(note: &str) -> Option<(u64, u64)> {
+    let rest = &note[note.find("sector ")? + 7..];
+    let (at, rest) = rest.split_once(" of ")?;
+    let of: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    Some((at.trim().parse().ok()?, of.parse().ok()?))
+}
+
+/// How many bytes a second a drive reads at 1× for a kind of disc
+/// (the disc's *media*): a DVD's 1.385 MB, a Blu-ray's 4.5 MB. A CD's is
+/// 75 sectors a second, whatever their size: see `seconds_at_1x`.
+pub fn one_x(media: &str) -> Option<f32> {
+    match media {
+        "DVD" | "HD DVD" => Some(1_385_000.0),
+        "Blu-ray" => Some(4_495_500.0),
+        _ => None,
+    }
+}
+
+/// How long a disc of `sectors` takes to read at 1×: what a speed is a
+/// multiple of. A CD reads 75 sectors a second; a DVD's or Blu-ray's
+/// sectors are 2048 bytes.
+pub fn seconds_at_1x(media: &str, sectors: u64) -> Option<f32> {
+    match media {
+        "CD" => Some(sectors as f32 / 75.0),
+        m => one_x(m).map(|b| sectors as f32 * 2048.0 / b),
+    }
 }
 
 /// The track number of an item: `track-9` is 9.
@@ -146,6 +182,14 @@ impl Pace {
         let pct = percent(&it.note);
         // A new track: the last one's speed, from when it was first seen
         // here to now, if it was watched for long enough to tell.
+        // The same item from the start again (a disc's image, its next
+        // pass): begun afresh, nothing carried over.
+        // The speed read so far is kept, as between tracks.
+        if self.last.is_some_and(|(_, q)| pct.is_some_and(|p| p + 0.05 < q)) {
+            self.on = None;
+            self.last = None;
+            self.track = Steady::default();
+        }
         if self.on.as_ref().is_none_or(|(id, _, _)| *id != it.id) {
             if let Some((id, t0, p0)) = self.on.take() {
                 let prev = items.iter().enumerate().find(|(_, i)| i.id == id);
@@ -170,7 +214,9 @@ impl Pace {
         let live = match (&self.on, self.last, len) {
             (Some((_, t0, p0)), Some((t1, p1)), Some(l)) => {
                 let dt = t1.duration_since(*t0).as_secs_f32();
-                (dt >= 3.0 && p1 - p0 > 0.02).then(|| l * (p1 - p0) / dt)
+                // Far enough to tell: two percent, or (counted in sectors)
+                // half a minute of the disc at 1×.
+                (dt >= 3.0 && (p1 - p0 > 0.02 || l * (p1 - p0) > 30.0)).then(|| l * (p1 - p0) / dt)
             }
             _ => None,
         };
@@ -196,8 +242,10 @@ impl Pace {
             (Some(a), Some(s)) => Some(a / s),
             _ => None,
         });
+        // One item is the whole disc: its time left is the disc's.
+        let disc = disc.filter(|_| items.len() > 1);
         let disc_left = disc.map(|d| self.disc.countdown(d, now));
-        Some(Reading { track: n, track_left: track_left.map(left_text), disc_left: disc_left.map(left_text), speed: speed.map(speed_text) })
+        Some(Reading { unit: "", track: n, track_left: track_left.map(left_text), disc_left: disc_left.map(left_text), speed: speed.map(speed_text) })
     }
 }
 
@@ -249,6 +297,28 @@ mod tests {
         // Rip's own estimate for the disc, when it gives one.
         let r = pace.read(&items, "Track 2 · Song 2 · about 12 min left", len, t0 + Duration::from_secs(10)).unwrap();
         assert_eq!(r.disc_left.as_deref(), Some("12 min"));
+    }
+
+    #[test]
+    fn a_disc_image_by_its_sectors_and_each_pass_afresh() {
+        let t0 = Instant::now();
+        // 332999 sectors of a CD: 4440 s at 1×.
+        let len = |_: u32| seconds_at_1x("CD", 332_999);
+        let dump = |note: &str| vec![ItemView { id: "dump".into(), label: "ENCARTA98".into(), state: ItemState::Busy, note: note.into(), verified: false }];
+        let mut pace = Pace::default();
+        pace.read(&dump("42%, sector 141500 of 332999"), "Reading", len, t0).unwrap();
+        // 4 s on, 2400 sectors more: 600 a second, 8×.
+        let r = pace.read(&dump("43%, sector 143900 of 332999, 3 errors"), "Reading", len, t0 + Duration::from_secs(4)).unwrap();
+        assert_eq!(r.speed.as_deref(), Some("8.0×"));
+        assert_eq!(r.track_left.as_deref(), Some("6 min"), "189099 sectors at 600 a second");
+        assert_eq!(r.disc_left, None, "one item: its time is the disc's");
+        assert_eq!(r.times(), "6 min left · 8.0×");
+        // The next pass starts from the beginning: nothing to go on.
+        let r = pace.read(&dump("2%, sector 6000 of 332999"), "Re-reading bad parts", len, t0 + Duration::from_secs(5)).unwrap();
+        assert_eq!((r.speed, r.track_left), (None, None));
+        // A DVD's 2048-byte sectors: 2298496 of them are 3399 s at 1×.
+        assert_eq!(seconds_at_1x("DVD", 2_298_496).map(|s| s.round()), Some(3399.0));
+        assert_eq!(percent("7%, sector 160894 of 2298496"), Some(160_894.0 / 2_298_496.0));
     }
 
     #[test]

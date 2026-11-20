@@ -9,7 +9,7 @@ use crate::real::game::{self, Identity};
 use crate::real::{data, media, redump};
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::{Context, Cx, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, Registry, Step, StepInfo, StepState, Subject};
+use drt_engine::{Context, Cx, Inlet, Item, ItemKind, ItemState, Outlet, Registry, Step, StepInfo, Subject};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -202,24 +202,11 @@ impl Step for Rip {
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
         let Some(disc) = inlet.recv().await else { return Ok(()) };
         let item = Item::new(data::DUMP, ItemKind::Dump, disc.label.clone(), None, None).knowing(&disc);
-        {
-            let _drive = cx.lane(LaneKind::Drive).await;
-            for (phase, ms) in [("Reading", 3000), ("Writing tracks", 300)] {
-                cx.status("", phase);
-                cx.drive_says(StepState::Busy, phase, "");
-                for i in 1..=4 {
-                    cx.item(&item, ItemState::Busy, format!("{}%", i * 25));
-                    cx.progress(Some(i as f32 / 4.0));
-                    cx.sleep(ms / 4).await?;
-                }
-            }
-            cx.drive_says(StepState::Idle, "Waiting", "");
+        // Read as the real one reads: Image's passes, its notes.
+        let bytes: u64 = disc.context().get(Subject::Disc, "bytes").and_then(|b| b.parse().ok()).unwrap_or(0);
+        if crate::sim::dump(&cx, &item, bytes / 2048, false).await?.is_none() {
+            return Ok(());
         }
-        cx.progress(None);
-        let bytes = disc.context().get(Subject::Disc, "bytes").and_then(|b| b.parse().ok()).unwrap_or(0);
-        let note = format!("✓ {}, read cleanly", media::size(bytes));
-        cx.item(&item, ItemState::Ok, note.clone());
-        cx.status(media::size(bytes), "");
         outlet.send(item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))))).await;
         Ok(())
     }

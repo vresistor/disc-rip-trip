@@ -198,12 +198,7 @@ impl Image {
             }
             if let Some(p) = redumper::parse_progress(line) {
                 cx.progress(Some(p.fraction));
-                let errors = match p.errors {
-                    0 => String::new(),
-                    1 => ", 1 error".into(),
-                    n => format!(", {n} errors"),
-                };
-                cx.item(item, ItemState::Busy, format!("{}%, {}{errors}", (p.fraction * 100.0) as u32, p.detail));
+                cx.item(item, ItemState::Busy, redumper::progress_note(&p));
             }
             if redumper::worth_logging(line) {
                 cx.log(line.trim());

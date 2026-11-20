@@ -550,14 +550,17 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                         None => String::new(),
                     };
                 }
-                "rip" => {
+                "rip" | "game-rip" | "image" | "rip-video" => {
                     // What's needed, and the retries as actions: the card
-                    // already says how far it's got.
+                    // already says how far it's got. A disc's image says
+                    // what's wrong with it beside its ring.
                     let bad: Vec<&ItemView> = v.items.iter().filter(|x| x.state == ItemState::Bad).collect();
+                    let what = if v.step == "rip-video" { "videos" } else { "tracks" };
                     plan.say = match bad.as_slice() {
                         [] => String::new(),
+                        [_] if matches!(v.step.as_str(), "game-rip" | "image") => String::new(),
                         [_] => format!("{}.", v.detail),
-                        b => format!("{} tracks need you.", b.len()),
+                        b => format!("{} {what} need you.", b.len()),
                     };
                     // While it has the drive: stop and take the disc out.
                     if app.m.ripping(i) && app.m.shows_newest(i) && app.m.can_open_tray(i) {
@@ -2268,6 +2271,8 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
             vec![]
         }
         "rip" => rip(app, ru, p, id, &v, &info, ctx.as_ref(), t),
+        "image" | "game-rip" => dump_rip(app, ru, p, id, &v, &info, t),
+        "rip-video" => video_rip(app, ru, p, id, &v, &info, ctx.as_ref(), t),
         "lyrics" => {
             lyrics(app, ru, p, id, &v, ctx.as_ref(), t);
             vec![]
@@ -2367,12 +2372,10 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
                 return;
             }
             filter_row(app, ru, p, &[("All", list.len())], 0, "");
-            // The pictures that would crowd a card: ReplayGain's spread of
-            // gains, Image's read across the disc.
-            match v.step.as_str() {
-                "replaygain" => gain_spread(ru, p, &v.items),
-                "image" | "game-rip" => sector_map(ru, p, &v.items),
-                _ => {}
+            // The picture that would crowd a card: ReplayGain's spread of
+            // gains.
+            if v.step == "replaygain" {
+                gain_spread(ru, p, &v.items);
             }
             rows(app, ru, p, &key, list, "", t)
         }
@@ -2582,26 +2585,6 @@ fn gain_spread(ui: &mut Ui, p: &Pal, items: &[ItemView]) {
     ui.add_space(8.0);
 }
 
-/// Image's picture: how far across the disc it has read, red if sectors
-/// couldn't be read. (Where they are isn't known here, only how many: the
-/// row below says.)
-fn sector_map(ui: &mut Ui, p: &Pal, items: &[ItemView]) {
-    let Some(it) = items.first() else { return };
-    let read = match it.state {
-        ItemState::Busy => it.note.split('%').next().and_then(|n| n.trim().parse::<f32>().ok()).map_or(0.0, |n| n / 100.0),
-        ItemState::Waiting => 0.0,
-        _ => 1.0,
-    };
-    ui.add_space(4.0);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 12.0), Sense::hover());
-    let said = format!("{:.0}% of the disc read", read * 100.0);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Image, true, &said));
-    ui.painter().rect_filled(r, 2.0, p.line);
-    let col = if it.state == ItemState::Bad { p.bad } else { p.c_read };
-    ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width() * read, r.height())), 2.0, col);
-    ui.add_space(8.0);
-}
-
 /// When the right column has nothing to list.
 fn empty(ui: &mut Ui, p: &Pal, text: &str) {
     ui.add_space(6.0);
@@ -2699,141 +2682,468 @@ fn rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepI
     rows(app, ui, p, &key, list, word, t)
 }
 
-/// Rip's head (docs/ux/rip-view.md): the disc as a ring, one arc per
-/// track as long as it plays, in the strip's colours, the outcome in its
-/// middle; beside it what's happening now, or once done, the proof.
-#[allow(clippy::too_many_arguments)]
-fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, ctx: Option<&Context>, offset: &str, t: f64) {
-    let _ = app;
-    let retries = info.retries.iter().any(|r| !matches!(r.id, "keep" | "leave_out"));
-    let cells = crate::card::cells(v, crate::card::Shown::of(v, retries));
-    let lens: Vec<f32> = (0..cells.len()).map(|k| v.items.get(k).map(|it| number(it, k)).and_then(|n| ctx.and_then(|c| length(c, n))).unwrap_or(0) as f32).collect();
-    let known = lens.iter().all(|l| *l > 0.0);
-    let total: f32 = if known { lens.iter().sum() } else { cells.len() as f32 };
-    let busy = v.items.iter().position(|i| i.state == ItemState::Busy);
-    let read = v.items.iter().filter(|i| !matches!(i.state, ItemState::Waiting | ItemState::Busy)).count();
-    let verified = v.items.iter().filter(|i| i.verified).count();
-    let kept = v.items.iter().filter(|i| i.state == ItemState::Ok && drt_steps::real::is_kept(&i.note)).count();
-    let counted = v.items.iter().filter(|i| i.state != ItemState::Skipped).count();
-    let reading = busy.is_some() || read < v.items.len();
+/// One arc of a ring: how it's drawn, its share of the ring, and how far
+/// a busy one has got.
+struct Arc {
+    cell: crate::card::Cell,
+    share: f32,
+    fill: f32,
+}
+
+/// What's being read now, beside a ring: a muted line (*Track 7 of 17*),
+/// its title, a bar for how far, and the times and speed under it.
+fn now_reading(ui: &mut Ui, p: &Pal, line: &str, title: &str, pct: Option<f32>, times: Option<String>, t: f64) {
+    ui.label(RichText::new(line).font(crate::theme::tnum(13.0, 400)).color(p.muted));
+    ui.add(egui::Label::new(RichText::new(title).font(font(16.0, 600)).color(p.ink)).wrap());
+    ui.add_space(6.0);
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width().min(260.0), 4.0), Sense::hover());
+    ui.painter().rect_filled(bar, 2.0, p.busy_soft);
+    match pct {
+        Some(f) => {
+            ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f.clamp(0.0, 1.0), 4.0)), 2.0, p.busy);
+        }
+        // How far isn't said: a short stretch, moving only if things may
+        // move.
+        None => {
+            let k = if crate::motion::on() { ((t * 0.6).fract()) as f32 } else { 0.0 };
+            let x = bar.left() + (bar.width() - 40.0) * k;
+            ui.painter().rect_filled(Rect::from_min_size(pos2(x, bar.top()), vec2(40.0, 4.0)), 2.0, p.busy);
+            crate::app::tick(ui.ctx());
+        }
+    }
+    ui.add_space(6.0);
+    if let Some(l) = times.filter(|t| !t.is_empty()) {
+        ui.add(egui::Label::new(RichText::new(l).font(crate::theme::tnum(13.0, 400)).color(p.muted)).wrap());
+    }
+}
+
+/// A line under a ring's headline, muted, wrapping.
+fn ring_note(ui: &mut Ui, p: &Pal, text: &str) {
+    ui.add(egui::Label::new(RichText::new(text).font(font(13.0, 400)).color(p.muted)).wrap());
+}
+
+/// A ring's headline, beside it once read: *All 17 read*, *Read cleanly*;
+/// its figures tabular when it's a time (*Read in 24:51 at 8.1×*).
+fn ring_headline(ui: &mut Ui, p: &Pal, text: &str) {
+    let f = if text.starts_with("Read in ") { crate::theme::tnum(16.0, 600) } else { font(16.0, 600) };
+    ui.add(egui::Label::new(RichText::new(text).font(f).color(p.ink)).wrap());
+}
+
+/// Every Rip's head (docs/ux/rip-view.md): the disc as a ring, one arc per
+/// track or title as long as it plays (one for a whole disc's image), in
+/// the strip's colours, the outcome in its middle (`big` over `word`);
+/// beside it, what `beside` draws: what's happening now, or once done, the
+/// proof.
+fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], big: String, word: String, beside: impl FnOnce(&mut Ui, bool)) {
     let wide = ui.available_width() >= 560.0;
     let size = if wide { 144.0 } else { 120.0 };
+    let total: f32 = arcs.iter().map(|a| a.share).sum::<f32>().max(f32::EPSILON);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 20.0;
-        // The ring.
         let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
-        let (big, word) = if reading {
-            (format!("{read}/{}", v.items.len()), "read".to_owned())
-        } else if kept > 0 {
-            (format!("{verified}/{counted}"), format!("verified · {kept} kept"))
-        } else {
-            (format!("{verified}/{counted}"), "verified".to_owned())
-        };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Image, true, format!("The disc, {big} {word}")));
         let pt = ui.painter();
         let c = r.center();
         let rad = size / 2.0 - 8.0;
         let thick = if wide { 12.0 } else { 10.0 };
-        let gap = if cells.len() > 40 { 0.0 } else { 0.035 };
+        // A gap between arcs; none for one arc, which is the whole ring.
+        let gap = if arcs.len() > 40 || arcs.len() < 2 { 0.0 } else { 0.035 };
         let mut a0 = -std::f32::consts::FRAC_PI_2;
         let arc = |from: f32, to: f32, col: Color32| {
             let steps = (((to - from) / 0.05).ceil() as usize).max(2);
             let pts: Vec<egui::Pos2> = (0..=steps).map(|k| from + (to - from) * k as f32 / steps as f32).map(|a| c + vec2(a.cos(), a.sin()) * rad).collect();
             egui::Shape::line(pts, Stroke::new(thick, col))
         };
-        for (k, cell) in cells.iter().enumerate() {
-            let share = if known { lens[k] / total } else { 1.0 / total };
-            let a1 = a0 + share * std::f32::consts::TAU;
+        for a in arcs {
+            let a1 = a0 + a.share / total * std::f32::consts::TAU;
             let (from, to) = (a0 + gap / 2.0, (a1 - gap / 2.0).max(a0 + gap / 2.0 + 0.01));
-            match cell {
+            match a.cell {
                 // Reading: its arc filling as it goes.
                 crate::card::Cell::Busy => {
                     pt.add(arc(from, to, p.line));
-                    let f = v.items.get(k).and_then(|it| progress(&it.note).0).unwrap_or(0.0).clamp(0.0, 1.0);
-                    if f > 0.0 {
-                        pt.add(arc(from, from + (to - from) * f, p.busy));
-                    } else {
-                        pt.add(arc(from, from + (to - from) * 0.08, p.busy));
-                    }
+                    let f = a.fill.clamp(0.0, 1.0);
+                    pt.add(arc(from, from + (to - from) * if f > 0.0 { f } else { 0.08 }, p.busy));
                 }
                 crate::card::Cell::Out => {
                     pt.add(arc(from, to, p.line_soft));
                 }
                 cell => {
-                    pt.add(arc(from, to, crate::card::cell_colour(*cell, p)));
+                    pt.add(arc(from, to, crate::card::cell_colour(cell, p)));
                 }
             }
             a0 = a1;
         }
-        let g = pt.layout_no_wrap(big, crate::theme::tnum(if wide { 22.0 } else { 20.0 }, 600), p.ink);
+        let g = pt.layout_no_wrap(big.clone(), crate::theme::tnum(if wide { 22.0 } else { 20.0 }, 600), p.ink);
         let gw = pt.layout(word.clone(), font(11.5, 500), p.muted, rad * 1.4);
         let hh = g.size().y + gw.size().y;
         pt.galley(pos2(c.x - g.size().x / 2.0, c.y - hh / 2.0), g.clone(), p.ink);
         pt.galley(pos2(c.x - gw.size().x / 2.0, c.y - hh / 2.0 + g.size().y), gw, p.muted);
-        // Now: the track being read, its bar and the time left; done, the
-        // proof.
         ui.vertical(|ui| {
             ui.set_width(ui.available_width());
             ui.add_space(if wide { 24.0 } else { 14.0 });
-            let small = |ui: &mut Ui, text: &str| {
-                ui.add(egui::Label::new(RichText::new(text).font(font(13.0, 400)).color(p.muted)).wrap());
-            };
-            if let Some(k) = busy {
-                let it = &v.items[k];
-                let n = number(it, k);
-                ui.label(RichText::new(format!("Track {n} of {}", v.items.len())).font(crate::theme::tnum(13.0, 400)).color(p.muted));
-                ui.add(egui::Label::new(RichText::new(&it.label).font(font(16.0, 600)).color(p.ink)).wrap());
-                ui.add_space(6.0);
-                let (pct, left) = progress(&it.note);
-                let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width().min(260.0), 4.0), Sense::hover());
-                ui.painter().rect_filled(bar, 2.0, p.busy_soft);
-                match pct {
-                    Some(f) => {
-                        ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f.clamp(0.0, 1.0), 4.0)), 2.0, p.busy);
-                    }
-                    // How far isn't said: a short stretch, moving only if
-                    // things may move.
-                    None => {
-                        let k = if crate::motion::on() { ((t * 0.6).fract()) as f32 } else { 0.0 };
-                        let x = bar.left() + (bar.width() - 40.0) * k;
-                        ui.painter().rect_filled(Rect::from_min_size(pos2(x, bar.top()), vec2(40.0, 4.0)), 2.0, p.busy);
-                        crate::app::tick(ui.ctx());
-                    }
-                }
-                ui.add_space(6.0);
-                // The track's time left, the disc's, and the speed.
-                let times = app.m.reading(app.sel, id).map(|r| r.times()).filter(|t| !t.is_empty());
-                let _ = left;
-                if let Some(l) = times {
-                    ui.add(egui::Label::new(RichText::new(l).font(crate::theme::tnum(13.0, 400)).color(p.muted)).wrap());
-                }
-            } else if reading {
-                small(ui, &v.detail);
-            } else {
-                let took = crate::model::read_in(v, |n| ctx.and_then(|c| length(c, n)).map(|l| l as f32));
-                let confs: Vec<u32> = v.items.iter().filter(|i| i.verified).filter_map(|i| i.note.trim().strip_prefix("✓ ").and_then(|c| c.parse().ok())).collect();
-                let conf = match (confs.iter().min(), confs.iter().max()) {
-                    (Some(a), Some(b)) if a == b => Some(format!("Each matches {a} other rip{} in AccurateRip", if *a == 1 { "" } else { "s" })),
-                    (Some(a), Some(b)) => Some(format!("Each matches {a}–{b} other rips in AccurateRip")),
-                    _ => None,
-                };
-                let needs = v.count(ItemState::Bad);
-                // Tracks the tray stopped, or that found no disc, weren't read.
-                let unread = v.items.iter().filter(|i| i.state == ItemState::Bad && matches!(i.note.as_str(), drt_steps::real::TRAY_OPENED | drt_steps::real::NO_DISC)).count();
-                if needs > 0 {
-                    let head = if unread > 0 { format!("{} of {} read", v.items.len() - unread, v.items.len()) } else { format!("All {} read", v.items.len()) };
-                    ui.add(egui::Label::new(RichText::new(head).font(font(16.0, 600)).color(p.ink)).wrap());
-                } else if let Some(tk) = took {
-                    ui.add(egui::Label::new(RichText::new(tk).font(crate::theme::tnum(16.0, 600)).color(p.ink)).wrap());
-                }
-                ui.add_space(4.0);
-                for line in [conf, (!offset.is_empty()).then(|| format!("Offset {offset}"))].into_iter().flatten() {
-                    small(ui, &line);
-                }
-            }
+            beside(ui, wide);
         });
     });
     ui.add_space(16.0);
+}
+
+/// The arcs for a step's items: each as long as it plays when every
+/// length is known, else all alike; a busy one filled as far as it says.
+fn item_arcs(v: &StepView, info: &StepInfo, ctx: Option<&Context>) -> Vec<Arc> {
+    let retries = info.retries.iter().any(|r| !matches!(r.id, "keep" | "leave_out"));
+    let cells = crate::card::cells(v, crate::card::Shown::of(v, retries));
+    let lens: Vec<f32> = (0..cells.len()).map(|k| v.items.get(k).map(|it| number(it, k)).and_then(|n| ctx.and_then(|c| length(c, n))).unwrap_or(0) as f32).collect();
+    let known = lens.iter().all(|l| *l > 0.0);
+    cells.iter().enumerate().map(|(k, cell)| Arc { cell: *cell, share: if known { lens[k] } else { 1.0 }, fill: v.items.get(k).and_then(|it| progress(&it.note).0).unwrap_or(0.0) }).collect()
+}
+
+/// Rip's head for a CD: the tracks as a ring; beside it the track being
+/// read, or once done, the proof.
+#[allow(clippy::too_many_arguments)]
+fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, ctx: Option<&Context>, offset: &str, t: f64) {
+    let arcs = item_arcs(v, info, ctx);
+    let busy = v.items.iter().position(|i| i.state == ItemState::Busy);
+    let read = v.items.iter().filter(|i| !matches!(i.state, ItemState::Waiting | ItemState::Busy)).count();
+    let verified = v.items.iter().filter(|i| i.verified).count();
+    let kept = v.items.iter().filter(|i| i.state == ItemState::Ok && drt_steps::real::is_kept(&i.note)).count();
+    let counted = v.items.iter().filter(|i| i.state != ItemState::Skipped).count();
+    let reading = busy.is_some() || read < v.items.len();
+    let (big, word) = if reading {
+        (format!("{read}/{}", v.items.len()), "read".to_owned())
+    } else if kept > 0 {
+        (format!("{verified}/{counted}"), format!("verified · {kept} kept"))
+    } else {
+        (format!("{verified}/{counted}"), "verified".to_owned())
+    };
+    ring_head(ui, p, &arcs, big, word, |ui, _| {
+        if let Some(k) = busy {
+            let it = &v.items[k];
+            let n = number(it, k);
+            // The track's time left, the disc's, and the speed.
+            let times = app.m.reading(app.sel, id).map(|r| r.times());
+            now_reading(ui, p, &format!("Track {n} of {}", v.items.len()), &it.label, progress(&it.note).0, times, t);
+        } else if reading {
+            ring_note(ui, p, &v.detail);
+        } else {
+            let took = crate::model::read_in(v, |n| ctx.and_then(|c| length(c, n)).map(|l| l as f32));
+            let confs: Vec<u32> = v.items.iter().filter(|i| i.verified).filter_map(|i| i.note.trim().strip_prefix("✓ ").and_then(|c| c.parse().ok())).collect();
+            let conf = match (confs.iter().min(), confs.iter().max()) {
+                (Some(a), Some(b)) if a == b => Some(format!("Each matches {a} other rip{} in AccurateRip", if *a == 1 { "" } else { "s" })),
+                (Some(a), Some(b)) => Some(format!("Each matches {a}–{b} other rips in AccurateRip")),
+                _ => None,
+            };
+            let needs = v.count(ItemState::Bad);
+            // Tracks the tray stopped, or that found no disc, weren't read.
+            let unread = v.items.iter().filter(|i| i.state == ItemState::Bad && matches!(i.note.as_str(), drt_steps::real::TRAY_OPENED | drt_steps::real::NO_DISC)).count();
+            if needs > 0 {
+                let head = if unread > 0 { format!("{} of {} read", v.items.len() - unread, v.items.len()) } else { format!("All {} read", v.items.len()) };
+                ring_headline(ui, p, &head);
+            } else if let Some(tk) = took {
+                ring_headline(ui, p, &tk);
+            }
+            ui.add_space(4.0);
+            for line in [conf, (!offset.is_empty()).then(|| format!("Offset {offset}"))].into_iter().flatten() {
+                ring_note(ui, p, &line);
+            }
+        }
+    });
+}
+
+// ---- Rip for a game or data disc: redumper's image of the whole disc ---------------------------
+
+/// What an image came to, from its note: the headline, the ring's word,
+/// and its tone. *✓ 682 MB, read cleanly*; *kept anyway, 3 unreadable
+/// sectors left blank*; *read, but 2 sectors came back wrong*.
+pub fn dump_verdict(state: ItemState, note: &str) -> (String, String, Tone) {
+    let n = note.trim();
+    let rest = n.trim_start_matches('✓').trim();
+    let after_size = rest.split_once(", ").map_or("", |(_, r)| r);
+    match state {
+        ItemState::Ok if n.starts_with('✓') && after_size.contains("re-read") => ("Bad parts re-read".into(), "read".into(), Tone::Ok),
+        ItemState::Ok if n.starts_with('✓') => ("Read cleanly".into(), "read".into(), Tone::Ok),
+        // Not clean: kept with sectors blank, or sectors that came back
+        // wrong. Never a tick.
+        ItemState::Ok if n.starts_with("kept anyway") => {
+            let why = n.trim_start_matches("kept anyway").trim_start_matches(", ");
+            (if why.is_empty() || why.ends_with(" MB") || why.ends_with(" GB") { "Kept anyway".into() } else { format!("Kept with {why}") }, "kept".into(), Tone::Warn)
+        }
+        ItemState::Ok if n.starts_with("read, but ") => (cap(n.trim_start_matches("read, but ")), "not clean".into(), Tone::Warn),
+        ItemState::Ok => ("Read".into(), "read".into(), Tone::Ok),
+        ItemState::Bad if n == drt_steps::real::TRAY_OPENED || n == drt_steps::real::NO_DISC => (cap(n), "not read".into(), Tone::Bad),
+        ItemState::Bad => {
+            let unreadable = n.strip_suffix(" unreadable sectors").or_else(|| n.strip_suffix(" unreadable sector")).filter(|c| c.chars().all(|ch| ch.is_ascii_digit()));
+            let head = match unreadable {
+                Some("1") => "1 sector couldn't be read".to_owned(),
+                Some(c) => format!("{c} sectors couldn't be read"),
+                None if n.is_empty() => "Couldn't be read".to_owned(),
+                None => cap(n),
+            };
+            (head, "unreadable".into(), Tone::Bad)
+        }
+        ItemState::Skipped => ("Skipped".into(), "skipped".into(), Tone::Plain),
+        ItemState::Busy | ItemState::Waiting => ("Reading".into(), "read".into(), Tone::Busy),
+    }
+}
+
+/// A number with its thousands apart: 143,300.
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (k, c) in s.chars().enumerate() {
+        if k > 0 && (s.len() - k).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Rip of a game or data disc: the disc as one ring, filling as redumper
+/// reads it; beside it the pass it's on, how far, the time left and the
+/// speed; or once done, what the image came to. Under it each pass as a
+/// row, with the errors it met. Only what Rip itself knows: whether the
+/// image matches Redump is Check's to say.
+#[allow(clippy::too_many_arguments)]
+fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, t: f64) -> Vec<(String, String)> {
+    let Some(it) = v.items.first().cloned() else {
+        empty(ui, p, "Nothing read yet");
+        return vec![];
+    };
+    let i = app.sel;
+    let drive = app.m.drive(i);
+    let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
+    let passes = drt_steps::real::redumper::passes(log.iter().copied());
+    let raw = app.m.shown_raw(i, id);
+    let live = raw.iter().rev().find_map(|l| drt_steps::real::redumper::parse_progress(l));
+    let busy = it.state == ItemState::Busy;
+    let (headline, word, tone) = dump_verdict(it.state, &it.note);
+    let pct = progress(&it.note).0;
+    let cell = match (it.state, tone) {
+        (ItemState::Busy, _) => crate::card::Cell::Busy,
+        (ItemState::Waiting, _) => crate::card::Cell::Wait,
+        (ItemState::Skipped, _) => crate::card::Cell::Out,
+        (_, Tone::Warn) => crate::card::Cell::Needs,
+        (_, Tone::Bad) if !info.retries.is_empty() => crate::card::Cell::Needs,
+        (_, Tone::Bad) => crate::card::Cell::Bad,
+        _ if it.verified => crate::card::Cell::Verified,
+        _ => crate::card::Cell::Done,
+    };
+    let size = (!v.status.is_empty() && v.status != "Skipped").then(|| v.status.clone());
+    let (big, small) = match it.state {
+        ItemState::Skipped => ("Skipped".to_owned(), String::new()),
+        ItemState::Busy => (pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())), word),
+        ItemState::Bad => (it.note.split_whitespace().next().filter(|w| w.chars().all(|c| c.is_ascii_digit())).unwrap_or("!").to_owned(), word),
+        _ => (size.clone().unwrap_or_else(|| cap(&word)), word),
+    };
+    let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
+    ring_head(ui, p, &arcs, big, small, |ui, _| {
+        if busy {
+            // The pass, the disc, how far, then the time left and speed.
+            let doing = if v.detail.is_empty() { "Reading".to_owned() } else { v.detail.split(" · ").next().unwrap_or("").to_owned() };
+            let times = app.m.reading(i, id).map(|r| r.times());
+            let pass = passes.len().max(1);
+            now_reading(ui, p, &format!("Pass {pass} · {doing}"), &it.label, pct, times, t);
+            if let Some((at, of)) = crate::pace::sectors(&it.note) {
+                ring_note(ui, p, &format!("Sector {} of {}", thousands(at), thousands(of)));
+            }
+        } else {
+            // Needing you, the row says what's wrong, with what to do.
+            let head = match it.state {
+                ItemState::Bad => "Not read cleanly",
+                ItemState::Skipped => "No image kept",
+                _ => &headline,
+            };
+            ring_headline(ui, p, head);
+            ui.add_space(4.0);
+            let took = crate::model::read_in(v, |_| None);
+            let line = [size.clone(), took.map(|t| t.replacen("Read in", "read in", 1))].into_iter().flatten().collect::<Vec<_>>().join(", ");
+            if !line.is_empty() {
+                ring_note(ui, p, &cap(&line));
+            }
+            if !drive.is_empty() {
+                ring_note(ui, p, &drive);
+            }
+        }
+    });
+    // The passes as rows, the image's own first when it needs you.
+    let mut list: Vec<Row> = vec![];
+    if it.state == ItemState::Bad {
+        let mut r = Row::new(None, it.label.clone());
+        r.attn = true;
+        r.why = Some(headline.clone());
+        r.item = Some(it.id.clone());
+        retries(&mut r, info);
+        list.push(r);
+    }
+    let last = passes.len().saturating_sub(1);
+    for (k, ps) in passes.iter().enumerate() {
+        use drt_steps::real::redumper::{errors_text, left_after, PassKind};
+        let mut r = Row::new(Some(k as u32 + 1), ps.kind.name());
+        let now = busy && k == last;
+        // Its time, from its heading to the next one's (or now).
+        let from = v.record.log.get(ps.at).map(|l| l.at);
+        let to = passes.get(k + 1).and_then(|n| v.record.log.get(n.at)).map(|l| l.at).or(if now { None } else { v.record.finished });
+        r.len = from.zip(to).and_then(|(a, b)| b.checked_sub(a)).filter(|d| *d > 0).map(mmss);
+        // The errors it met, beside its name (under it if long): the
+        // drive's counts as it gave them, in samples for a CD.
+        let counts = if now {
+            live.as_ref().filter(|_| ps.kind.reads()).map(|l| errors_text(&l.counts)).unwrap_or_default()
+        } else {
+            match ps.kind {
+                PassKind::Read => errors_text(&ps.errors),
+                PassKind::Reread => errors_text(&still_wrong(&passes, k)),
+                PassKind::Check => ps.wrong.iter().filter(|w| w.1 > 0).map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", "),
+                _ => String::new(),
+            }
+        };
+        if !counts.is_empty() {
+            r.dest = Some((counts.clone(), if ps.kind == PassKind::Reread && !now { " left".into() } else { String::new() }));
+        }
+        r.verdict = Some(if now {
+            (if ps.kind.reads() && counts.is_empty() { "No errors so far".into() } else { cap(&v.detail.split(" · ").next().unwrap_or("").to_lowercase()) }, Tone::Busy, String::new())
+        } else {
+            match ps.kind {
+                PassKind::Read if counts.is_empty() => ("No errors".into(), Tone::Ok, String::new()),
+                PassKind::Read => ("Errors".into(), Tone::Plain, String::new()),
+                PassKind::Reread if left_after(&passes, k) == 0 => ("All put right".into(), Tone::Ok, String::new()),
+                PassKind::Reread => ("Some left".into(), Tone::Plain, String::new()),
+                // Stopped on them; or, kept anyway, written with them blank.
+                PassKind::Tracks if ps.skipped > 0 && ps.error.is_some() => (format!("{} skipped", ps.skipped), Tone::Bad, String::new()),
+                PassKind::Tracks if ps.skipped > 0 => (format!("{} left blank", ps.skipped), Tone::Plain, String::new()),
+                PassKind::Tracks if ps.error.is_none() => ("None skipped".into(), Tone::Ok, String::new()),
+                PassKind::Check if ps.wrong.iter().any(|w| w.1 > 0) => (format!("{} wrong", ps.wrong.iter().map(|w| w.1).max().unwrap_or(0)), Tone::Plain, String::new()),
+                PassKind::Check => ("None wrong".into(), Tone::Ok, String::new()),
+                _ if ps.error.is_some() => ("Stopped".into(), Tone::Bad, String::new()),
+                _ => ("Done".into(), Tone::Ok, String::new()),
+            }
+        });
+        list.push(r);
+    }
+    if passes.is_empty() && !busy && it.state != ItemState::Bad {
+        // A run from before passes were logged: the image's row alone.
+        let mut r = Row::new(None, it.label.clone());
+        r.verdict = Some((headline, tone, String::new()));
+        list.push(r);
+    }
+    let key = format!("{}/dump", v.step);
+    rows(app, ui, p, &key, list, "", t)
+}
+
+/// Each counter's errors left after pass `upto`: the read's, less what
+/// every re-read since put right.
+fn still_wrong(passes: &[drt_steps::real::redumper::Pass], upto: usize) -> Vec<(String, u64)> {
+    use drt_steps::real::redumper::PassKind;
+    let mut left: Vec<(String, u64)> = vec![];
+    for p in passes.iter().take(upto + 1) {
+        match p.kind {
+            PassKind::Read => left = p.errors.clone(),
+            PassKind::Reread => {
+                for (name, n) in &mut left {
+                    let fixed = p.corrected.iter().find(|c| c.0 == *name).map_or(0, |c| c.1);
+                    *n = n.saturating_sub(fixed);
+                }
+            }
+            _ => {}
+        }
+    }
+    left
+}
+
+// ---- Rip for a video disc: MakeMKV's copy of each title ---------------------------------------
+
+/// What a title came to, from its note: *✓ 50:12, 12.7 GB* is read and
+/// that size.
+fn title_verdict(state: ItemState, note: &str) -> (String, Tone, String, Option<String>) {
+    let n = note.trim();
+    match state {
+        ItemState::Ok => ("Read".into(), Tone::Ok, n.trim_start_matches('✓').trim().rsplit_once(", ").map_or(String::new(), |(_, size)| size.to_owned()), None),
+        ItemState::Bad if n == drt_steps::real::TRAY_OPENED || n == drt_steps::real::NO_DISC => ("Not read".into(), Tone::Bad, String::new(), Some(cap(n))),
+        ItemState::Bad => ("Not read".into(), Tone::Bad, String::new(), Some(cap(n.trim_start_matches("Couldn't copy the video: ")))),
+        ItemState::Skipped => ("Skipped".into(), Tone::Plain, String::new(), None),
+        ItemState::Busy => {
+            let pc = progress(n).0.map(|f| format!("{}%", (f * 100.0).floor())).unwrap_or_default();
+            // Checking that the file is whole comes after reading: no
+            // figure to show.
+            if n.starts_with("checking") {
+                ("Checking".into(), Tone::Busy, String::new(), None)
+            } else {
+                ("Reading".into(), Tone::Busy, pc, None)
+            }
+        }
+        ItemState::Waiting => ("Waiting".into(), Tone::Plain, String::new(), None),
+    }
+}
+
+/// Rip of a video disc: the titles as a ring, each as long as it plays;
+/// beside it the one being read, its time left and the disc's; then each
+/// title as a row, like a CD's tracks.
+#[allow(clippy::too_many_arguments)]
+fn video_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, ctx: Option<&Context>, t: f64) -> Vec<(String, String)> {
+    if v.items.is_empty() {
+        empty(ui, p, "Nothing read yet");
+        return vec![];
+    }
+    let i = app.sel;
+    let drive = app.m.drive(i);
+    let arcs = item_arcs(v, info, ctx);
+    let busy = v.items.iter().position(|i| i.state == ItemState::Busy);
+    let read = v.items.iter().filter(|i| i.state == ItemState::Ok).count();
+    let counted = v.items.iter().filter(|i| i.state != ItemState::Skipped).count();
+    let needs = v.count(ItemState::Bad);
+    let (big, word) = (format!("{read}/{counted}"), "read".to_owned());
+    ring_head(ui, p, &arcs, big, word, |ui, _| {
+        if let Some(k) = busy {
+            let it = &v.items[k];
+            let at = v.items.iter().take(k + 1).filter(|i| i.state != ItemState::Skipped).count();
+            let times = app.m.reading(i, id).map(|r| r.times());
+            now_reading(ui, p, &format!("Video {at} of {counted}"), &it.label, progress(&it.note).0, times, t);
+        } else {
+            // What needs you is said above and on its row.
+            let head = match (needs, read) {
+                (0, 1) if counted == 1 => "Read".to_owned(),
+                (0, r) if r == counted => format!("All {counted} read"),
+                (_, r) => format!("{r} of {counted} read"),
+            };
+            ring_headline(ui, p, &head);
+            ui.add_space(4.0);
+            if let Some(tk) = crate::model::read_in(v, |_| None) {
+                ring_note(ui, p, &tk);
+            }
+            if !drive.is_empty() {
+                ring_note(ui, p, &drive);
+            }
+        }
+    });
+    let list: Vec<Row> = v
+        .items
+        .iter()
+        .enumerate()
+        .map(|(k, it)| {
+            let n = number(it, k);
+            let (word, tone, note, why) = title_verdict(it.state, &it.note);
+            let mut r = Row::new(Some(n), it.label.clone());
+            r.len = ctx.and_then(|c| length(c, n)).map(drt_steps::real::video::hms);
+            r.attn = why.is_some();
+            r.why = why;
+            r.item = Some(it.id.clone());
+            // Room from the start, while it reads, for what it comes to.
+            if v.state == StepState::Busy {
+                r.widest = vec![("Read".into(), "00.0 GB".into()), ("Reading".into(), "100%".into())];
+            }
+            if r.attn {
+                retries(&mut r, info);
+            }
+            if it.state == ItemState::Busy {
+                r.progress = progress(&it.note).0;
+            }
+            r.verdict = Some((word, tone, note));
+            r
+        })
+        .collect();
+    let vw = verdict_column(ui, p, &list, ui.available_width());
+    columns(ui, p, &[("Size", 0.0)], vw);
+    let key = format!("{}/titles", v.step);
+    rows(app, ui, p, &key, list, "", t)
 }
 
 fn place(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, v: &StepView, ctx: Option<&Context>, t: f64) -> Vec<(String, String)> {
@@ -3130,7 +3440,7 @@ fn sample() -> template::Fields {
 
 /// Progress in a note: "encoding 43%, 12s left" is 43% and "12s left".
 pub fn progress(note: &str) -> (Option<f32>, Option<String>) {
-    let pct = note.split(|c: char| !(c.is_ascii_digit() || c == '%')).find_map(|w| w.strip_suffix('%')?.parse::<f32>().ok()).map(|n| (n / 100.0).clamp(0.0, 1.0));
+    let pct = crate::pace::percent(note);
     let left = note.split(", ").find(|part| part.ends_with(" left")).map(|l| l.trim().to_owned());
     (pct, left)
 }
@@ -3864,6 +4174,22 @@ mod tests {
         assert_eq!(rip_verdict(ItemState::Bad, "").0, "Couldn't be read");
         assert_eq!(rip_verdict(ItemState::Bad, "something new").3.unwrap(), "Something new", "unknown notes shown as they are");
         assert_eq!(rip_verdict(ItemState::Busy, "re-reading 40%").0, "Re-reading 40%");
+    }
+
+    #[test]
+    fn what_an_image_came_to_from_each_note_image_makes() {
+        use drt_steps::real::data::image_note;
+        let v = dump_verdict;
+        assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, false, &[])), ("Read cleanly".into(), "read".into(), Tone::Ok));
+        assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, true, &[])), ("Bad parts re-read".into(), "read".into(), Tone::Ok));
+        // Kept, or sectors that came back wrong: done, but never a tick.
+        assert_eq!(v(ItemState::Ok, &image_note("682 MB", true, 0, false, &[])).0, "Kept anyway");
+        assert_eq!(v(ItemState::Ok, &image_note("682 MB", true, 3, false, &[])), ("Kept with 3 unreadable sectors left blank".into(), "kept".into(), Tone::Warn));
+        assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, false, &[("EDC", 2)])), ("2 sectors came back wrong".into(), "not clean".into(), Tone::Warn));
+        assert_eq!(v(ItemState::Bad, "3 unreadable sectors").0, "3 sectors couldn't be read");
+        assert_eq!(v(ItemState::Bad, "1 unreadable sector").0, "1 sector couldn't be read");
+        assert_eq!(v(ItemState::Bad, "drive not ready").0, "Drive not ready");
+        assert_eq!(thousands(2_298_496), "2,298,496");
     }
 
     #[test]

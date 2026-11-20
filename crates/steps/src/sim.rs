@@ -825,60 +825,106 @@ impl Step for Image {
         let Some(disc) = inlet.recv().await else { return Ok(()) };
         let item = Item::new(data::DUMP, ItemKind::Dump, DATA_LABEL, None, None).knowing(&disc);
         let main = PathBuf::from(format!("{DATA_LABEL}.cue"));
-        {
-            let _drive = cx.lane(LaneKind::Drive).await;
-            for (phase, ms) in [("Reading", 3000), ("Writing tracks", 300)] {
-                cx.status("", phase);
-                cx.drive_says(StepState::Busy, phase, "");
-                for i in 1..=4 {
-                    cx.raw(format!("LBA: {:>6}/332999, errors: {{ SCSI: 0, C2: 0 }}", i * 83_250));
-                    cx.item(&item, ItemState::Busy, format!("{}%, sector {} of 332999", i * 25, i * 83_250));
-                    cx.progress(Some(i as f32 / 4.0));
-                    cx.sleep(ms / 4).await?;
-                }
-            }
-            cx.drive_says(StepState::Idle, "Waiting", "");
-        }
-        cx.progress(None);
-        if self.bad {
-            cx.raw("media errors: { SCSI: 3, C2: 0, Q: 0 }");
-            cx.log("3 sectors couldn't be read");
-            cx.item(&item, ItemState::Bad, "3 unreadable sectors");
-            cx.state(StepState::Bad);
-            cx.status("", "3 sectors unreadable");
-            let req = loop {
-                match cx.next_retry().await {
-                    None => return Ok(()),
-                    Some(r) if r.item == item.id => break r,
-                    Some(_) => {}
-                }
-            };
-            cx.state(StepState::Busy);
-            match req.option.as_str() {
-                "leave_out" => {
-                    cx.item(&item, ItemState::Skipped, "skipped");
-                    return Ok(());
-                }
-                "keep" => cx.item(&item, ItemState::Ok, "kept anyway, 3 unreadable sectors left blank"),
-                _ => {
-                    let _drive = cx.lane(LaneKind::Drive).await;
-                    cx.drive_says(StepState::Busy, "Re-reading bad parts", "");
-                    cx.item(&item, ItemState::Busy, "re-reading bad parts");
-                    cx.sleep(2000).await?;
-                    cx.drive_says(StepState::Idle, "Waiting", "");
-                    cx.item(&item, ItemState::Ok, "✓ 682 MB, bad parts re-read");
-                }
-            }
-            cx.status("682 MB", "3 sectors re-read");
-        } else {
-            cx.item(&item, ItemState::Ok, "✓ 682 MB, read cleanly");
-            cx.status("682 MB", "");
+        if dump(&cx, &item, DATA_BYTES / 2048, self.bad).await?.is_none() {
+            return Ok(());
         }
         outlet.send(item.becomes(ItemKind::Dump, Some(main))).await;
         Ok(())
     }
 }
 
+/// A CD's dump as the real Image makes and reports one: redumper's passes
+/// in the log under their headings, each progress line in the step's
+/// output, the note and the phase from them. With `bad`, the first read
+/// leaves 3 sectors unreadable, and it waits on you: re-read them, keep
+/// it anyway or skip. Gives the note it ended on, or `None` if skipped.
+pub(crate) async fn dump(cx: &Cx, item: &Item, sectors: u64, bad: bool) -> Result<Option<String>> {
+    use crate::real::redumper;
+    let size = crate::real::media::size(sectors * 2048);
+    // A pass: its heading, then four progress lines over `ms`.
+    let pass = |heading: &'static str, ms: u64, errors: (u64, u64)| async move {
+        cx.log(format!("*** {heading} (time check: 0s)"));
+        if let Some(p) = redumper::phase(&format!("*** {heading}")) {
+            cx.status("", p);
+            cx.drive_says(StepState::Busy, p, "");
+        }
+        for i in 1..=4u64 {
+            let line = redumper::progress_line(sectors * i / 4, sectors, true, errors.0 * i / 4, errors.1 * i / 4);
+            cx.raw(&line);
+            if let Some(p) = redumper::parse_progress(&line) {
+                cx.progress(Some(p.fraction));
+                cx.item(item, ItemState::Busy, redumper::progress_note(&p));
+            }
+            cx.sleep(ms / 4).await?;
+        }
+        anyhow::Ok(())
+    };
+    let log = |lines: &[&str]| lines.iter().for_each(|l| cx.log(*l));
+    cx.item(item, ItemState::Busy, "reading");
+    {
+        let _drive = cx.lane(LaneKind::Drive).await;
+        cx.log(format!("redumper dump --drive=/dev/sr0 --retries=20 --image-name={}", item.label));
+        if bad {
+            pass("DUMP", 3000, (1764, 0)).await?;
+            log(&["media errors:", "SCSI: 1764 samples", "C2: 0 samples", "Q: 12"]);
+            pass("REFINE", 600, (0, 0)).await?;
+            log(&["correction statistics:", "SCSI: 0 samples", "C2: 0 samples", "Q: 0 sectors"]);
+            cx.log("*** SPLIT (time check: 0s)");
+            log(&["errors detected, track: 1, sectors: {SKIP: 3, C2: 0}, samples: {SKIP: 1764, C2: 0}", "error: data errors detected, unable to continue"]);
+        } else {
+            pass("DUMP", 3000, (0, 0)).await?;
+            log(&["media errors:", "SCSI: 0 samples", "C2: 0 samples", "Q: 0"]);
+            pass("SPLIT", 300, (0, 0)).await?;
+            pass("INFO", 300, (0, 0)).await?;
+        }
+        cx.drive_says(StepState::Idle, "Waiting", "");
+    }
+    cx.progress(None);
+    let note = if bad {
+        cx.log("image: 3 unreadable sectors");
+        cx.item(item, ItemState::Bad, "3 unreadable sectors");
+        cx.state(StepState::Bad);
+        cx.status("", "3 unreadable sectors");
+        let req = loop {
+            match cx.next_retry().await {
+                None => return Ok(None),
+                Some(r) if r.item == item.id => break r,
+                Some(_) => {}
+            }
+        };
+        cx.state(StepState::Busy);
+        match req.option.as_str() {
+            "leave_out" => {
+                cx.item(item, ItemState::Skipped, "skipped");
+                cx.status("Skipped", "");
+                return Ok(None);
+            }
+            "keep" => {
+                cx.item(item, ItemState::Busy, "keeping anyway");
+                pass("SPLIT", 300, (0, 0)).await?;
+                log(&["errors detected, track: 1, sectors: {SKIP: 3, C2: 0}, samples: {SKIP: 1764, C2: 0}"]);
+                pass("INFO", 300, (0, 0)).await?;
+                data::image_note(&size, true, 3, false, &[])
+            }
+            _ => {
+                cx.item(item, ItemState::Busy, "re-reading bad parts");
+                let _drive = cx.lane(LaneKind::Drive).await;
+                pass("REFINE", 2000, (0, 0)).await?;
+                log(&["correction statistics:", "SCSI: 1764 samples", "C2: 0 samples", "Q: 12 sectors"]);
+                pass("SPLIT", 300, (0, 0)).await?;
+                pass("INFO", 300, (0, 0)).await?;
+                cx.drive_says(StepState::Idle, "Waiting", "");
+                data::image_note(&size, false, 0, true, &[])
+            }
+        }
+    } else {
+        data::image_note(&size, false, 0, false, &[])
+    };
+    cx.progress(None);
+    cx.item(item, ItemState::Ok, note.clone());
+    cx.status(size, if note.contains("re-read") { note.trim_start_matches("✓ ").to_owned() } else { String::new() });
+    Ok(Some(note))
+}
 struct Check;
 
 #[async_trait]

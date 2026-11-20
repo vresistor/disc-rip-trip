@@ -110,6 +110,8 @@ pub struct Progress {
     pub detail: String,
     /// Read errors so far, summed over whatever counters the line has.
     pub errors: u64,
+    /// Each counter by its name, singular: `SCSI`, `C2`, `EDC`, `Q`.
+    pub counts: Vec<(String, u64)>,
 }
 
 /// Reads a progress line. The formats (`cd/cd_dump.ixx`, `dvd/dvd_dump.ixx`):
@@ -128,7 +130,8 @@ pub fn parse_progress(line: &str) -> Option<Progress> {
     let open = line[..close].rfind('[')?;
     let percent: f32 = line[open + 1..close].trim().parse().ok()?;
     let rest = line[close + 2..].trim();
-    let errors = errors_in(line);
+    let counts = counts_in(line);
+    let errors = counts.iter().map(|c| c.1).sum();
     let detail = match rest.strip_prefix("LBA:") {
         Some(lba) => {
             let pos = lba.split(',').next().unwrap_or("").trim();
@@ -139,15 +142,190 @@ pub fn parse_progress(line: &str) -> Option<Progress> {
         }
         None => rest.to_owned(),
     };
-    Some(Progress { fraction: (percent / 100.0).clamp(0.0, 1.0), detail, errors })
+    Some(Progress { fraction: (percent / 100.0).clamp(0.0, 1.0), detail, errors, counts })
 }
 
-/// The sum of the counters in a progress line's braces. Each entry is
-/// `name: count`; taking every number instead counts the 2 in `C2s`.
-fn errors_in(line: &str) -> u64 {
-    let Some(open) = line.find('{') else { return 0 };
-    let Some(close) = line[open..].find('}') else { return 0 };
-    line[open + 1..open + close].split(',').filter_map(|e| e.split(':').nth(1)?.trim().parse::<u64>().ok()).sum()
+/// The counters in a progress line's braces, each `name: count`; taking
+/// every number instead counts the 2 in `C2s`. `SCSIs` is `SCSI`.
+fn counts_in(line: &str) -> Vec<(String, u64)> {
+    let Some(open) = line.find('{') else { return vec![] };
+    let Some(close) = line[open..].find('}') else { return vec![] };
+    line[open + 1..open + close]
+        .split(',')
+        .filter_map(|e| {
+            let (name, n) = e.split_once(':')?;
+            let name = name.trim();
+            Some((name.strip_suffix('s').unwrap_or(name).to_owned(), n.trim().parse::<u64>().ok()?))
+        })
+        .collect()
+}
+
+/// What Image says of a dump while redumper works on it, from a progress
+/// line: *43%, sector 1234567 of 2298496, 3 errors*.
+pub fn progress_note(p: &Progress) -> String {
+    let errors = match p.errors {
+        0 => String::new(),
+        1 => ", 1 error".into(),
+        n => format!(", {n} errors"),
+    };
+    format!("{}%, {}{errors}", (p.fraction * 100.0) as u32, p.detail)
+}
+
+/// A progress line as redumper prints one: a CD's counters are `SCSIs`,
+/// `C2s` and `Q`; a DVD's or a Blu-ray's `SCSI` and `EDC`. For the
+/// simulated steps, which report as the real one does.
+pub fn progress_line(at: u64, of: u64, cd: bool, scsi: u64, c2: u64) -> String {
+    let pct = (at * 100).checked_div(of).unwrap_or(0);
+    let errors = if cd { format!("SCSIs: {scsi}, C2s: {c2}, Q: 0") } else { format!("SCSI: {scsi}, EDC: {c2}") };
+    format!("⠋ [{pct:>3}%] LBA: {at:>6}/{of}, errors: {{ {errors} }}")
+}
+
+/// The read errors a progress line or a log's block counts, in a few
+/// words: *SCSI 2, C2 37*. The Q counter is the subchannel's, not the
+/// data's: left out. Empty when there are none.
+pub fn errors_text(counts: &[(String, u64)]) -> String {
+    counts.iter().filter(|(k, n)| *n > 0 && k != "Q").map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ")
+}
+
+// ---- its passes, from the log ------------------------------------------------------------------
+
+/// One of redumper's passes over a disc.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PassKind {
+    /// `dump`: the disc read once, end to end.
+    Read,
+    /// `refine`: the sectors that came back with errors read again.
+    Reread,
+    /// `split`: a CD's tracks written out of what was read.
+    Tracks,
+    /// `info`: every sector of the image checked.
+    Check,
+    /// `protection`: copy protection looked for.
+    Protection,
+    /// `hash`: the image's checksums.
+    Hash,
+}
+
+impl PassKind {
+    fn of(heading: &str) -> Option<PassKind> {
+        Some(match heading {
+            "DUMP" => PassKind::Read,
+            "REFINE" => PassKind::Reread,
+            "SPLIT" => PassKind::Tracks,
+            "INFO" => PassKind::Check,
+            "PROTECTION" => PassKind::Protection,
+            "HASH" => PassKind::Hash,
+            _ => return None,
+        })
+    }
+
+    /// Its name in a list of what was done.
+    pub fn name(self) -> &'static str {
+        match self {
+            PassKind::Read => "Read the disc",
+            PassKind::Reread => "Re-read bad parts",
+            PassKind::Tracks => "Write the tracks",
+            PassKind::Check => "Check every sector",
+            PassKind::Protection => "Look for copy protection",
+            PassKind::Hash => "Checksums",
+        }
+    }
+
+    /// Whether it reads the drive, so has a read speed.
+    pub fn reads(self) -> bool {
+        matches!(self, PassKind::Read | PassKind::Reread)
+    }
+}
+
+/// What one pass came to, from what it logged.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pass {
+    pub kind: PassKind,
+    /// The log line its heading is.
+    pub at: usize,
+    /// The drive's errors (`media errors:`), each counter by name: in
+    /// samples for a CD.
+    pub errors: Vec<(String, u64)>,
+    /// What re-reading put right (`correction statistics:`).
+    pub corrected: Vec<(String, u64)>,
+    /// Sectors `split` had to fill in rather than read.
+    pub skipped: u64,
+    /// Sectors `info` found wrong: (kind, count).
+    pub wrong: Vec<(&'static str, u64)>,
+    /// What it stopped on, if it did.
+    pub error: Option<String>,
+}
+
+/// The passes in a dump's log, in order, each with what it found.
+pub fn passes<'a>(log: impl IntoIterator<Item = &'a str>) -> Vec<Pass> {
+    #[derive(PartialEq)]
+    enum Block {
+        None,
+        Errors,
+        Corrected,
+    }
+    let mut out: Vec<Pass> = vec![];
+    let mut block = Block::None;
+    let mut info = String::new();
+    for (k, line) in log.into_iter().enumerate() {
+        let t = line.trim();
+        if let Some(h) = t.strip_prefix("*** ") {
+            // What `info` found, once its heading is closed (`*** END`).
+            if let Some(last) = out.last_mut().filter(|p| p.kind == PassKind::Check && !info.is_empty()) {
+                last.wrong = sector_problems(&info);
+            }
+            info.clear();
+            block = Block::None;
+            if let Some(kind) = h.split_whitespace().next().and_then(PassKind::of) {
+                out.push(Pass { kind, at: k, errors: vec![], corrected: vec![], skipped: 0, wrong: vec![], error: None });
+            }
+            continue;
+        }
+        let Some(pass) = out.last_mut() else { continue };
+        if t.starts_with("media errors:") {
+            block = Block::Errors;
+            continue;
+        }
+        if t.starts_with("correction statistics:") {
+            block = Block::Corrected;
+            continue;
+        }
+        let count = t.split_once(':').and_then(|(name, rest)| Some((name.trim().to_owned(), rest.split_whitespace().next()?.parse::<u64>().ok()?)));
+        match (&block, count) {
+            (Block::Errors, Some((name, n))) if !name.contains(' ') => pass.errors.push((name, n)),
+            (Block::Corrected, Some((name, n))) if !name.contains(' ') => pass.corrected.push((name, n)),
+            _ => {
+                block = Block::None;
+                if let Some(n) = parse_skipped(t) {
+                    pass.skipped += n;
+                } else if let Some(e) = t.strip_prefix("error:") {
+                    pass.error = Some(e.trim().to_owned());
+                } else if pass.kind == PassKind::Check {
+                    info.push_str(t);
+                    info.push('\n');
+                }
+            }
+        }
+    }
+    if let Some(last) = out.last_mut().filter(|p| p.kind == PassKind::Check && !info.is_empty()) {
+        last.wrong = sector_problems(&info);
+    }
+    out
+}
+
+/// The errors left after each pass: the read's, less what every re-read
+/// since put right; as `errors_left` counts them.
+pub fn left_after(passes: &[Pass], upto: usize) -> u64 {
+    let data = |c: &[(String, u64)]| c.iter().filter(|(k, _)| k != "Q").map(|c| c.1).sum::<u64>();
+    let mut left = 0u64;
+    for p in passes.iter().take(upto + 1) {
+        match p.kind {
+            PassKind::Read => left = data(&p.errors),
+            PassKind::Reread => left = left.saturating_sub(data(&p.corrected)),
+            _ => {}
+        }
+    }
+    left
 }
 
 /// The phase a heading starts: `*** DUMP (time check: 0s)`.
@@ -158,6 +336,7 @@ pub fn phase(line: &str) -> Option<&'static str> {
         "REFINE" => "Re-reading bad parts",
         "SPLIT" => "Writing tracks",
         "HASH" => "Checking",
+        "INFO" => "Checking every sector",
         "PROTECTION" => "Checking copy protection",
         _ => return None,
     })
@@ -415,6 +594,45 @@ error: data errors detected, unable to continue
         assert_eq!(errors_left(&refined), 12, "refine corrected the SCSI ones");
         assert_eq!(errors_left("*** DUMP (time check: 0s)\nmedia errors: \n  SCSI: 0 samples\n  C2: 0 samples\n  Q: 276\n"), 0);
         assert_eq!(errors_left(""), 0);
+    }
+
+    #[test]
+    fn each_counter_on_a_progress_line_by_name() {
+        let p = parse_progress("⠋ [ 88%] LBA:  99999/317787, errors: { SCSIs: 3, C2s: 12, Q: 0 }").unwrap();
+        assert_eq!(p.counts, [("SCSI".to_owned(), 3), ("C2".to_owned(), 12), ("Q".to_owned(), 0)]);
+        assert_eq!(errors_text(&p.counts), "SCSI 3, C2 12");
+        assert_eq!(progress_note(&p), "88%, sector 99999 of 317787, 15 errors");
+        let line = progress_line(1_234_567, 2_298_496, false, 0, 2);
+        let p = parse_progress(&line).unwrap();
+        assert_eq!((p.detail.as_str(), errors_text(&p.counts)), ("sector 1234567 of 2298496", "EDC 2".to_owned()));
+        assert_eq!(parse_progress(&progress_line(12_345, 317_787, true, 1, 0)).unwrap().counts[0], ("SCSI".to_owned(), 1));
+    }
+
+    #[test]
+    fn the_passes_in_a_log_and_what_each_found() {
+        let log = format!("redumper dump --drive=/dev/sr0\n{COLONY_WARS}*** REFINE (time check: 0s)\ncorrection statistics: \n  SCSI: 588 samples\n  C2: 0 samples\n  Q: 0 sectors\n*** INFO (time check: 0s)\n  sectors count: 269931\n  EDC errors: 18 (LBA: 72759)\n");
+        let p = passes(log.lines());
+        let kinds: Vec<PassKind> = p.iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, [PassKind::Read, PassKind::Tracks, PassKind::Reread, PassKind::Check]);
+        assert_eq!(errors_text(&p[0].errors), "SCSI 588, C2 12");
+        assert_eq!((p[1].skipped, p[1].error.as_deref()), (1, Some("data errors detected, unable to continue")));
+        assert_eq!(errors_text(&p[2].corrected), "SCSI 588");
+        assert_eq!(p[3].wrong.iter().find(|w| w.0 == "EDC"), Some(&("EDC", 18)));
+        assert_eq!((left_after(&p, 0), left_after(&p, 2)), (600, 12));
+        assert_eq!(p[0].at, 4, "the heading's line");
+        assert!(passes(["warning: no passes here"]).is_empty());
+    }
+
+    /// A PlayStation disc's log as Image keeps it (b744): each command's
+    /// heading closed by `*** END`, which isn't a pass.
+    #[test]
+    fn a_real_log_s_passes() {
+        let log = "*** DUMP (time check: 0s)\nwarning: unscrambled sector read\nmedia errors: \n  SCSI: 0 samples\n  C2: 0 samples\n  Q: 316\n*** END (time check: 376s)\n*** SPLIT (time check: 0s)\nwarning: shifting subchannel data (shift: +1)\n*** END (time check: 12s)\n*** INFO (time check: 0s)\nCD-ROM [KOUDELKA_1.bin]:\n  sectors count: 230571\n  MSF errors: 170 (LBA: 25378, 25997)\n  ECC errors: 15 (LBA: 112697)\n  EDC errors: 12 (LBA: 112697)\n  REDUMP.INFO errors: 15\n*** END (time check: 1s)\n";
+        let p = passes(log.lines());
+        assert_eq!(p.iter().map(|p| p.kind).collect::<Vec<_>>(), [PassKind::Read, PassKind::Tracks, PassKind::Check]);
+        assert_eq!(errors_text(&p[0].errors), "", "Q is the subchannel's");
+        assert_eq!((p[1].skipped, &p[1].error), (0, &None));
+        assert_eq!(p[2].wrong, [("invalid sync", 0), ("MSF", 170), ("ECC", 15), ("EDC", 12)]);
     }
 
     #[test]
