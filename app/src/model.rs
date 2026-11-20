@@ -536,10 +536,7 @@ impl Model {
     fn next_not_in(&self, i: usize) -> bool {
         let Some(v) = self.runs.get(&i) else { return false };
         let (Some(r), Some(before)) = (v.last(), v.len().checked_sub(2).map(|k| &v[k])) else { return false };
-        before.repeated
-            && waiting_for_disc(&r.snap)
-            && r.snap.question.is_none()
-            && r.snap.steps.values().all(|s| s.step == "drive" || matches!(s.state, StepState::Idle | StepState::Wait) || (s.state == StepState::Hold && s.items.is_empty()))
+        before.repeated && waiting_for_disc(&r.snap)
     }
 
     /// Puts a next disc that hasn't gone in back: stopped and gone, and
@@ -1380,7 +1377,13 @@ pub fn known_name(system: &str, known: &[String]) -> String {
 /// earlier disc, what it's doing now (*2 encoding*) rather than the rip.
 /// A run whose Drive hasn't a disc yet: nothing of this disc to show.
 fn waiting_for_disc(s: &Snapshot) -> bool {
-    !s.finished && !s.stopped && s.steps.values().any(|v| v.step == "drive" && matches!(v.state, StepState::Busy | StepState::Idle | StepState::Wait))
+    // Nothing else begun: a run through its own Next disc says its drive
+    // is empty too, but it has a disc's worth to show.
+    !s.finished
+        && !s.stopped
+        && s.question.is_none()
+        && s.steps.values().any(|v| v.step == "drive" && matches!(v.state, StepState::Busy | StepState::Idle | StepState::Wait))
+        && s.steps.values().all(|v| v.step == "drive" || matches!(v.state, StepState::Idle | StepState::Wait) || (v.state == StepState::Hold && v.items.is_empty()))
 }
 
 pub fn run_line(s: &Snapshot, earlier: bool) -> (String, StepState) {

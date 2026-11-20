@@ -572,6 +572,27 @@ impl drt_engine::Step for LatchedHold {
     }
 }
 
+/// The sim Folder, but the one filing into `folder` takes nothing in until
+/// `open` is set.
+struct LatchedFolder {
+    inner: std::sync::Arc<dyn drt_engine::Step>,
+    folder: &'static str,
+    open: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl drt_engine::Step for LatchedFolder {
+    fn info(&self) -> drt_engine::StepInfo {
+        self.inner.info()
+    }
+    async fn run(&self, inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+        while cx.text("folder") == self.folder && !self.open.load(std::sync::atomic::Ordering::SeqCst) {
+            cx.sleep(5).await?;
+        }
+        self.inner.run(inlet, outlet, cx).await
+    }
+}
+
 /// The sim steps with the Hold latched shut, and the latch.
 fn latched_hold(mut reg: drt_engine::Registry) -> (drt_engine::Registry, Arc<std::sync::atomic::AtomicBool>) {
     let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -664,6 +685,45 @@ fn no_next_disc_while_the_last_one_asks() {
     assert!(app(&h).m.held_back(0).is_none());
     disc.store(true, std::sync::atomic::Ordering::SeqCst);
     until(&mut h, "the second disc in", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].state == StepState::Ok));
+}
+
+#[test]
+fn an_earlier_disc_holding_holds_the_third_back_until_let_through_from_its_row() {
+    let e = env();
+    let (reg, open) = latched_hold(simulated(None));
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
+    app_mut(&mut h).m.repeat_limit = Some(2);
+    click(&mut h, "Start");
+    to_the_hold(&mut h);
+    until(&mut h, "the second disc", |a| a.m.runs.get(&0).is_some_and(|v| v.len() == 2));
+    // The second asks which release: while it does, the first's Hold fills.
+    until(&mut h, "the second's question", |a| a.m.newest(0).is_some_and(|r| r.snap.question.is_some()));
+    let second = app(&h).m.newest(0).unwrap().id;
+    open_latch(&open);
+    until(&mut h, "the first to hold", |a| a.m.runs[&0][0].snap.steps["hold"].detail == "All here");
+    to_the_hold(&mut h);
+    until(&mut h, "both to hold, the second through Next disc", |a| {
+        let v = &a.m.runs[&0];
+        v.len() == 2 && v.iter().all(|r| r.snap.steps["hold"].detail == "All here") && v[1].snap.steps["next"].state == StepState::Ok
+    });
+    h.run_steps(5);
+    assert_eq!(app(&h).m.newest(0).unwrap().id, second, "no third disc");
+    assert_eq!(app(&h).m.held_back(0).as_deref(), Some("Let the files on the last disc through first"));
+    // The second let through: the first still holds.
+    click_tile(&mut h, "Hold,");
+    h.get_by_label("Let 17 through").click();
+    h.run_steps(2);
+    until(&mut h, "the earlier disc to be what waits", |a| a.m.held_back(0).as_deref() == Some("Let the files on an earlier disc through first"));
+    assert_eq!(app(&h).m.newest(0).unwrap().id, second, "still no third disc");
+    h.get_by_label_contains("CDs, Let the files on an earlier disc through first");
+    // From its row in the list, its Hold, let through: the third starts.
+    h.get_by_label_contains("The White Stripes, Holding").click();
+    h.run_steps(2);
+    assert_ne!(app(&h).m.shown_run(0).unwrap().id, second);
+    click_tile(&mut h, "Hold,");
+    h.get_by_label("Let 17 through").click();
+    h.run_steps(2);
+    until(&mut h, "the third disc", |a| a.m.newest(0).is_some_and(|r| r.id > second));
 }
 
 #[test]
@@ -3704,7 +3764,11 @@ fn the_disc_before_stays_on_the_canvas_until_the_next_goes_in() {
     let disc = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut reg = simulated(None);
     reg.add(WaitingDrive { inner, runs: Default::default(), disc: disc.clone() });
-    let (reg, open) = latched_hold(reg);
+    let (mut reg, open) = latched_hold(reg);
+    // The FLAC Library files only when the test says, so the canvas can be
+    // seen to follow it.
+    let filing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    reg.add(LatchedFolder { inner: simulated(None).get("folder").unwrap().0, folder: "~/Music/FLAC", open: filing.clone() });
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     app_mut(&mut h).m.repeat_limit = Some(1);
     click(&mut h, "Start");
@@ -3726,7 +3790,10 @@ fn the_disc_before_stays_on_the_canvas_until_the_next_goes_in() {
     h.get_by_label("Let 17 through").click();
     h.run_steps(2);
     until(&mut h, "the second disc again", |a| a.m.runs[&0].len() == 2);
+    until(&mut h, "the drive to wait again", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].status == "Empty"));
     // Followed as it finishes, not frozen as it was when the tray opened.
+    assert_ne!(app(&h).m.snapshot(0).steps["lib1"].status, "17 filed");
+    open_latch(&filing);
     until(&mut h, "the first to file", |a| a.m.snapshot(0).steps["lib1"].status == "17 filed");
     assert!(app(&h).m.newest(0).is_some_and(|r| r.snap.steps["drive"].state != StepState::Ok), "still waiting for the disc");
     disc.store(true, std::sync::atomic::Ordering::SeqCst);
