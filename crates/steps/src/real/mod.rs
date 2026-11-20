@@ -1060,10 +1060,33 @@ impl Step for NextDisc {
         if self.real {
             let dev = all.iter().find_map(|i| i.context().get(Subject::Disc, "device").map(str::to_owned));
             match dev {
-                Some(d) if eject(&d) => cx.status("Ejected", "waiting for the next"),
                 Some(d) => {
-                    cx.state(StepState::Bad);
-                    cx.status("Didn't open", d);
+                    // A few tries: a drive just done reading can refuse at
+                    // first. If it never opens, taking the disc out by hand
+                    // does the same.
+                    let mut opened = Err(std::io::Error::other("not tried"));
+                    for attempt in 0..3 {
+                        if attempt > 0 {
+                            cx.sleep(2000).await?;
+                        }
+                        opened = eject(&d);
+                        if opened.is_ok() {
+                            break;
+                        }
+                    }
+                    match opened {
+                        Ok(()) => cx.status("Ejected", "waiting for the next"),
+                        Err(e) => {
+                            cx.log(format!("the tray didn't open after 3 tries: {e}"));
+                            while media::disc_in(&d) {
+                                cx.state(StepState::Needs);
+                                cx.status("Tray didn't open", "Take the disc out to go on");
+                                cx.sleep(1000).await?;
+                            }
+                            cx.state(StepState::Busy);
+                            cx.status("Disc out", "waiting for the next");
+                        }
+                    }
                 }
                 // Nothing was read: no disc to take out, and starting
                 // again would only find the same empty drive.
@@ -1082,22 +1105,27 @@ impl Step for NextDisc {
 /// `CDROMEJECT`, after unlocking the door. No external program: Bluefin
 /// has no `eject`.
 #[cfg(target_os = "linux")]
-pub fn eject(device: &str) -> bool {
+pub fn eject(device: &str) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
     const CDROM_LOCKDOOR: libc::c_ulong = 0x5329;
     const CDROMEJECT: libc::c_ulong = 0x5309;
-    let Ok(f) = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(device) else { return false };
+    let f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(device)?;
     // SAFETY: two argument-less ioctls (an int for the lock) on a descriptor we hold open.
-    unsafe {
+    let r = unsafe {
         libc::ioctl(f.as_raw_fd(), CDROM_LOCKDOOR, 0);
-        libc::ioctl(f.as_raw_fd(), CDROMEJECT) == 0
+        libc::ioctl(f.as_raw_fd(), CDROMEJECT)
+    };
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn eject(_device: &str) -> bool {
-    false
+pub fn eject(_device: &str) -> std::io::Result<()> {
+    Err(std::io::Error::other("can't open the tray here"))
 }
 
 // ---- folders ---------------------------------------------------------------------------------------
