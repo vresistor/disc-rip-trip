@@ -22,6 +22,8 @@ struct Env {
     plugged: Arc<Mutex<Vec<String>>>,
     /// Where each folder picker started.
     picked_from: Arc<Mutex<Vec<Option<PathBuf>>>>,
+    /// Each Notify test asked for: to this computer, the server, the topic.
+    tests_sent: Arc<Mutex<Vec<(bool, String, String)>>>,
 }
 
 fn env() -> Env {
@@ -31,6 +33,7 @@ fn env() -> Env {
         opened: Arc::default(),
         plugged: Arc::new(Mutex::new(vec![recipes::BLU_RAY.into(), recipes::DVD.into()])),
         picked_from: Arc::default(),
+        tests_sent: Arc::default(),
     }
 }
 
@@ -75,6 +78,20 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
         connected: {
             let plugged = e.plugged.clone();
             Arc::new(move || plugged.lock().unwrap().clone())
+        },
+        // Nothing goes out: a server named *down* can't be reached.
+        send_test: {
+            let sent = e.tests_sent.clone();
+            Arc::new(move |desktop, server, topic| {
+                let down = server.contains("down");
+                sent.lock().unwrap().push((desktop, server, topic));
+                Box::pin(async move {
+                    if down {
+                        anyhow::bail!("Sent to this computer, but ntfy: couldn't reach down.example")
+                    }
+                    Ok(vec!["this computer", "ntfy"])
+                })
+            })
         },
     };
     let mut model = Model::new(deps);
@@ -2178,7 +2195,7 @@ fn an_api_key_is_set_once_for_the_app_and_never_shown_whole() {
     // Saved for the app, shown by its last four.
     assert_eq!(app(&h).m.engine.settings.lock().unwrap().app("tmdb", "api_key").resolve(None), Some(Value::from("abcd1234efgh5678")));
     assert_eq!(input(&h, "API key").value().as_deref(), Some("••••5678"));
-    h.get_by_label_contains("app-wide");
+    assert!(h.query_all_by_label_contains("yours").count() > 0 && h.query_all_by_label_contains("app-wide").count() > 0);
     assert!(h.query_by_label_contains("abcd1234").is_none());
     let saved = std::fs::read_to_string(e.dir.path().join("config/settings.json")).unwrap();
     assert!(saved.contains("tmdb.api_key"));
@@ -3423,4 +3440,54 @@ fn a_setting_says_its_choices_in_words_and_its_help_under_its_name() {
         .flat_map(|info| info.params.iter().filter_map(|p| p.on_card).filter(|on| measure(on.label, SMALL, 400) > THIRD - M - 4.0).map(|on| format!("{}: {}", info.kind, on.label)).collect::<Vec<_>>())
         .collect();
     assert!(cut.is_empty(), "cut on the card: {cut:?}");
+}
+
+/// Steps the window until something labelled `label` shows.
+fn until_label(h: &mut Harness<Window>, label: &str) {
+    let start = Instant::now();
+    while h.query_by_label(label).is_none() {
+        assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {label}");
+        h.step();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    h.run_steps(2);
+}
+
+/// Notify makes up a topic for you, app-wide, and sends a test through
+/// each way that's on.
+#[test]
+fn notify_makes_up_a_topic_and_sends_a_test() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    let i = app(&h).m.recipes.iter().position(|r| r.name == "Archive everything").unwrap();
+    app_mut(&mut h).select(i);
+    h.run_steps(3);
+    open_id(&mut h, "a_tell");
+    if h.query_all_by_role(Role::Tab).count() > 0 {
+        tab(&mut h, "Settings");
+    }
+    click(&mut h, "Make one up");
+    let topic = app(&h).m.engine.settings.lock().unwrap().app("tell", "ntfy_topic").resolve(None).and_then(|v| v.as_str().map(str::to_owned)).unwrap();
+    let parts: Vec<&str> = topic.split('-').collect();
+    assert!(parts.len() == 4 && parts[0] == "rip" && parts[3].len() == 4, "{topic}");
+    assert!(text_boxes(&h).contains(&topic), "the box shows it: {:?}", text_boxes(&h));
+    let saved: Settings = serde_json::from_str(&std::fs::read_to_string(e.dir.path().join("config/settings.json")).unwrap()).unwrap();
+    assert_eq!(saved.app("tell", "ntfy_topic").resolve(None), Some(Value::from(topic.clone())), "saved for every recipe");
+    assert!(h.query_all_by_label_contains("yours").count() > 0 && h.query_all_by_label_contains("app-wide").count() > 0);
+    // Another one, different.
+    click(&mut h, "Make one up");
+    let again = app(&h).m.engine.settings.lock().unwrap().app("tell", "ntfy_topic").resolve(None).unwrap();
+    assert_ne!(again, Value::from(topic.clone()));
+
+    click(&mut h, "Send a test");
+    let topic = again.as_str().unwrap().to_owned();
+    until_label(&mut h, &format!("Sent to this computer and to ntfy topic {topic}"));
+    assert_eq!(*e.tests_sent.lock().unwrap(), vec![(true, "https://ntfy.sh".to_owned(), topic.clone())]);
+    shot(&mut h, "step-notify");
+    // A server that can't be reached says so.
+    app_mut(&mut h).m.set_param(i, "a_tell", "ntfy_server", Value::from("https://down.example")).unwrap();
+    h.run_steps(2);
+    click(&mut h, "Send a test");
+    until_label(&mut h, "Sent to this computer, but ntfy: couldn't reach down.example");
+    shot(&mut h, "step-notify-failed");
 }

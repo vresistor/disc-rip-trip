@@ -121,6 +121,9 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
                 Some(Tab::Settings) => {
                     if let Some(info) = app.m.info(app.sel, id) {
                         settings(app, ui, p, id, &info, focus.as_deref());
+                        if info.kind == "tell" {
+                            send_test(app, ui, p, id, &info);
+                        }
                     }
                 }
                 Some(Tab::Log) => {
@@ -1309,6 +1312,7 @@ fn setting(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, spec: &ParamSpec, focu
                         let extra = match kind {
                             ParamKind::Folder => 36.0,
                             _ if spec.key == "offset" && !unset => 90.0,
+                            _ if spec.suggest.is_some() => ui.painter().layout_no_wrap(SUGGEST.into(), font(13.0, 500), p.muted).size().x + 16.0 + 6.0,
                             _ => 0.0,
                         };
                         let buf = app.buffers.entry(key.clone()).or_insert_with(|| shown.clone().unwrap_or_default());
@@ -1352,6 +1356,13 @@ fn setting(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, spec: &ParamSpec, focu
                         } else if !r.has_focus() && !app.invalid.contains_key(&key) {
                             app.buffers.remove(&key);
                         }
+                        // A value made up for you (an ntfy topic), saved at once.
+                        if let Some(make) = spec.suggest {
+                            if Btn::new("", SUGGEST).look(Look::Quiet).font(font(13.0, 500)).pad(vec2(8.0, 6.0)).show(ui, p).clicked() {
+                                commit = Some(make().into());
+                                app.invalid.remove(&key);
+                            }
+                        }
                         if *kind == ParamKind::Folder && Btn::new("folder-link", "").name("Choose folder").pad(vec2(7.0, 6.0)).show(ui, p).clicked() {
                             let hook = app.m.pick_folder.clone();
                             let tx = app.picked.0.clone();
@@ -1393,6 +1404,55 @@ fn setting(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, spec: &ParamSpec, focu
             app.refuse(ui.ctx(), e.to_string());
         }
         app.buffers.remove(&key);
+    }
+}
+
+/// The button beside a text setting that can make up its value.
+const SUGGEST: &str = "Make one up";
+
+/// Notify's *Send a test*: for which recipe and step, the topic it was
+/// sent to, and how it went (`None` while it's sending).
+pub struct TestSend {
+    pub at: (usize, String),
+    pub topic: String,
+    pub result: Option<Result<Vec<&'static str>, String>>,
+}
+
+/// *Send a test*, under Notify's settings: a test through each way that's
+/// on, sent on the app's runtime, and how it went under the button. Not
+/// while the settings are locked.
+fn send_test(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, info: &StepInfo) {
+    let i = app.sel;
+    let get = |k: &str| info.params.iter().find(|s| s.key == k).and_then(|s| app.m.param(i, id, s).resolve(s.default.as_ref()));
+    let desktop = get("desktop").and_then(|v| v.as_bool()).unwrap_or(true);
+    let server = get("ntfy_server").map(|v| value_text(&v)).unwrap_or_default();
+    let topic = get("ntfy_topic").map(|v| value_text(&v).trim().to_owned()).unwrap_or_default();
+    let at = (i, id.to_owned());
+    let mine = app.test_send.lock().unwrap().as_ref().filter(|t| t.at == at).map(|t| (t.topic.clone(), t.result.clone()));
+    let sending = matches!(mine, Some((_, None)));
+    ui.add_space(6.0);
+    let open = !sending && !read_only(app, i, Scope::Recipe);
+    if Btn::new("", if sending { "Sending…" } else { "Send a test" }).font(font(13.0, 500)).pad(vec2(10.0, 5.0)).enabled(open).show(ui, p).clicked() {
+        *app.test_send.lock().unwrap() = Some(TestSend { at: at.clone(), topic: topic.clone(), result: None });
+        let sent = (app.m.send_test)(desktop, server, topic);
+        let (slot, ctx) = (app.test_send.clone(), ui.ctx().clone());
+        app.m.rt.spawn(async move {
+            let r = sent.await.map_err(|e| e.to_string());
+            if let Some(t) = slot.lock().unwrap().as_mut().filter(|t| t.at == at) {
+                t.result = Some(r);
+            }
+            ctx.request_repaint();
+        });
+    }
+    // The topic is said here, to you, and nowhere else.
+    if let Some((topic, Some(r))) = mine {
+        let (text, col) = match r {
+            Ok(to) if to.is_empty() => ("Nowhere to send it: turn on On this computer, or set a topic".to_owned(), p.muted),
+            Ok(to) => (format!("Sent to {}", to.iter().map(|w| if *w == "ntfy" { format!("ntfy topic {topic}") } else { (*w).to_owned() }).collect::<Vec<_>>().join(" and to ")), p.ok),
+            Err(e) => (e, p.bad),
+        };
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(text).font(font(12.5, 400)).color(col)).wrap());
     }
 }
 

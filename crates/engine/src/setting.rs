@@ -118,6 +118,9 @@ pub struct ParamSpec {
     /// values: empty to show each value as it is. Only the words change;
     /// the value stored and compared stays the one in the kind.
     pub labels: &'static [&'static str],
+    /// Makes up a value for a text setting, offered as a *Make one up*
+    /// button beside its box (an ntfy topic).
+    pub suggest: Option<fn() -> String>,
 }
 
 /// The longest a setting's help may be, in characters.
@@ -141,12 +144,18 @@ pub struct OnCard {
 
 impl ParamSpec {
     pub fn new(key: &'static str, label: &'static str, kind: ParamKind) -> Self {
-        ParamSpec { key, label, kind, default: None, scope: Scope::Recipe, findable: false, section: "", when: None, only_with: &[], on_card: None, help: None, labels: &[] }
+        ParamSpec { key, label, kind, default: None, scope: Scope::Recipe, findable: false, section: "", when: None, only_with: &[], on_card: None, help: None, labels: &[], suggest: None }
     }
 
     /// What it changes for you, in one plain sentence.
     pub fn help(mut self, h: &'static str) -> Self {
         self.help = Some(h);
+        self
+    }
+
+    /// Offers a made-up value beside the box: *Make one up*.
+    pub fn suggest(mut self, f: fn() -> String) -> Self {
+        self.suggest = Some(f);
         self
     }
 

@@ -56,6 +56,7 @@ fn main() -> eframe::Result<()> {
             .pick_folder()
         }),
         // Simulated drives are always there; real ones as sysfs says.
+        send_test: Arc::new(|desktop, server, topic| Box::pin(async move { drt_steps::real::tell::send_test(desktop, &server, &topic).await })),
         connected: if simulate { Arc::new(|| vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()]) } else { Arc::new(|| drt_steps::real::drives().into_iter().map(|(name, _)| name).collect()) },
     };
     let mut model = Model::new(deps);

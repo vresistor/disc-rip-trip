@@ -139,6 +139,8 @@ pub struct App {
     pub canvas: Rect,
     /// Where the sidebar was drawn last frame.
     pub(crate) side_rect: Rect,
+    /// Notify's last *Send a test*, filled in off the UI thread.
+    pub(crate) test_send: std::sync::Arc<std::sync::Mutex<Option<crate::tray::TestSend>>>,
 }
 
 impl App {
@@ -199,6 +201,7 @@ impl App {
             cover_rx: mpsc::channel(),
             canvas: Rect::NOTHING,
             side_rect: Rect::NOTHING,
+            test_send: Default::default(),
         }
     }
 

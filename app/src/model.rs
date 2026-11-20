@@ -17,6 +17,9 @@ type PaceKey = (usize, u64, String);
 pub type OpenFolder = Arc<dyn Fn(&Path) -> std::result::Result<(), String> + Send + Sync>;
 /// Asks for a folder, starting at the one given if any.
 pub type PickFolder = Arc<dyn Fn(Option<PathBuf>) -> Option<PathBuf> + Send + Sync>;
+/// Sends Notify's test: to this computer or not, the ntfy server, the
+/// topic. Gives where it went, as [`drt_steps::real::tell::send_test`].
+pub type SendTest = Arc<dyn Fn(bool, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<&'static str>>> + Send>> + Send + Sync>;
 /// The optical drives connected just now, by name (cheap: sysfs).
 pub type ListDrives = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
@@ -32,6 +35,7 @@ pub struct Deps {
     pub pick_folder: PickFolder,
     /// Which drives are connected; asked every couple of seconds.
     pub connected: ListDrives,
+    pub send_test: SendTest,
 }
 
 /// One disc going through a recipe.
@@ -114,6 +118,7 @@ pub struct Model {
     pub rt: tokio::runtime::Handle,
     pub open_folder: OpenFolder,
     pub pick_folder: PickFolder,
+    pub send_test: SendTest,
     /// The last save or folder-open that failed, until one works.
     failed: std::sync::Mutex<Option<String>>,
     /// Set once the window exists, so runs can wake it.
@@ -209,6 +214,7 @@ impl Model {
             open_folder: d.open_folder,
             failed: Default::default(),
             pick_folder: d.pick_folder,
+            send_test: d.send_test,
             ctx: None,
             saved: Default::default(),
             pace: Default::default(),

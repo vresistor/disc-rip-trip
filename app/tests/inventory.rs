@@ -50,6 +50,7 @@ fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, plugged: Vec<
         rt: e.rt.handle().clone(),
         open_folder: Arc::new(|_| Ok(())),
         pick_folder: Arc::new(|_| None),
+        send_test: Arc::new(|_, _, _| Box::pin(async { Ok(vec![]) })),
         connected: Arc::new(move || plugged.clone()),
     };
     let mut model = Model::new(deps);

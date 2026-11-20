@@ -49,7 +49,8 @@ pub fn info() -> StepInfo {
             ParamSpec::new("ntfy_topic", "Phone alerts (ntfy topic)", ParamKind::Text)
                 .default("")
                 .app_wide()
-                .help("The topic you subscribed to in the ntfy app. Anyone who knows its name sees the alerts."),
+                .suggest(made_up_topic)
+                .help("Anyone who knows or guesses this topic can read your alerts: a disc's name and how it went."),
         )
         .param(ParamSpec::new("ntfy_server", "ntfy server", ParamKind::Text).default("https://ntfy.sh").app_wide().section("Advanced"))
         .summary(|g| {
@@ -62,6 +63,71 @@ pub fn info() -> StepInfo {
                 (false, true) => "nowhere".into(),
             }
         })
+}
+
+const ADJECTIVES: [&str; 64] = [
+    "amber", "azure", "bold", "brave", "breezy", "bright", "brisk", "bubbly", "calm", "cheery", "clever", "cool", "crisp", "curly", "dapper", "dizzy", "eager", "early", "fancy", "fluffy", "fond",
+    "frosty", "fuzzy", "gentle", "giddy", "glad", "golden", "grand", "happy", "hazy", "humble", "jolly", "jumpy", "keen", "kind", "lively", "lucky", "mellow", "merry", "mighty", "misty", "nimble",
+    "noble", "perky", "plucky", "polite", "proud", "quick", "quiet", "rosy", "rusty", "shiny", "silver", "sleepy", "snowy", "sunny", "swift", "tidy", "tiny", "velvet", "warm", "witty", "zany",
+    "zesty",
+];
+const NOUNS: [&str; 64] = [
+    "otter", "badger", "beaver", "bison", "crane", "cricket", "dolphin", "eagle", "falcon", "ferret", "finch", "fox", "gecko", "heron", "koala", "lemur", "lynx", "magpie", "marten", "moose", "newt",
+    "owl", "panda", "parrot", "pelican", "penguin", "puffin", "rabbit", "raven", "robin", "salmon", "seal", "sparrow", "squirrel", "swan", "tapir", "tiger", "toucan", "turtle", "walrus", "wombat",
+    "wren", "yak", "zebra", "acorn", "anchor", "banjo", "biscuit", "cactus", "comet", "cookie", "kettle", "lantern", "maple", "meadow", "muffin", "nutmeg", "pebble", "pickle", "pretzel", "rocket",
+    "teapot", "tulip", "waffle",
+];
+
+/// A topic that's easy to type and unlikely to be taken already:
+/// `rip-amber-otter-7342`. Not a secret: two words from short lists and
+/// four digits are some 37 million topics, few enough to guess at.
+pub fn made_up_topic() -> String {
+    // The standard library's per-process random keys, from the OS: no
+    // crate for something that needn't be cryptographic.
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let r = h.finish();
+    format!("rip-{}-{}-{}", ADJECTIVES[(r & 63) as usize], NOUNS[(r >> 6 & 63) as usize], 1000 + (r >> 12) % 9000)
+}
+
+pub const TEST_TITLE: &str = "Disc Rip Trip test";
+pub const TEST_BODY: &str = "If you can read this, alerts work.";
+
+/// Sends a test through each way that's on: this computer if `desktop`,
+/// and ntfy if there's a topic. Gives where it went (*this computer*,
+/// *ntfy*); nowhere if neither is on. An error says what failed, after
+/// what was sent, and never has the topic in it.
+pub async fn send_test(desktop: bool, server: &str, topic: &str) -> Result<Vec<&'static str>> {
+    let (mut sent, mut failed) = (vec![], vec![]);
+    if desktop {
+        match send(TEST_TITLE, TEST_BODY).await {
+            Ok(_) => sent.push("this computer"),
+            Err(e) => failed.push(format!("this computer: {e}")),
+        }
+    }
+    if !topic.trim().is_empty() {
+        match send_ntfy(server, topic, TEST_TITLE, TEST_BODY, false).await {
+            Ok(()) => sent.push("ntfy"),
+            Err(e) => failed.push(format!("ntfy: {}", ntfy_trouble(server, &e))),
+        }
+    }
+    match (failed.is_empty(), sent.is_empty()) {
+        (true, _) => Ok(sent),
+        (false, true) => bail!("{}", failed.join("; ")),
+        (false, false) => bail!("Sent to {}, but {}", sent.join(" and "), failed.join("; ")),
+    }
+}
+
+/// Why ntfy couldn't be sent to, in a few words: *couldn't reach ntfy.sh*.
+/// The server's host only, never its whole address.
+fn ntfy_trouble(server: &str, e: &anyhow::Error) -> String {
+    let host = reqwest::Url::parse(server.trim()).ok().and_then(|u| u.host_str().map(str::to_owned));
+    match (e.downcast_ref::<reqwest::Error>(), host) {
+        (_, None) => "the server isn't a web address".into(),
+        (Some(r), Some(h)) if r.is_connect() || r.is_timeout() => format!("couldn't reach {h}"),
+        _ => format!("{e:#}"),
+    }
 }
 
 /// The ntfy request: where to POST, and its headers.
@@ -126,6 +192,9 @@ pub struct Outcome {
     /// Something on the way waited on you: a question, or a track or dump
     /// held for *Retry*. From the run, not the items.
     pub needed_you: bool,
+    /// The title is the disc's volume label: typed by whoever burned it,
+    /// so it may be personal. Said on this computer only, never to ntfy.
+    pub from_label: bool,
 }
 
 impl Outcome {
@@ -164,10 +233,23 @@ impl Outcome {
             (false, false) => format!("{artist} — {album}"),
             (true, false) => album,
             _ if !c.get(Subject::Disc, "name").unwrap_or("").is_empty() => get("name"),
-            _ if !label.is_empty() => label,
+            _ if !label.is_empty() => {
+                o.from_label = true;
+                label
+            }
             _ => "A disc".into(),
         };
         o
+    }
+
+    /// The title as sent to ntfy, where anyone who has the topic reads
+    /// it: a catalogued name, never a volume label.
+    pub fn ntfy_title(&self) -> &str {
+        if self.from_label {
+            "A disc"
+        } else {
+            &self.title
+        }
     }
 
     /// Something you'd want to know about: the run waited on you, or it
@@ -335,7 +417,7 @@ impl Step for Tell {
         }
         if !topic.trim().is_empty() {
             let _net = cx.lane(drt_engine::LaneKind::Network("ntfy".into())).await;
-            if let Err(e) = send_ntfy(&cx.text("ntfy_server"), &topic, &o.title, &body, o.unresolved()).await {
+            if let Err(e) = send_ntfy(&cx.text("ntfy_server"), &topic, o.ntfy_title(), &body, o.unresolved()).await {
                 failed.push(format!("ntfy: {e}"));
             }
         }
@@ -358,6 +440,34 @@ mod tests {
         let e = send_ntfy("http://127.0.0.1:1", "private-topic-name", "t", "b", false).await.unwrap_err();
         let said = format!("{e:#} {e:?}");
         assert!(!said.contains("private-topic"), "{said}");
+        // Nor in a test's, which says plainly what failed.
+        let e = send_test(false, "http://127.0.0.1:1", "private-topic-name").await.unwrap_err();
+        let said = format!("{e:#} {e:?}");
+        assert!(!said.contains("private-topic"), "{said}");
+        assert_eq!(e.to_string(), "ntfy: couldn't reach 127.0.0.1");
+        let e = send_test(false, "not a server", "private-topic-name").await.unwrap_err();
+        assert_eq!(e.to_string(), "ntfy: the server isn't a web address");
+        // Nothing on: sent nowhere, and no error.
+        assert!(send_test(false, "https://ntfy.sh", " ").await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_made_up_topic_is_two_words_and_four_digits_and_new_each_time() {
+        for list in [&ADJECTIVES, &NOUNS] {
+            let set: std::collections::BTreeSet<_> = list.iter().collect();
+            assert_eq!(set.len(), 64, "no word twice");
+            assert!(list.iter().all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase())), "{list:?}");
+        }
+        let topics: std::collections::BTreeSet<String> = (0..20).map(|_| made_up_topic()).collect();
+        assert!(topics.len() >= 19, "{topics:?}");
+        for t in &topics {
+            let parts: Vec<&str> = t.split('-').collect();
+            assert_eq!(parts.len(), 4, "{t}");
+            assert_eq!(parts[0], "rip");
+            assert!(ADJECTIVES.contains(&parts[1]) && NOUNS.contains(&parts[2]), "{t}");
+            assert!(parts[3].len() == 4 && parts[3].chars().all(|c| c.is_ascii_digit()), "{t}");
+        }
+        assert!(info().params.iter().find(|p| p.key == "ntfy_topic").unwrap().suggest.is_some());
     }
 
     use super::*;
@@ -428,6 +538,20 @@ mod tests {
         dump.context = std::sync::Arc::new(c);
         let o = Outcome::of(&[dump]);
         assert_eq!((o.title.as_str(), o.body().as_str()), ("Encarta 98 Encyclopedia (USA) (Disc 1)", "1 file filed"));
+        assert_eq!(o.ntfy_title(), o.title, "a catalogued name goes to ntfy");
+    }
+
+    /// A disc no list knows is titled by its volume label, which whoever
+    /// burned it typed: that stays on this computer.
+    #[test]
+    fn a_volume_label_never_goes_to_ntfy() {
+        let mut c = Context::default();
+        c.add(Subject::Disc, "label", "SMITH_TAXES_2019", "Data disc");
+        let mut dump = Item::new("dump", ItemKind::ImageFile, "x", None, None);
+        dump.context = std::sync::Arc::new(c);
+        let o = Outcome::of(&[dump]);
+        assert_eq!((o.title.as_str(), o.ntfy_title()), ("SMITH_TAXES_2019", "A disc"));
+        assert!(!o.body().contains("SMITH"));
     }
 
     /// "Only when something needs you" is about the run, not the kind of
