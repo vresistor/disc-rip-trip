@@ -177,12 +177,13 @@ little: paranoia only calls a read *cache* when it comes back in under
 6 ms, and `-A` timed this drive's cached reads at 15.67 ms a sector. A
 hit here would never be reported.
 
-**So, today.** With this drive, *two reads agree* is sound for every
-track of 2.5 s or more, which is every real track: the Red Book's
-shortest is 4 s (300 sectors). The exposed case is the hidden track
-before track 1, which can be any length, and a drive with a bigger
-cache: on a drive that holds, say, 10 s of audio, a short track's
-re-read could be the drive's memory. Only this drive has been measured.
+**Before the clearing below.** With this drive, *two reads agree* was
+sound for every track of 2.5 s or more, which is every real track: the
+Red Book's shortest is 4 s (300 sectors). The exposed case was the
+hidden track before track 1, which can be any length, and a drive with
+a bigger cache: on a drive that holds, say, 10 s of audio, a short
+track's re-read could be the drive's memory. Only this drive has been
+measured.
 
 **What others do.** whipper reads every track twice, each in its own
 `cd-paranoia` process at full paranoia, and compares CRCs
@@ -199,31 +200,64 @@ slower ([feature detection](https://exactaudiocopy.de/automatic-feature-detectio
 [extraction](https://exactaudiocopy.de/extraction-technology/)). That
 is the vendor's description, not code we could read.
 
-**Recommended fix** (not built yet):
+**What Rip does now** (since 20 November 2026). Before every read of a
+track after its first, which is every read that is compared (the
+careful read after a fast one, *Read again*, *Read again slowly*, *Best
+of 3 reads*), Rip reads 2,400 sectors (twice paranoia's model, 5.6 MB,
+32 s of audio) from elsewhere on the disc and throws them away, so
+whatever the drive held of the track is gone and the re-read has to come
+off the disc. This is EAC's approach, and it doesn't depend on knowing
+the cache's size. The code is `flush.rs`.
 
-1. **Read somewhere else first.** Before every re-read that will be
-   compared, read 2400 sectors (twice paranoia's model, 5.6 MB) from a
-   part of the disc at least that far from the track, and throw them
-   away, over SG_IO as the TOC read already does; about two seconds at
-   this drive's speed. It does no harm on a drive that doesn't cache,
-   and it doesn't depend on knowing the cache's size. This is EAC's
-   approach.
-   This is the fix: it works whether or not the cache can be detected.
-2. **Read paranoia's counts as well.** Parse `CACHEERR` from each read's
-   output and record it with the read; a re-read with any doesn't count
-   towards *two reads agree*, and the row says why. It's a signal on
-   drives whose cache answers fast. On this one it can't fire (above).
-3. **A test, still to be designed properly.** Timing can't tell on this
-   drive, so it has to be the samples: on a scratched disc where
-   careful reads of one short stretch come back different each time,
-   read the stretch twice in a row, then twice with (1) between. If only
-   the reads without (1) agree, the drive is answering from memory. In
-   the unit tests, a stand-in cyanrip that prints `CACHEERR: 3` must
-   leave the track unsettled, and Rip must read elsewhere before every
-   re-read it compares.
+- **How:** MMC READ CD (0xBE) through SG_IO, as Audio CD's look at the
+  disc already does, 26 sectors at a time, any sector type, user data
+  only. Read-only.
+- **Where:** within the disc's audio, as the TOC gives it, never past the
+  lead-out. 2,400 sectors after the track if there's room, else as far
+  before it. Failing both (a disc of one track, or a short one), the
+  farthest from both ends of the track of those two and the track's own
+  middle: far from where the re-read starts, and from where the last read
+  stopped and the drive may hold what it read ahead. It must be at least
+  600 sectors (8 s) from both, over three times this drive's cache and
+  read-ahead; a disc too short for that (under about a minute) can't be
+  cleared.
+- **The log says it**: *track 6: cleared the drive's cache: read 2,400
+  sectors from tracks 7 to 8*. Each read in the rip log says *drive's
+  cache cleared* or *not cleared*.
+- **If it fails** (the drive refuses the read, or the disc is too short),
+  the log says why and the re-read still happens, but it can't settle the
+  track by agreeing: two reads count only when the later one came after
+  a cleared cache. A track whose reads agree only that way waits for you,
+  *Unverified · The drive's cache couldn't be cleared*, as a track with
+  no proof does. *Best of 3 reads* votes only with reads that surely
+  came off the disc (the first read, and re-reads after a cleared
+  cache). An AccurateRip match settles a track either way: it's proof
+  whatever the drive did.
+- **Tested** with the cyanrip stand-in and a stand-in for the clearing
+  (`crates/steps/tests/re_reads.rs`): the order of reads and
+  clearing, a failed clearing leaving the track to you, and the sectors
+  chosen for first, middle and last tracks, a hidden track, a disc of one
+  track and short discs (`flush.rs`).
+- **On this drive** (20 November 2026, a 32-track disc, from inside the
+  flatpak with `--device=all`): clearing before track 6 read 2,400
+  sectors from tracks 7 to 8 in about 3 s (6 s once, spinning up). Track 6 (37 s) read with
+  Rip's arguments at `-P 0`, then cleared, then at `-P 3`: the same EAC
+  CRC (`C3D87D7D`) and an AccurateRip v2 match at confidence 192 both
+  times. That shows the clearing works and does no harm; it can't show
+  this drive was answering from memory before, since it never was
+  caught doing so.
 
-Until (1) is in, a hidden track of under 3 s settled by two reads that
-agree should be taken with that in mind.
+Still not done:
+
+1. **Reading paranoia's counts.** Parse `CACHEERR` from each read's
+   output and record it with the read; a re-read with any wouldn't count
+   towards *two reads agree*. It's a signal on drives whose cache answers
+   fast. On this one it can't fire (above).
+2. **A test on a real scratched disc.** Timing can't tell on this drive,
+   so it has to be the samples: on a scratched disc where careful reads
+   of one short stretch come back different each time, read the stretch
+   twice in a row, then twice with clearing between. If only the reads
+   without clearing agree, the drive is answering from memory.
 
 ## Encoding
 

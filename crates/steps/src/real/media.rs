@@ -213,13 +213,11 @@ pub fn sysfs_bytes(device: &str) -> u64 {
     std::fs::read_to_string(format!("/sys/class/block/{name}/size")).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0) * 512
 }
 
-/// The drive's current profile, from MMC GET CONFIGURATION through SG_IO:
-/// what the drive itself says the disc is, rather than a guess from its size.
+/// One MMC command through SG_IO that reads `data` from the drive. Fails
+/// unless the drive and every layer below it say it went through; gives how
+/// many bytes came back.
 #[cfg(target_os = "linux")]
-pub fn current_profile(device: &str) -> Option<u16> {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
-
+pub(crate) fn sg_read(fd: std::os::unix::io::RawFd, cdb: &[u8], data: &mut [u8], timeout_ms: u32) -> std::io::Result<usize> {
     #[repr(C)]
     struct SgIoHdr {
         interface_id: libc::c_int,
@@ -248,12 +246,7 @@ pub fn current_profile(device: &str) -> Option<u16> {
     const SG_IO: libc::c_ulong = 0x2285;
     const SG_DXFER_FROM_DEV: libc::c_int = -3;
 
-    let f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(device).ok()?;
-    let mut data = [0u8; 16];
     let mut sense = [0u8; 32];
-    // GET CONFIGURATION, RT=2 (one feature), from feature 0: the header
-    // alone carries the current profile, in bytes 6 and 7.
-    let cdb: [u8; 10] = [0x46, 0x02, 0, 0, 0, 0, 0, 0, data.len() as u8, 0];
     let mut h = SgIoHdr {
         interface_id: b'S' as libc::c_int,
         dxfer_direction: SG_DXFER_FROM_DEV,
@@ -264,7 +257,7 @@ pub fn current_profile(device: &str) -> Option<u16> {
         dxferp: data.as_mut_ptr().cast(),
         cmdp: cdb.as_ptr(),
         sbp: sense.as_mut_ptr(),
-        timeout: 5000,
+        timeout: timeout_ms,
         flags: 0,
         pack_id: 0,
         usr_ptr: std::ptr::null_mut(),
@@ -281,8 +274,31 @@ pub fn current_profile(device: &str) -> Option<u16> {
     // SAFETY: `SgIoHdr` is laid out as the kernel's `sg_io_hdr_t`; the
     // command, data and sense pointers are to buffers that outlive the
     // call, and their lengths are the ones given in the header.
-    let r = unsafe { libc::ioctl(f.as_raw_fd(), SG_IO, &mut h as *mut SgIoHdr) };
-    (r == 0 && h.status == 0 && h.host_status == 0 && h.driver_status == 0).then(|| u16::from_be_bytes([data[6], data[7]])).filter(|p| *p != 0)
+    let r = unsafe { libc::ioctl(fd, SG_IO, &mut h as *mut SgIoHdr) };
+    if r != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if h.status != 0 || h.host_status != 0 || h.driver_status != 0 {
+        // Sense key, ASC and ASCQ, when the drive gave fixed-format sense.
+        let why = if h.sb_len_wr >= 14 { format!(", sense {:X}/{:02X}/{:02X}", sense[2] & 0x0F, sense[12], sense[13]) } else { String::new() };
+        return Err(std::io::Error::other(format!("the drive refused the command (status {:#x}, host {:#x}, driver {:#x}{why})", h.status, h.host_status, h.driver_status)));
+    }
+    Ok(data.len().saturating_sub(h.resid.max(0) as usize))
+}
+
+/// The drive's current profile, from MMC GET CONFIGURATION through SG_IO:
+/// what the drive itself says the disc is, rather than a guess from its size.
+#[cfg(target_os = "linux")]
+pub fn current_profile(device: &str) -> Option<u16> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+
+    let f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(device).ok()?;
+    let mut data = [0u8; 16];
+    // GET CONFIGURATION, RT=2 (one feature), from feature 0: the header
+    // alone carries the current profile, in bytes 6 and 7.
+    let cdb: [u8; 10] = [0x46, 0x02, 0, 0, 0, 0, 0, 0, data.len() as u8, 0];
+    sg_read(f.as_raw_fd(), &cdb, &mut data, 5000).ok().map(|_| u16::from_be_bytes([data[6], data[7]])).filter(|p| *p != 0)
 }
 
 #[cfg(not(target_os = "linux"))]

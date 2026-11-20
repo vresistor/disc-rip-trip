@@ -15,8 +15,9 @@ use drt_engine::{Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outl
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Track 1 starts 10 sectors late: 5880 sample frames of pregap.
-const TOC: &str = "1 2 400 160 260";
+/// Track 1 starts 10 sectors late: 5880 sample frames of pregap. The disc
+/// runs on long enough to clear the drive's cache from well away.
+const TOC: &str = "1 2 20000 160 260";
 
 struct Disc;
 
@@ -108,6 +109,12 @@ async fn run(base: &Path, hidden: &str) -> (Snapshot, Vec<Item>, String) {
     let mut reg = drt_steps::real();
     reg.add(Disc);
     reg.add(probe.clone());
+    // No drive: clearing its cache is only noted where cyanrip's calls are.
+    let flushes = log.clone();
+    reg.add(drt_steps::real::Rip::with_flush(Arc::new(move |_, lba, count| {
+        use std::io::Write;
+        writeln!(std::fs::OpenOptions::new().append(true).create(true).open(&flushes)?, "flush {lba} {count}")
+    })));
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
     e.work_root = base.join("runs");
@@ -164,7 +171,7 @@ async fn a_hidden_track_is_track_0_when_it_holds_audio_and_only_then() {
     assert_eq!(got[0].label, "Hidden track");
     assert_eq!(got[1].context().get(Subject::Part(1), "preemphasis"), Some("1"), "the flag is kept");
     assert_eq!(got[2].context().get(Subject::Part(2), "preemphasis"), None);
-    let lines: Vec<&str> = calls.lines().collect();
+    let lines: Vec<&str> = calls.lines().filter(|l| !l.starts_with("flush")).collect();
     assert_eq!(lines.iter().filter(|l| l.contains("-p 1=track")).count(), 2, "{calls}");
     assert!(lines.iter().all(|l| l.contains("-p 1=track") == l.contains("-l 0")), "only track 0 splits the pregap off: {calls}");
     std::fs::remove_dir_all(&b).unwrap();
@@ -178,6 +185,7 @@ async fn a_hidden_track_is_track_0_when_it_holds_audio_and_only_then() {
     assert!(s.steps["rip"].items.iter().all(|i| i.id != "track-0"), "{:?}", s.steps["rip"].items);
     assert_eq!(s.steps["rip"].items.len(), 2);
     assert_eq!(calls.lines().filter(|l| l.contains("-l 0")).count(), 1, "read once to look: {calls}");
+    assert!(!calls.contains("flush"), "a first read needs no clearing: {calls}");
     std::fs::remove_dir_all(&b).unwrap();
 
     // A read shorter than the TOC says: never filed; it waits for you.

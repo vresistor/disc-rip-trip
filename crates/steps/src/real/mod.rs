@@ -9,6 +9,7 @@ pub mod data;
 pub mod discogs;
 pub mod encode;
 pub mod fixtags;
+pub mod flush;
 pub mod game;
 pub mod gnudb;
 pub mod hash;
@@ -46,7 +47,7 @@ pub fn register(r: &mut Registry) {
     r.add(CoverArt);
     r.add(lyrics::Lyric);
     r.add(lyrics::LyricsFile);
-    r.add(Rip);
+    r.add(Rip::with_flush(std::sync::Arc::new(flush::read_sectors)));
     r.add(cue::CueSheet);
     r.add(replaygain::ReplayGain);
     r.add(tell::Tell);
@@ -438,7 +439,21 @@ impl Step for CoverArt {
 
 // ---- rip ----------------------------------------------------------------------------------------
 
-struct Rip;
+/// Reads `count` sectors from `lba` on a drive and throws them away: what
+/// clears its cache before a re-read.
+pub type Flush = std::sync::Arc<dyn Fn(&str, u32, u32) -> std::io::Result<()> + Send + Sync>;
+
+pub struct Rip {
+    flush: Flush,
+}
+
+impl Rip {
+    /// Rip, clearing the drive's cache with `flush` before every re-read:
+    /// [`flush::read_sectors`] on a real drive, a stand-in in tests.
+    pub fn with_flush(flush: Flush) -> Self {
+        Rip { flush }
+    }
+}
 
 /// Time left for a disc's first reads: audio still to read over how fast
 /// it has read so far.
@@ -471,11 +486,18 @@ fn mins(secs: f32) -> String {
 }
 
 /// How one track's reads went.
+#[derive(Default)]
 struct Reads {
     crcs: Vec<String>,
+    /// For each read, as `crcs`: whether it surely came off the disc. The
+    /// first read does; a re-read only if the drive's cache was cleared
+    /// before it.
+    fresh: Vec<bool>,
     last: PathBuf,
     /// Every read's file, so two can be compared sample by sample.
     files: Vec<PathBuf>,
+    /// The files of the reads that came off the disc: the ones that vote.
+    voters: Vec<PathBuf>,
 }
 
 /// Where two reads of the same track differ: how many sample frames, and
@@ -573,9 +595,27 @@ impl Reads {
         }
     }
 
-    /// Two reads with the same checksum.
+    /// Two reads with the same checksum, the later one read after the
+    /// drive's cache was cleared: it can't be the drive handing back what
+    /// it read the time before.
     fn agree(&self) -> bool {
-        self.crcs.iter().enumerate().any(|(i, a)| !a.is_empty() && self.crcs[i + 1..].contains(a))
+        self.crcs.iter().enumerate().any(|(j, b)| !b.is_empty() && self.fresh.get(j).copied().unwrap_or(false) && self.crcs[..j].contains(b))
+    }
+
+    /// Two reads with the same checksum, cache cleared or not.
+    fn same_checksum(&self) -> bool {
+        self.crcs.iter().enumerate().any(|(j, b)| !b.is_empty() && self.crcs[..j].contains(b))
+    }
+
+    /// Why a track isn't settled, as its note.
+    fn unsettled(&self) -> String {
+        if self.crcs.iter().all(String::is_empty) {
+            "read failed".to_owned()
+        } else if self.same_checksum() {
+            NOT_CLEARED.to_owned()
+        } else {
+            self.damage()
+        }
     }
 }
 
@@ -624,7 +664,7 @@ impl Step for Rip {
             // No row of its own unless there's something there.
             rip_says(&cx, "Checking the gap before track 1");
             let eta0 = Eta { started: std::time::Instant::now(), total: 0.0, read: std::sync::Mutex::new(0.0) };
-            let mut reads = Reads { crcs: vec![], last: PathBuf::new(), files: vec![] };
+            let mut reads = Reads::default();
             let first_read = self.read(&cx, &opts(first, None), &mut probe, n, &dir, &mut reads, &eta0, "reading").await;
             if cx.stopped() {
                 return Ok(());
@@ -672,7 +712,7 @@ impl Step for Rip {
             let (mut reads, verdict) = match hidden_first.take().filter(|_| t == 0) {
                 Some(r) => r,
                 None => {
-                    let mut reads = Reads { crcs: vec![], last: PathBuf::new(), files: vec![] };
+                    let mut reads = Reads::default();
                     // First read, fast unless asked otherwise.
                     let v = self.read(&cx, &opts(first, None), item, n, &dir, &mut reads, &eta, "reading").await;
                     (reads, v)
@@ -696,7 +736,7 @@ impl Step for Rip {
                     outlet.send(item.becomes(ItemKind::Track, Some(reads.last.clone()))).await;
                 }
                 None => {
-                    let note = if reads.crcs.iter().all(String::is_empty) { "read failed".to_owned() } else { reads.damage() };
+                    let note = reads.unsettled();
                     cx.log(format!("track {t}: {note}"));
                     rip_verdict(&cx, item, ItemState::Bad, note);
                     bad.push((item.clone(), reads));
@@ -732,27 +772,28 @@ impl Step for Rip {
                     // scratch, though not proof the way a match is.
                     cx.state(StepState::Busy);
                     let mut tries = 0;
-                    while more_reads_for_vote(reads.files.len(), tries) {
+                    while more_reads_for_vote(reads.voters.len(), tries) {
                         tries += 1;
                         if self.read(&cx, &opts(3, None), &mut item, n, &dir, &mut reads, &eta, "reading again (best of 3)").await.is_err() && cx.stopped() {
                             return Ok(());
                         }
                     }
                     cx.drive_says(StepState::Idle, "Waiting", "");
-                    if reads.files.len() < VOTE {
-                        rip_verdict(&cx, &mut item, ItemState::Bad, "read failed");
+                    if reads.voters.len() < VOTE {
+                        // Reads that may have been the drive's memory don't vote.
+                        rip_verdict(&cx, &mut item, ItemState::Bad, if reads.files.len() >= VOTE { NOT_CLEARED } else { "read failed" });
                         bad.push((item, reads));
                         continue;
                     }
                     let out = dir.join(format!("{:02}-combined.wav", item.index.unwrap()));
-                    match combine(&reads.files, &out) {
+                    match combine(&reads.voters, &out) {
                         Ok((_, 0)) => {
-                            rip_verdict(&cx, &mut item, ItemState::Ok, format!("✓ best of {} reads", reads.files.len()));
+                            rip_verdict(&cx, &mut item, ItemState::Ok, format!("✓ best of {} reads", reads.voters.len()));
                             reads.last = out;
                             true
                         }
                         Ok((_, unsettled)) => {
-                            rip_verdict(&cx, &mut item, ItemState::Ok, format!("best of {} reads, {unsettled} samples uncertain", reads.files.len()));
+                            rip_verdict(&cx, &mut item, ItemState::Ok, format!("best of {} reads, {unsettled} samples uncertain", reads.voters.len()));
                             reads.last = out;
                             true
                         }
@@ -783,7 +824,7 @@ impl Step for Rip {
                             true
                         }
                         None => {
-                            rip_verdict(&cx, &mut item, ItemState::Bad, reads.damage());
+                            rip_verdict(&cx, &mut item, ItemState::Bad, reads.unsettled());
                             false
                         }
                     }
@@ -861,6 +902,10 @@ pub fn settled_note(accurate: Option<u32>, agree: bool) -> Option<String> {
     }
 }
 
+/// A track's note when its reads agree but the drive's cache couldn't be
+/// cleared before them, so they may be the drive's memory, not the disc.
+pub const NOT_CLEARED: &str = "the drive's cache couldn't be cleared";
+
 /// A track's note once *Keep it anyway* kept it unproven.
 pub const KEPT: &str = "kept anyway, not verified";
 
@@ -887,6 +932,15 @@ impl Rip {
         let into = dir.join(format!("{t:02}-{attempt}"));
         let len = item.context().get(Subject::Part(t), "length").and_then(|l| l.parse::<f32>().ok()).unwrap_or(0.0);
         let first = attempt == 1;
+        // Every read after the first is compared with the ones before, so
+        // the drive must not hand back what it still holds of them.
+        let fresh = first || self.clear_cache(cx, o.device, item, t).await;
+        let cache = match (first, fresh) {
+            (true, _) => "",
+            (false, true) => ", drive's cache cleared",
+            (false, false) => ", drive's cache not cleared",
+        };
+        cx.item(item, ItemState::Busy, what);
         let shown = &*item;
         let r = cyanrip::rip_track(o, t, &into, cx.cancelled(), |p| {
             cx.item(shown, ItemState::Busy, format!("{what} {}%", (p * 100.0) as u32));
@@ -918,9 +972,13 @@ impl Rip {
                 if rip.preemphasis && item.context().get(Subject::Part(t), "preemphasis").is_none() {
                     item.context_mut().add(Subject::Part(t), "preemphasis", "1", "Rip");
                 }
-                cx.log(format!("track {t} read {attempt} (paranoia {}): {:?}, CRC {}", o.paranoia, rip.verdict, rip.crc));
-                item.context_mut().add(Subject::Part(t), "read", format!("read {attempt}, paranoia {}: {:?}, CRC {}", o.paranoia, rip.verdict, rip.crc), "Rip");
+                cx.log(format!("track {t} read {attempt} (paranoia {}{cache}): {:?}, CRC {}", o.paranoia, rip.verdict, rip.crc));
+                item.context_mut().add(Subject::Part(t), "read", format!("read {attempt}, paranoia {}{cache}: {:?}, CRC {}", o.paranoia, rip.verdict, rip.crc), "Rip");
                 reads.crcs.push(rip.crc);
+                reads.fresh.push(fresh);
+                if fresh {
+                    reads.voters.push(rip.file.clone());
+                }
                 reads.files.push(rip.file.clone());
                 reads.last = rip.file;
                 Ok(rip.verdict)
@@ -930,9 +988,40 @@ impl Rip {
                     return Err(e);
                 }
                 cx.log(format!("track {t} read {attempt}: {e}"));
-                item.context_mut().add(Subject::Part(t), "read", format!("read {attempt}, paranoia {}: failed: {e}", o.paranoia), "Rip");
+                item.context_mut().add(Subject::Part(t), "read", format!("read {attempt}, paranoia {}{cache}: failed: {e}", o.paranoia), "Rip");
                 reads.crcs.push(String::new());
+                reads.fresh.push(fresh);
                 Err(e)
+            }
+        }
+    }
+}
+
+impl Rip {
+    /// Clears the drive's cache before re-reading track `t`: reads
+    /// [`flush::SECTORS`] from elsewhere on the disc and throws them away.
+    /// Whether it did; if not, the log says why, and the read that follows
+    /// can't settle the track by agreeing.
+    async fn clear_cache(&self, cx: &Cx, device: &str, item: &Item, t: u32) -> bool {
+        let toc = item.context().get(Subject::Disc, "toc").unwrap_or("").to_owned();
+        let Some(w) = flush::window(&toc, t) else {
+            cx.log(format!("track {t}: couldn't clear the drive's cache: the disc is too short to read far enough from this track"));
+            return false;
+        };
+        cx.item(item, ItemState::Busy, "clearing the drive's cache");
+        let (f, dev) = (self.flush.clone(), device.to_owned());
+        let r = match tokio::task::spawn_blocking(move || f(&dev, w.lba, w.count)).await {
+            Ok(r) => r,
+            Err(e) => Err(std::io::Error::other(e.to_string())),
+        };
+        match r {
+            Ok(()) => {
+                cx.log(format!("track {t}: cleared the drive's cache: read {} sectors from {}", flush::thousands(w.count), flush::tracks_in(&toc, &w)));
+                true
+            }
+            Err(e) => {
+                cx.log(format!("track {t}: couldn't clear the drive's cache ({e}); reading again anyway, but this read can't settle the track by agreeing"));
+                false
             }
         }
     }
@@ -1017,6 +1106,8 @@ pub fn rip_needs(bad: &[(u32, String)]) -> String {
                 "doesn't match AccurateRip"
             } else if note == "read failed" || note.is_empty() {
                 "couldn't be read"
+            } else if note == NOT_CLEARED {
+                "couldn't be checked"
             } else {
                 "reads disagree"
             };

@@ -372,7 +372,6 @@ drive name left out.
 
 Whether a drive's cache can make *two reads agree* meaningless was looked
 into at the same time. It's in `audio-accuracy.md`, *Re-reads and the
-drive's cache*: on this drive the current reads are sound for every real
-track; a hidden track of under 2.5 s, or a drive with a bigger cache,
-could be fooled, and the fix is to read somewhere else on the disc before
-each re-read.
+drive's cache*: a hidden track of under 2.5 s, or a drive with a bigger
+cache, could have been fooled, so since 20 November 2026 Rip reads 2,400
+sectors from somewhere else on the disc before each re-read it compares.
