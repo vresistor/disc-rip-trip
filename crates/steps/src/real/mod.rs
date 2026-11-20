@@ -213,7 +213,9 @@ impl Step for AudioCd {
             cx.status("", "Reading the table of contents");
             let info = {
                 let _drive = cx.lane(LaneKind::Drive).await;
-                cyanrip::info(&dev, &cx.work()?, cx.cancelled()).await?
+                // Opening the tray stops it.
+                let hold = cx.drive_read();
+                cyanrip::info(&dev, &cx.work()?, hold.stop()).await?
             };
             let total: u32 = info.tracks.iter().map(|t| t.seconds()).sum();
             {
@@ -624,16 +626,50 @@ impl Step for CoverArt {
 /// clears its cache before a re-read.
 pub type Flush = std::sync::Arc<dyn Fn(&str, u32, u32) -> std::io::Result<()> + Send + Sync>;
 
+/// Whether there's a disc in a drive: [`media::disc_in`], or a stand-in.
+pub type DiscIn = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 pub struct Rip {
     flush: Flush,
+    disc_in: DiscIn,
 }
 
 impl Rip {
     /// Rip, clearing the drive's cache with `flush` before every re-read:
     /// [`flush::read_sectors`] on a real drive, a stand-in in tests.
     pub fn with_flush(flush: Flush) -> Self {
-        Rip { flush }
+        Rip { flush, disc_in: std::sync::Arc::new(media::disc_in) }
     }
+
+    /// Asks `disc_in` whether there's a disc before each read, instead of the drive.
+    pub fn with_disc_check(mut self, disc_in: DiscIn) -> Self {
+        self.disc_in = disc_in;
+        self
+    }
+}
+
+/// A track's note when its read was stopped for the tray to open, or a
+/// read wasn't started after it opened.
+pub const TRAY_OPENED: &str = "Read stopped: tray opened";
+/// A track's note when there was no disc to read it from.
+pub const NO_DISC: &str = "No disc in the drive";
+
+/// Why a read didn't happen or didn't finish: nothing came off the disc,
+/// and nothing is kept of it. The track waits for you.
+#[derive(Debug)]
+pub struct Interrupted(pub &'static str);
+
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Interrupted {}
+
+/// The note for a read that was interrupted, if it was.
+fn interrupted(v: &Result<Verdict>) -> Option<&'static str> {
+    v.as_ref().err().and_then(|e| e.downcast_ref::<Interrupted>()).map(|i| i.0)
 }
 
 /// Time left for a disc's first reads: audio still to read over how fast
@@ -681,6 +717,9 @@ struct Reads {
     voters: Vec<PathBuf>,
     /// The drive refused to read slower, and read at its own speed.
     slower_refused: bool,
+    /// The last read was stopped by the tray opening, or found no disc:
+    /// the note to wait with.
+    stopped: Option<&'static str>,
 }
 
 /// Where two reads of the same track differ: how many sample frames, and
@@ -793,7 +832,9 @@ impl Reads {
 
     /// Why a track isn't settled, as its note.
     fn unsettled(&self) -> String {
-        if self.crcs.iter().all(String::is_empty) {
+        if let Some(why) = self.stopped {
+            why.to_owned()
+        } else if self.crcs.iter().all(String::is_empty) {
             "read failed".to_owned()
         } else if self.last_matches() {
             NOT_CLEARED.to_owned()
@@ -854,6 +895,14 @@ impl Step for Rip {
                 return Ok(());
             }
             match first_read.as_ref().map(|_| is_silent(&reads.last)) {
+                // Not known either way: it's read like the others when you
+                // ask, once the disc is back.
+                _ if interrupted(&first_read).is_some() => {
+                    reads.stopped = interrupted(&first_read);
+                    wanted.insert(0, 0);
+                    disc.context_mut().add(Subject::Part(0), "length", (frames / 44_100).to_string(), "Rip");
+                    hidden_first = Some((reads, first_read));
+                }
                 Ok(Ok(true)) => {
                     cx.log(format!("track 1's pregap ({} s) is digital silence: not kept", frames / 44_100));
                     // Silence: nothing was found, so it isn't a track; the
@@ -899,17 +948,22 @@ impl Step for Rip {
                     let mut reads = Reads::default();
                     // First read, fast unless asked otherwise.
                     let v = self.read(&cx, &opts(first, None), item, n, &dir, &mut reads, &eta, "reading").await;
+                    reads.stopped = interrupted(&v);
                     (reads, v)
                 }
             };
             let verdict = match verdict {
                 // A match is proof; nothing more to do.
                 Ok(Verdict::Accurate { confidence }) => Some(format!("✓ {confidence}")),
+                // The tray opened, or there's no disc: no careful read
+                // either; it waits for you.
+                ref v if interrupted(v).is_some() => None,
                 Ok(_) | Err(_) => {
                     // No match, nothing to compare with, or a failed read: read
                     // again carefully. Two reads that agree are consistent; a
                     // fast read's "no errors" on its own says nothing.
                     let v = self.read(&cx, &opts(3, None), item, n, &dir, &mut reads, &eta, "reading carefully").await;
+                    reads.stopped = interrupted(&v);
                     settled_note(accurate(&v), reads.agree())
                 }
             };
@@ -943,6 +997,7 @@ impl Step for Rip {
             let Some(req) = cx.next_retry().await else { return Ok(()) };
             let Some(pos) = bad.iter().position(|(i, _)| i.id == req.item) else { continue };
             let (mut item, mut reads) = bad.remove(pos);
+            reads.stopped = None;
             let settled = match req.option.as_str() {
                 "keep" if !reads.last.as_os_str().is_empty() => {
                     rip_verdict(&cx, &mut item, ItemState::Ok, KEPT);
@@ -961,11 +1016,21 @@ impl Step for Rip {
                     let mut tries = 0;
                     while more_reads_for_vote(reads.voters.len(), tries) {
                         tries += 1;
-                        if self.read(&cx, &opts(3, None), &mut item, n, &dir, &mut reads, &eta, "reading again (best of 3)").await.is_err() && cx.stopped() {
+                        let v = self.read(&cx, &opts(3, None), &mut item, n, &dir, &mut reads, &eta, "reading again (best of 3)").await;
+                        if v.is_err() && cx.stopped() {
                             return Ok(());
+                        }
+                        reads.stopped = interrupted(&v);
+                        if reads.stopped.is_some() {
+                            break;
                         }
                     }
                     cx.drive_says(StepState::Idle, "Waiting", "");
+                    if let Some(why) = reads.stopped {
+                        rip_verdict(&cx, &mut item, ItemState::Bad, why);
+                        bad.push((item, reads));
+                        continue;
+                    }
                     if reads.voters.len() < VOTE {
                         // Reads that may have been the drive's memory don't vote.
                         rip_verdict(&cx, &mut item, ItemState::Bad, if reads.files.len() >= VOTE { NOT_CLEARED } else { "read failed" });
@@ -1010,8 +1075,9 @@ impl Step for Rip {
                             no_slower = true;
                             speed = None;
                         }
+                        reads.stopped = interrupted(&v);
                         note = settled_note(accurate(&v), reads.agree());
-                        if note.is_some() {
+                        if note.is_some() || reads.stopped.is_some() {
                             break;
                         }
                     }
@@ -1128,6 +1194,19 @@ impl Rip {
     #[allow(clippy::too_many_arguments)]
     async fn read(&self, cx: &Cx, o: &RipOptions<'_>, item: &mut Item, n: u32, dir: &Path, reads: &mut Reads, eta: &Eta, what: &str) -> Result<Verdict> {
         let t = item.index.unwrap();
+        // Nothing starts once the tray was asked to open, until you ask
+        // again; nor on an empty drive.
+        if cx.drive_released() {
+            return Err(Interrupted(TRAY_OPENED).into());
+        }
+        let dev = o.device.to_owned();
+        let check = self.disc_in.clone();
+        if !tokio::task::spawn_blocking(move || check(&dev)).await.unwrap_or(false) {
+            cx.log(format!("track {t}: no disc in the drive, so no read"));
+            return Err(Interrupted(NO_DISC).into());
+        }
+        // Held from here till cyanrip has exited: the tray waits for it.
+        let hold = cx.drive_read();
         let attempt = reads.crcs.len() + 1;
         cx.item(item, ItemState::Busy, what);
         cx.drive_says(StepState::Busy, if attempt == 1 { "Reading" } else { "Re-reading" }, &format!("track {t}"));
@@ -1146,7 +1225,7 @@ impl Rip {
         let shown = &*item;
         let mut o = RipOptions { ..*o };
         let r = loop {
-            let r = cyanrip::rip_track(&o, t, &into, cx.cancelled(), |p| {
+            let r = cyanrip::rip_track(&o, t, &into, hold.stop(), |p| {
                 cx.item(shown, ItemState::Busy, format!("{what} {}%", (p * 100.0) as u32));
                 cx.progress(Some((t.saturating_sub(1) as f32 + p) / n as f32));
                 // Time left for the whole disc, from how fast it's reading.
@@ -1168,6 +1247,16 @@ impl Rip {
             }
         };
         let o = &o;
+        // Stopped for the tray: cyanrip has exited, and nothing of this
+        // read is kept, not even as a failed one (the next read gets this
+        // attempt's number, and folder).
+        if hold.tray_opened() && !cx.stopped() {
+            drop(hold);
+            let _ = std::fs::remove_dir_all(&into);
+            cx.log(format!("track {t} read {attempt}: stopped, the tray was opened"));
+            return Err(Interrupted(TRAY_OPENED).into());
+        }
+        drop(hold);
         if first {
             eta.add(len);
         }
@@ -1323,6 +1412,10 @@ pub fn rip_needs(bad: &[(u32, String)]) -> String {
                 "couldn't be read"
             } else if note == NOT_CLEARED {
                 "couldn't be checked"
+            } else if note == TRAY_OPENED {
+                "stopped: the tray was opened"
+            } else if note == NO_DISC {
+                "wasn't read: no disc in the drive"
             } else {
                 "reads disagree"
             };
@@ -1432,6 +1525,24 @@ pub fn eject(device: &str) -> std::io::Result<()> {
 #[cfg(not(target_os = "linux"))]
 pub fn eject(_device: &str) -> std::io::Result<()> {
     Err(std::io::Error::other("can't open the tray here"))
+}
+
+/// Opens the tray of the drive a recipe names (*Open tray*), after
+/// whatever was reading from it has let go: a few tries, since a drive
+/// just done reading can refuse at first. Blocks; says why if it can't.
+pub fn open_tray(drive: &str) -> Result<(), String> {
+    let Some(dev) = find_drive(drive) else { return Err(format!("{drive} isn't connected")) };
+    let mut last = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+        match eject(&dev) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(format!("The tray didn't open: {last}"))
 }
 
 // ---- folders ---------------------------------------------------------------------------------------

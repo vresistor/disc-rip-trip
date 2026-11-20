@@ -252,6 +252,8 @@ impl Inlet {
         }?;
         let first = !self.started;
         self.started = true;
+        // A tray opened before this item came is no concern of its.
+        self.cx.drive_back();
         let kind = item.kind;
         let parts = if item.index.is_some() { item.context().parts() as usize } else { 0 };
         self.cx.arrived.lock().unwrap().insert(item.id.clone(), item.path.clone());
@@ -349,6 +351,44 @@ pub struct Cx {
     /// The path each item came in with, so a file sent on at a new path is
     /// one this step made (a step passing files through made none).
     pub(crate) arrived: Arc<std::sync::Mutex<HashMap<String, Option<std::path::PathBuf>>>>,
+    /// The tray openings this step knows of (see [`Cx::drive_released`]).
+    pub(crate) tray_seen: Arc<std::sync::atomic::AtomicU64>,
+    /// A read of this step's was stopped because the tray opened.
+    pub(crate) tray_cut: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// A read holding the drive: the tray waits for it to be dropped before
+/// opening. See [`Cx::drive_read`].
+pub struct DriveRead {
+    shared: Arc<Shared>,
+    seen: u64,
+    cut: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl DriveRead {
+    /// Resolves when the read should stop: the run stopped, or the tray
+    /// was asked to open. Give it to the tool as its `stop`.
+    pub fn stop(&self) -> impl std::future::Future<Output = ()> + Send + '_ {
+        let mut tray = self.shared.tray.subscribe();
+        let seen = self.seen;
+        async move {
+            tokio::select! {
+                _ = tray.wait_for(|g| *g != seen) => self.cut.store(true, std::sync::atomic::Ordering::SeqCst),
+                _ = self.shared.cancel.cancelled() => {}
+            }
+        }
+    }
+
+    /// Whether the tray was asked to open since this step last went on.
+    pub fn tray_opened(&self) -> bool {
+        *self.shared.tray.borrow() != self.seen
+    }
+}
+
+impl Drop for DriveRead {
+    fn drop(&mut self) {
+        self.shared.holding.send_modify(|n| *n = n.saturating_sub(1));
+    }
 }
 
 impl Cx {
@@ -492,10 +532,39 @@ impl Cx {
     pub async fn next_retry(&self) -> Option<RetryRequest> {
         self.shared.needed_you.store(true, std::sync::atomic::Ordering::Relaxed);
         let mut rx = self.retries.lock().await;
-        tokio::select! {
+        let r = tokio::select! {
             r = rx.recv() => r,
             _ = self.shared.cancel.cancelled() => None,
+        };
+        // Asked to go on: a tray opened before is behind it now.
+        if r.is_some() {
+            self.drive_back();
         }
+        r
+    }
+
+    /// Holds the drive for a read: while it's held, opening the tray waits,
+    /// having stopped the read through [`DriveRead::stop`]. Drop it once
+    /// the tool has exited.
+    pub fn drive_read(&self) -> DriveRead {
+        self.shared.holding.send_modify(|n| *n += 1);
+        DriveRead { shared: self.shared.clone(), seen: self.tray_seen.load(std::sync::atomic::Ordering::SeqCst), cut: self.tray_cut.clone() }
+    }
+
+    /// Whether the tray was asked to open since this step was last given
+    /// something to do (an item, or a *Retry*): it starts no read till then.
+    pub fn drive_released(&self) -> bool {
+        *self.shared.tray.borrow() != self.tray_seen.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The tray openings so far are behind this step: it may read again.
+    pub fn drive_back(&self) {
+        self.tray_seen.store(*self.shared.tray.borrow(), std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether a read of this step's was stopped by the tray opening.
+    pub fn tray_cut(&self) -> bool {
+        self.tray_cut.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Shows what the drive is doing on the recipe's drive tile. Its

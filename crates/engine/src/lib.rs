@@ -23,4 +23,4 @@ pub use recipe::{Node, Recipe};
 pub use run::{cache_dir, Engine, Run};
 pub use setting::{ParamKind, ParamSpec, Scope, Setting, Settings, HELP_MAX};
 pub use snapshot::{Answer, Choice, Command, Decision, ItemChoice, ItemState, ItemView, Made, Question, QuestionShape, Snapshot, StepState, StepView};
-pub use step::{raw_here, within, Cx, Group, Inlet, Outlet, Registry, Step, StepInfo};
+pub use step::{raw_here, within, Cx, DriveRead, Group, Inlet, Outlet, Registry, Step, StepInfo};

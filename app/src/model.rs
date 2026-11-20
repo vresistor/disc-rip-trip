@@ -20,6 +20,9 @@ pub type PickFolder = Arc<dyn Fn(Option<PathBuf>) -> Option<PathBuf> + Send + Sy
 /// Sends Notify's test: to this computer or not, the ntfy server, the
 /// topic. Gives where it went, as [`drt_steps::real::tell::send_test`].
 pub type SendTest = Arc<dyn Fn(bool, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<&'static str>>> + Send>> + Send + Sync>;
+/// Opens a drive's tray, by the drive's name; says why if it can't.
+/// Blocks: called off the window's thread.
+pub type OpenTray = Arc<dyn Fn(&str) -> std::result::Result<(), String> + Send + Sync>;
 /// The optical drives connected just now, by name (cheap: sysfs).
 pub type ListDrives = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
@@ -36,6 +39,8 @@ pub struct Deps {
     /// Which drives are connected; asked every couple of seconds.
     pub connected: ListDrives,
     pub send_test: SendTest,
+    /// Opens a drive's tray: [`drt_steps::real::open_tray`], or a stand-in.
+    pub open_tray: OpenTray,
 }
 
 /// One disc going through a recipe.
@@ -124,8 +129,11 @@ pub struct Model {
     pub open_folder: OpenFolder,
     pub pick_folder: PickFolder,
     pub send_test: SendTest,
-    /// The last save or folder-open that failed, until one works.
-    failed: std::sync::Mutex<Option<String>>,
+    /// The last save, folder-open or tray that failed, until one works.
+    failed: Arc<std::sync::Mutex<Option<String>>>,
+    open_tray_hook: OpenTray,
+    /// Drives whose tray is being opened just now.
+    opening: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// Set once the window exists, so runs can wake it.
     pub ctx: Option<egui::Context>,
     /// The settings as last saved, so ones a run finds (a drive's offset)
@@ -228,6 +236,8 @@ impl Model {
             failed: Default::default(),
             pick_folder: d.pick_folder,
             send_test: d.send_test,
+            open_tray_hook: d.open_tray,
+            opening: Default::default(),
             ctx: None,
             saved: Default::default(),
             pace: Default::default(),
@@ -942,6 +952,52 @@ impl Model {
                 *f = Some(e);
             }
         }
+    }
+
+    /// Whether *Open tray* is offered for the recipe's drive: one is
+    /// named and connected, and no offset is being measured on it (that
+    /// holds the drive with no run to stop).
+    pub fn can_open_tray(&self, i: usize) -> bool {
+        let drive = self.drive(i);
+        !drive.is_empty() && self.is_connected(&drive) && !self.finding.keys().any(|&j| self.drive(j) == drive)
+    }
+
+    /// Whether the recipe's drive's tray is being opened just now.
+    pub fn opening_tray(&self, i: usize) -> bool {
+        self.opening.lock().unwrap().contains(&self.drive(i))
+    }
+
+    /// *Open tray* on the recipe's drive, at any time: every run on that
+    /// drive stops what it's reading (its tool exits; the track waits for
+    /// you) and starts nothing more till asked; then the door is unlocked
+    /// and the tray opens. Off the window's thread.
+    pub fn open_tray(&mut self, i: usize) {
+        let drive = self.drive(i);
+        if !self.can_open_tray(i) || !self.opening.lock().unwrap().insert(drive.clone()) {
+            return;
+        }
+        let released: Vec<_> = self
+            .runs
+            .iter()
+            .filter(|(&j, _)| self.drive(j) == drive)
+            .flat_map(|(_, v)| v.iter().filter(|r| !r.snap.finished))
+            .map(|r| r.run.release_drive(std::time::Duration::from_secs(30)))
+            .collect();
+        let (hook, failed, opening, ctx) = (self.open_tray_hook.clone(), self.failed.clone(), self.opening.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            for r in released {
+                if !r.await {
+                    eprintln!("{drive}: a read hadn't stopped after 30 s; opening the tray anyway");
+                }
+            }
+            let d = drive.clone();
+            let r = tokio::task::spawn_blocking(move || hook(&d)).await.unwrap_or_else(|e| Err(e.to_string()));
+            *failed.lock().unwrap() = r.err().inspect(|e| eprintln!("{e}"));
+            opening.lock().unwrap().remove(&drive);
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
     }
 
     /// Opens a folder; if that fails, says so where saving failures go.

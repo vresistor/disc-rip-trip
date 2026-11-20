@@ -111,10 +111,14 @@ async fn run(base: &Path, hidden: &str) -> (Snapshot, Vec<Item>, String) {
     reg.add(probe.clone());
     // No drive: clearing its cache is only noted where cyanrip's calls are.
     let flushes = log.clone();
-    reg.add(drt_steps::real::Rip::with_flush(Arc::new(move |_, lba, count| {
-        use std::io::Write;
-        writeln!(std::fs::OpenOptions::new().append(true).create(true).open(&flushes)?, "flush {lba} {count}")
-    })));
+    reg.add(
+        drt_steps::real::Rip::with_flush(Arc::new(move |_, lba, count| {
+            use std::io::Write;
+            writeln!(std::fs::OpenOptions::new().append(true).create(true).open(&flushes)?, "flush {lba} {count}")
+        }))
+        // The stand-in drive always has its disc in.
+        .with_disc_check(Arc::new(|_| true)),
+    );
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
     e.work_root = base.join("runs");

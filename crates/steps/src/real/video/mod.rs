@@ -344,7 +344,10 @@ impl Step for VideoDisc {
             let found = {
                 let _drive = cx.lane(LaneKind::Drive).await;
                 cx.drive_says(StepState::Busy, "Reading", "the videos");
-                let r = with_key(&cx, || makemkv::scan(&launcher, &dev, minlength, &dir, cx.cancelled())).await;
+                // Opening the tray stops it.
+                let hold = cx.drive_read();
+                let r = with_key(&cx, || makemkv::scan(&launcher, &dev, minlength, &dir, hold.stop())).await;
+                drop(hold);
                 cx.drive_says(StepState::Idle, "Waiting", "");
                 r
             };
@@ -482,7 +485,7 @@ impl Step for RipVideo {
                     }
                     Err(e) if cx.stopped() => return Err(e),
                     Err(e) => {
-                        cx.item(item, ItemState::Bad, format!("Couldn't copy the video: {e}"));
+                        cx.item(item, ItemState::Bad, couldnt_copy(&e));
                         cx.log(format!("{}: {e}", item.label));
                         bad.push(item.clone());
                     }
@@ -512,7 +515,7 @@ impl Step for RipVideo {
                 }
                 Err(e) if cx.stopped() => return Err(e),
                 Err(e) => {
-                    cx.item(&item, ItemState::Bad, format!("Couldn't copy the video: {e}"));
+                    cx.item(&item, ItemState::Bad, couldnt_copy(&e));
                     bad.push(item);
                 }
             }
@@ -521,6 +524,14 @@ impl Step for RipVideo {
         let _ = total;
         cx.status(titles_word(done), "");
         Ok(())
+    }
+}
+
+/// A title's note when it couldn't be copied.
+fn couldnt_copy(e: &anyhow::Error) -> String {
+    match e.downcast_ref::<super::Interrupted>() {
+        Some(i) => i.0.to_owned(),
+        None => format!("Couldn't copy the video: {e}"),
     }
 }
 
@@ -539,16 +550,28 @@ impl RipVideo {
         let Some(id) = id else { bail!("the scan didn't list this title") };
         let n = attempts.entry(item.id.clone()).or_default();
         *n += 1;
+        // Nothing starts once the tray was asked to open, until you ask again.
+        if cx.drive_released() {
+            return Err(super::Interrupted(super::TRAY_OPENED).into());
+        }
         let dir = cx.work()?.join("rip").join(format!("title-{part:02}-{n}"));
         cx.item(item, ItemState::Busy, "reading");
         cx.drive_says(StepState::Busy, "Reading", &format!("title {part}"));
+        // Opening the tray stops it.
+        let hold = cx.drive_read();
         let file = with_key(cx, || {
-            makemkv::rip(launcher, dev, id, minlength, &dir, cx.cancelled(), |f, doing| {
+            makemkv::rip(launcher, dev, id, minlength, &dir, hold.stop(), |f, doing| {
                 cx.item(item, ItemState::Busy, format!("{} {}%", doing.to_lowercase(), (f * 100.0) as u32));
                 cx.progress(Some((at as f32 + f) / of as f32));
             })
         })
-        .await?;
+        .await;
+        // Stopped for the tray: makemkvcon has exited; nothing of it is kept.
+        if hold.tray_opened() && !cx.stopped() {
+            return Err(super::Interrupted(super::TRAY_OPENED).into());
+        }
+        drop(hold);
+        let file = file?;
         cx.item(item, ItemState::Busy, "checking");
         makemkv::check_whole(&file, length).await?;
         let size = std::fs::metadata(&file).map(|m| super::media::size(m.len())).unwrap_or_default();

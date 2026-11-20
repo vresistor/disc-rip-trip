@@ -24,6 +24,8 @@ struct Env {
     picked_from: Arc<Mutex<Vec<Option<PathBuf>>>>,
     /// Each Notify test asked for: to this computer, the server, the topic.
     tests_sent: Arc<Mutex<Vec<(bool, String, String)>>>,
+    /// Each drive whose tray was opened.
+    trays: Arc<Mutex<Vec<String>>>,
 }
 
 fn env() -> Env {
@@ -34,6 +36,7 @@ fn env() -> Env {
         plugged: Arc::new(Mutex::new(vec![recipes::BLU_RAY.into(), recipes::DVD.into()])),
         picked_from: Arc::default(),
         tests_sent: Arc::default(),
+        trays: Arc::default(),
     }
 }
 
@@ -73,6 +76,13 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
             Arc::new(move |start| {
                 from.lock().unwrap().push(start);
                 Some(picked.clone())
+            })
+        },
+        open_tray: {
+            let trays = e.trays.clone();
+            Arc::new(move |d| {
+                trays.lock().unwrap().push(d.to_owned());
+                Ok(())
             })
         },
         connected: {
@@ -322,10 +332,13 @@ fn a_bad_track_is_retried_from_its_row() {
     shot(&mut h, "inside");
     // Its title in full, its retries in the row.
     assert!(!app(&h).cut_titles.contains(&"Broken Bricks".to_owned()), "cut: {:?}", app(&h).cut_titles);
-    // The one to decide: its retries in the header, the rest on its row.
-    h.get_by_label("Read again");
-    h.get_by_label("Keep it anyway");
-    h.get_by_label("More, Broken Bricks");
+    // Its choices once, all on its row and none under a More; the
+    // header keeps to what's wrong.
+    for b in ["Read again", "Best of 3 reads", "Try the other drive", "Read again slowly", "Keep it anyway", "Skip this track"] {
+        h.get_by_label(&format!("{b}, Broken Bricks"));
+        assert!(h.query_by_label(b).is_none(), "{b} said twice");
+    }
+    assert!(h.query_by_label("More, Broken Bricks").is_none());
     h.get_by_label("Skip this track, Broken Bricks").click();
     h.run_steps(2);
     until(&mut h, "the track left out", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Skipped) == 1);
@@ -3346,7 +3359,7 @@ fn a_track_that_needs_you_is_answered_in_the_sidebar() {
     assert!(rows[0].starts_with("9, Broken Bricks"), "{rows:?}");
     assert!(rows[1].starts_with("1, ") && rows.iter().any(|r| r.ends_with("Verified 104")), "each row its proof, in track order: {rows:?}");
     h.get_by_label("AccurateRip");
-    click(&mut h, "Keep it anyway");
+    click(&mut h, "Keep it anyway, Broken Bricks");
     until(&mut h, "kept", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Bad) == 0);
 }
 
@@ -3403,7 +3416,7 @@ fn sidebar_shots(size: egui::Vec2, tag: &str) {
     until(&mut h, "a damaged track", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Bad) == 1 && a.m.snapshot(0).steps["rip"].count(ItemState::Ok) == 16);
     open_id(&mut h, "rip");
     shot(&mut h, &name("rip-retry"));
-    click(&mut h, "Keep it anyway");
+    click(&mut h, "Keep it anyway, Broken Bricks");
     until(&mut h, "the hold", |a| a.m.snapshot(0).steps["hold"].detail == "All here");
     open_id(&mut h, "hold");
     h.get_all_by_role(Role::Button).find(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("Let "))).unwrap().click_accesskit();
@@ -3965,4 +3978,72 @@ fn the_appearance_is_picked_and_remembered() {
     h.run_steps(2);
     assert_eq!(app(&h).appearance, drt_app::Appearance::System);
     assert_eq!(std::fs::read_to_string(e.dir.path().join("config/appearance")).unwrap(), "system");
+}
+
+/// Several tracks to decide, at the sidebar's narrowest and at 1920:
+/// each row's choices on lines of their own, wrapping, nothing cut.
+#[test]
+fn several_tracks_to_decide_each_have_their_choices_on_their_row() {
+    for (size, tag) in [(egui::vec2(1280.0, 720.0), ""), (egui::vec2(1920.0, 1080.0), "-1920")] {
+        let e = env();
+        let mut h = window_on(&e, drt_steps::simulated_bad(vec![4, 9]), true, 0.0, size, 1.0);
+        click(&mut h, "Start");
+        until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
+        click(&mut h, "Use this one");
+        until(&mut h, "two to decide", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Bad) == 2 && a.m.snapshot(0).steps["rip"].count(ItemState::Ok) == 15);
+        open_id(&mut h, "rip");
+        let side = app(&h).side_rect().unwrap();
+        if tag.is_empty() {
+            assert!(side.width() <= 450.0, "the narrowest sidebar: {side:?}");
+        }
+        for title in ["Suzy Lee", "Broken Bricks"] {
+            for b in ["Read again", "Best of 3 reads", "Read again slowly", "Keep it anyway", "Skip this track"] {
+                let r = h.get_by_label(&format!("{b}, {title}")).rect();
+                assert!(side.contains_rect(r), "{b} for {title} inside the sidebar: {r:?} in {side:?}");
+            }
+        }
+        h.get_by_label("Read them all again");
+        h.get_by_label("Open tray");
+        shot(&mut h, &format!("sidebar-rip-retry-two{tag}"));
+    }
+}
+
+/// *Open tray* on the drive's sidebar, idle; and on Rip's mid-read, which
+/// stops the read: that track and the ones after wait for you, saying why,
+/// and go on once read again.
+#[test]
+fn open_tray_from_the_drive_and_from_rip_mid_read() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.2);
+    open_tile(&mut h, "Drive,");
+    click(&mut h, "Open tray");
+    until(&mut h, "the tray to open", |a| !a.m.opening_tray(0));
+    assert_eq!(*e.trays.lock().unwrap(), [recipes::BLU_RAY]);
+    app_mut(&mut h).close_tray();
+    click(&mut h, "Start");
+    until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
+    click(&mut h, "Use this one");
+    until(&mut h, "reading", |a| {
+        let r = &a.m.snapshot(0).steps["rip"];
+        (3..=12).contains(&r.count(ItemState::Ok)) && r.count(ItemState::Busy) == 1
+    });
+    open_id(&mut h, "rip");
+    shot(&mut h, "sidebar-rip-open-tray");
+    click(&mut h, "Open tray");
+    until(&mut h, "the read to stop", |a| {
+        let r = &a.m.snapshot(0).steps["rip"];
+        r.count(ItemState::Busy) == 0 && r.count(ItemState::Waiting) == 0 && r.count(ItemState::Bad) > 0
+    });
+    until(&mut h, "the tray to open", |a| !a.m.opening_tray(0));
+    assert_eq!(e.trays.lock().unwrap().len(), 2);
+    let s = snap(&h);
+    let rip = &s.steps["rip"];
+    assert!(rip.items.iter().filter(|i| i.state == ItemState::Bad).all(|i| i.note == drt_steps::real::TRAY_OPENED), "{:?}", rip.items);
+    assert!(!s.finished && !s.stopped);
+    // The one being read and every one after it.
+    assert!(rip.count(ItemState::Bad) >= 5, "{:?}", rip.items);
+    h.run_steps(3);
+    shot(&mut h, "sidebar-rip-tray-opened");
+    click(&mut h, "Read them all again");
+    until(&mut h, "all read", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Bad) == 0 && a.m.snapshot(0).steps["rip"].count(ItemState::Ok) == 17);
 }

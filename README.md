@@ -198,6 +198,26 @@ and the flatpak start out the same.
 If `recipes.json` or `settings.json` can't be read, the app never
 overwrites it. It uses the built-in recipes and leaves your file alone.
 
+## Getting a disc out
+
+While a disc is being read, Linux locks the drive's door, so the drive's
+own eject button does nothing. Use **Open tray** instead: it's on the
+Drive step's sidebar, and on Rip's while it reads. It stops the read
+(the track waits for you, and nothing from the half-finished read is
+kept), unlocks the door and opens the tray. Put the disc back and choose
+**Read again** to go on.
+
+If you'd rather the drive's button always worked, you can tell Linux not
+to lock the door (needs root, and lasts until the next restart):
+
+```sh
+sudo sysctl dev.cdrom.lock=0
+```
+
+To keep it, put `dev.cdrom.lock = 0` in a file in `/etc/sysctl.d/`. The
+catch: the button then pulls the disc out mid-read, without warning. The
+read fails and that track waits for you, but nothing stops the press.
+
 ## Status
 
 - Every recipe runs. The CDs recipe has ripped real discs end to end.

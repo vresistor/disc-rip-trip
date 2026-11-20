@@ -271,6 +271,8 @@ impl Engine {
             log: Mutex::default(),
             raw: Mutex::default(),
             raw_file: Mutex::default(),
+            tray: watch::channel(0).0,
+            holding: watch::channel(0).0,
             work,
         });
 
@@ -296,7 +298,16 @@ impl Engine {
             let (step, info) = self.registry.get(&n.step).expect("checked above");
             let (retry_tx, retry_rx) = mpsc::channel(16);
             shared.retries.lock().unwrap().insert(n.id.clone(), retry_tx);
-            let cx = Cx { id: n.id.clone(), shared: shared.clone(), info, params: Arc::new(n.params.clone()), retries: Arc::new(tokio::sync::Mutex::new(retry_rx)), arrived: Arc::default() };
+            let cx = Cx {
+                id: n.id.clone(),
+                shared: shared.clone(),
+                info,
+                params: Arc::new(n.params.clone()),
+                retries: Arc::new(tokio::sync::Mutex::new(retry_rx)),
+                arrived: Arc::default(),
+                tray_seen: Arc::default(),
+                tray_cut: Arc::default(),
+            };
             let rx = join(std::mem::take(&mut ins[i]), &mut tasks);
             let inlet = Inlet { rx, cx: cx.clone(), started: false };
             let outlet = Outlet { to: std::mem::take(&mut outs[i]), cx: Some(cx.clone()) };
@@ -400,6 +411,17 @@ impl Run {
         self.shared.raw.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.iter().cloned().collect())).collect()
     }
 
+    /// Lets go of the drive so its tray can open: every read on it stops
+    /// (its tool is killed and waited for), and no step starts another
+    /// until it's asked to again. Done once nothing holds the drive, or
+    /// after `wait`; gives whether it was let go of in time.
+    pub fn release_drive(&self, wait: std::time::Duration) -> impl std::future::Future<Output = bool> + Send + 'static {
+        let shared = self.shared.clone();
+        shared.tray.send_modify(|g| *g += 1);
+        let mut holding = shared.holding.subscribe();
+        async move { tokio::time::timeout(wait, holding.wait_for(|n| *n == 0)).await.is_ok_and(|r| r.is_ok()) }
+    }
+
     /// Waits for every step to finish, and gives the last snapshot.
     pub async fn finished(self) -> Snapshot {
         let _ = self.done.await;
@@ -431,6 +453,10 @@ pub(crate) struct Shared {
     pub raw: Mutex<HashMap<String, std::collections::VecDeque<String>>>,
     /// All of it, as it comes, in the working folder.
     pub raw_file: Mutex<Option<std::io::BufWriter<std::fs::File>>>,
+    /// How many times the drive has been let go of for its tray to open.
+    pub tray: watch::Sender<u64>,
+    /// How many reads hold the drive just now (see `Cx::drive_read`).
+    pub holding: watch::Sender<usize>,
     /// This run's working folder, made when first asked for.
     pub work: std::path::PathBuf,
 }
@@ -533,6 +559,14 @@ fn finish(cx: &Cx, result: Result<()>) {
                 v.state = StepState::Idle;
             }
             v.progress = None;
+        }
+        Err(_) if cx.tray_cut() => {
+            v.state = StepState::Bad;
+            v.status = "Read stopped".into();
+            v.qualifier.clear();
+            v.detail = "Tray opened".into();
+            v.progress = None;
+            v.record.log.push(crate::snapshot::LogLine { at: crate::setting::now(), line: "read stopped: tray opened".into() });
         }
         Err(e) => {
             v.state = StepState::Bad;

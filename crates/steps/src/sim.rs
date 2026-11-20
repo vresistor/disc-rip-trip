@@ -29,19 +29,20 @@ pub const TRACKS: [(&str, u32); 17] = [
     ("I Fought Piranhas", 189),
 ];
 
-pub fn register(r: &mut Registry, bad_track: Option<u32>) {
+pub fn register(r: &mut Registry, bad_tracks: Vec<u32>) {
     r.add(Drive);
     r.add(AudioCd);
     for l in [Lookup::MusicBrainz, Lookup::CdText, Lookup::Discogs, Lookup::GnuDb, Lookup::CoverArt, Lookup::Lyrics] {
         r.add(l);
     }
     r.add(crate::choose::Choose);
-    r.add(Rip { bad_track });
+    let bad = !bad_tracks.is_empty();
+    r.add(Rip { bad_tracks });
     for c in crate::real::encode::ALL {
         r.add(Encode(c));
     }
     r.add(DataDisc);
-    r.add(Image { bad: bad_track.is_some() });
+    r.add(Image { bad });
     r.add(Check);
     r.add(Chd);
     r.add(Keep);
@@ -290,7 +291,7 @@ impl Step for Lookup {
 // ---- rip ------------------------------------------------------------------------------------
 
 struct Rip {
-    bad_track: Option<u32>,
+    bad_tracks: Vec<u32>,
 }
 
 #[async_trait]
@@ -317,7 +318,8 @@ impl Step for Rip {
         for i in &items {
             cx.item(i, ItemState::Waiting, "");
         }
-        let mut bad: Vec<Item> = Vec::new();
+        // Each track that waits for you, and why.
+        let mut bad: Vec<(Item, &str)> = Vec::new();
         let mut done = 0;
         {
             let _drive = cx.lane(LaneKind::Drive).await;
@@ -337,14 +339,30 @@ impl Step for Rip {
                 cx.item(item, ItemState::Busy, "reading");
                 crate::real::rip_says(&cx, format!("{} · {}", crate::real::track_line(n, &item.label), left(n)));
                 cx.raw(format!("Ripping track {n}, 0.0% [------------------------------] (avg speed:  0.00x)"));
-                cx.sleep(TRACKS.get(n as usize - 1).map_or(150, |t| t.1) as u64 * 12).await?;
+                // Opening the tray stops the read, as cyanrip's is; and
+                // none starts after it till you ask.
+                let cut = cx.drive_released() || {
+                    let hold = cx.drive_read();
+                    tokio::select! {
+                        r = cx.sleep(TRACKS.get(n as usize - 1).map_or(150, |t| t.1) as u64 * 12) => { r?; false }
+                        _ = hold.stop() => true,
+                    }
+                };
+                if cx.stopped() {
+                    return Ok(());
+                }
+                if cut {
+                    crate::real::rip_verdict(&cx, item, ItemState::Bad, crate::real::TRAY_OPENED);
+                    bad.push((item.clone(), crate::real::TRAY_OPENED));
+                    continue;
+                }
                 cx.raw(format!("Ripping track {n}, 100.0% [==============================] (avg speed:  8.12x)"));
-                if Some(n) == self.bad_track {
+                if self.bad_tracks.contains(&n) {
                     cx.raw("    Accurip:         not found (Accurip v1: no match, v2: no match)");
                     cx.raw(format!("Track {n} ripped and encoded successfully!"));
                     cx.log(format!("track {n}: no match in AccurateRip"));
                     crate::real::rip_verdict(&cx, item, ItemState::Bad, "no match");
-                    bad.push(item.clone());
+                    bad.push((item.clone(), "no match"));
                 } else {
                     cx.raw(format!("    Accurip:         verified (v2, confidence {})", 103 + n % 2));
                     cx.raw(format!("Track {n} ripped and encoded successfully!"));
@@ -358,11 +376,11 @@ impl Step for Rip {
         }
         while !bad.is_empty() {
             cx.state(StepState::Bad);
-            let notes: Vec<(u32, String)> = bad.iter().map(|i| (i.index.unwrap(), "no match".to_owned())).collect();
+            let notes: Vec<(u32, String)> = bad.iter().map(|(i, why)| (i.index.unwrap(), why.to_string())).collect();
             crate::real::rip_says(&cx, crate::real::rip_needs(&notes));
             let Some(req) = cx.next_retry().await else { return Ok(()) };
-            let Some(pos) = bad.iter().position(|i| i.id == req.item) else { continue };
-            let mut item = bad[pos].clone();
+            let Some(pos) = bad.iter().position(|(i, _)| i.id == req.item) else { continue };
+            let mut item = bad[pos].0.clone();
             match req.option.as_str() {
                 "keep" => {
                     crate::real::rip_verdict(&cx, &mut item, ItemState::Ok, crate::real::KEPT);

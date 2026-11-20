@@ -116,16 +116,20 @@ fn start(s: &Setup, ok: Arc<AtomicBool>) -> Run {
     reg.add(Disc);
     reg.add(Sink);
     let log = s.log.clone();
-    reg.add(drt_steps::real::Rip::with_flush(Arc::new(move |dev, lba, count| {
-        use std::io::Write;
-        let good = ok.load(Ordering::SeqCst);
-        writeln!(std::fs::OpenOptions::new().append(true).create(true).open(&log)?, "flush {dev} {lba} {count}{}", if good { "" } else { " failed" })?;
-        if good {
-            Ok(())
-        } else {
-            Err(std::io::Error::other("the drive refused the command"))
-        }
-    })));
+    reg.add(
+        drt_steps::real::Rip::with_flush(Arc::new(move |dev, lba, count| {
+            use std::io::Write;
+            let good = ok.load(Ordering::SeqCst);
+            writeln!(std::fs::OpenOptions::new().append(true).create(true).open(&log)?, "flush {dev} {lba} {count}{}", if good { "" } else { " failed" })?;
+            if good {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("the drive refused the command"))
+            }
+        }))
+        // The stand-in drive always has its disc in.
+        .with_disc_check(Arc::new(|_| true)),
+    );
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
     e.work_root = s.base.join("runs");

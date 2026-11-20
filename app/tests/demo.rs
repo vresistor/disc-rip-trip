@@ -64,6 +64,7 @@ fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, size: egui::V
         open_folder: Arc::new(|_| Ok(())),
         pick_folder: Arc::new(|_| None),
         send_test: Arc::new(|_, _, _| Box::pin(async { Ok(vec![]) })),
+        open_tray: Arc::new(|_| Ok(())),
         connected: Arc::new(move || drives.clone()),
     };
     let mut model = Model::new(deps);

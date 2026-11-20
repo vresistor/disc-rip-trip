@@ -355,6 +355,10 @@ enum Act {
     Measure {
         busy: bool,
     },
+    /// Stop any read on the recipe's drive and open its tray.
+    OpenTray {
+        busy: bool,
+    },
     AskRemove,
     Remove,
     Keep,
@@ -363,12 +367,6 @@ enum Act {
     Skip,
     /// Send each item's choice.
     UseThese,
-    /// One of the step's retries for its one item that needs you.
-    Retry {
-        item: String,
-        option: String,
-        label: String,
-    },
     /// The first retry, for every item that needs you.
     RetryAll {
         items: Vec<String>,
@@ -523,6 +521,9 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                         plan.icon = "drive-off".into();
                         plan.colour = Pal::get(app.dark).subtle;
                     }
+                    if app.m.can_open_tray(i) {
+                        plan.acts.push(Act::OpenTray { busy: app.m.opening_tray(i) });
+                    }
                     let missing = app.m.findable_missing(i).iter().any(|m| m.step == *id);
                     // Not while the drive is reading: its settings are locked.
                     if (missing || app.m.finding.contains_key(&i)) && !app.m.locked(i, Scope::Drive) {
@@ -556,12 +557,13 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                         [_] => format!("{}.", v.detail),
                         b => format!("{} tracks need you.", b.len()),
                     };
-                    if let [one] = bad.as_slice() {
-                        let (settle, tries): (Vec<_>, Vec<_>) = info.retries.iter().partition(|o| matches!(o.id, "keep" | "leave_out"));
-                        for o in settle.iter().filter(|o| o.id == "keep").chain(tries.iter().take(2).rev()) {
-                            plan.acts.push(Act::Retry { item: one.id.clone(), option: o.id.to_owned(), label: o.label.to_owned() });
-                        }
-                    } else if bad.len() > 1 {
+                    // While it has the drive: stop and take the disc out.
+                    if app.m.ripping(i) && app.m.shows_newest(i) && app.m.can_open_tray(i) {
+                        plan.acts.push(Act::OpenTray { busy: app.m.opening_tray(i) });
+                    }
+                    // One track's choices are on its row, not here too;
+                    // several get one button for them all.
+                    if bad.len() > 1 {
                         if let Some(o) = info.retries.iter().find(|o| !matches!(o.id, "keep" | "leave_out")) {
                             plan.acts.push(Act::RetryAll { items: bad.iter().map(|x| x.id.clone()).collect(), option: o.id.to_owned() });
                         }
@@ -873,7 +875,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Pal, plan: &Plan, t: f64) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         for (k, act) in plan.acts.iter().enumerate() {
-            let primary = k + 1 == plan.acts.len() && !matches!(act, Act::OpenFolder { .. } | Act::AskRemove | Act::Keep | Act::Skip);
+            let primary = k + 1 == plan.acts.len() && !matches!(act, Act::OpenFolder { .. } | Act::AskRemove | Act::Keep | Act::Skip | Act::OpenTray { .. });
             let clicked = match act {
                 Act::OpenFolder { label, path } => Btn::new("folder-link", label).look(Look::Quiet).font(font(13.0, 500)).show(ui, p).on_hover_text(path.display().to_string()).clicked(),
                 Act::LetThrough(n) => Btn::new("play", &if *n > 0 { format!("Let {n} through") } else { "Let them through".into() }).look(Look::Primary).show(ui, p).clicked(),
@@ -883,6 +885,11 @@ fn header(app: &mut App, ui: &mut Ui, p: &Pal, plan: &Plan, t: f64) {
                     let label = if *busy { "Measuring…" } else { "Measure offset" };
                     Btn::new("", label).look(if primary { Look::Primary } else { Look::Plain }).enabled(!busy && !app.m.finding.contains_key(&i)).show(ui, p).clicked()
                 }
+                Act::OpenTray { busy } => Btn::new("next-disc", if *busy { "Opening…" } else { "Open tray" })
+                    .enabled(!busy)
+                    .show(ui, p)
+                    .on_hover_text("Stops any read on this drive; a track being read waits for you")
+                    .clicked(),
                 // The one thing to do with a step this build doesn't have.
                 Act::AskRemove if plan.body == Body::None && plan.pill.as_ref().is_some_and(|x| x.0 == "Not available") => danger(ui, p, "Remove"),
                 Act::AskRemove => Btn::new("trash", "Remove").look(Look::Quiet).fg(p.bad).font(font(13.0, 500)).show(ui, p).clicked(),
@@ -890,8 +897,6 @@ fn header(app: &mut App, ui: &mut Ui, p: &Pal, plan: &Plan, t: f64) {
                 Act::Keep => Btn::new("", "Don't remove").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked(),
                 Act::Skip => Btn::new("", "Skip").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked(),
                 Act::UseThese => Btn::new("", "Use these").look(Look::Primary).show(ui, p).clicked(),
-                Act::Retry { label, option, .. } if option == "keep" => Btn::new("", label).look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked(),
-                Act::Retry { label, .. } => Btn::new("", label).look(if primary { Look::Primary } else { Look::Plain }).show(ui, p).clicked(),
                 Act::RetryAll { .. } => Btn::new("", "Read them all again").look(Look::Primary).show(ui, p).clicked(),
             };
             if clicked {
@@ -976,6 +981,7 @@ fn act_on(app: &mut App, ui: &Ui, act: Act) {
         }
         Act::Measure { .. } if !app.m.locked(i, Scope::Drive) => app.m.look_up(i, true),
         Act::Measure { .. } => {}
+        Act::OpenTray { .. } => app.m.open_tray(i),
         Act::AskRemove => {
             let gone = app.m.removal(i, &id);
             if gone.is_empty() {
@@ -992,7 +998,6 @@ fn act_on(app: &mut App, ui: &Ui, act: Act) {
             }
         }
         Act::Keep => app.confirm_remove = None,
-        Act::Retry { item, option, .. } => app.m.send(i, Command::Retry { step: id, item, option }),
         Act::RetryAll { items, option } => {
             for item in items {
                 app.m.send(i, Command::Retry { step: id.clone(), item, option: option.clone() });
@@ -1651,8 +1656,6 @@ struct Row {
     dest: Option<(String, String)>,
     /// Buttons in the row: (label, retry id, quiet).
     acts: Vec<(String, String, bool)>,
-    /// Further actions, under More ▾: (label, retry id).
-    more: Vec<(String, String)>,
     item: Option<String>,
     attn: bool,
     /// How far along an item in progress is: a thin bar under its title.
@@ -1682,7 +1685,6 @@ impl Row {
             verdict: None,
             dest: None,
             acts: vec![],
-            more: vec![],
             item: None,
             attn: false,
             progress: None,
@@ -1846,11 +1848,6 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
     let f = font(13.0, 400);
     let small = font(13.0, 400);
     let two = r.why.is_some();
-    // Narrow, a row that needs you puts its buttons on a third line, so
-    // its reason has the width.
-    let buttons: f32 = r.acts.iter().map(|a| ui.painter().layout_no_wrap(a.0.clone(), font(13.0, 500), p.ink).size().x + 20.0).sum::<f32>() + if r.more.is_empty() { 0.0 } else { 78.0 };
-    let why_need = r.why.as_ref().map_or(0.0, |y| ui.painter().layout_no_wrap(y.clone(), font(13.0, 400), p.ink).size().x);
-    let three = two && buttons > 0.0 && why_need + 12.0 + buttons > w - 46.0;
     // Measured, not guessed: what each part needs. The title gets all the
     // room the others don't; a file name that won't fit beside it goes
     // under it instead of crushing it.
@@ -1865,15 +1862,15 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
     let under = !two && r.dest.is_some() && (r.two_line || title_need + 14.0 + dest_need > room);
     // One line, 24; a row that needs you is 48, with its reason; one with
     // its file under it, 40.
-    let h = if three {
-        70.0
-    } else if two {
+    let h = if two {
         48.0
     } else if under {
         40.0
     } else {
         24.0
     };
+    // Its background goes under its buttons too, drawn once they're placed.
+    let bg = ui.painter().add(egui::Shape::Noop);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, h), if r.toggle.is_some() { Sense::click() } else { Sense::hover() });
     let toggled = resp.clicked();
     let name = [
@@ -1900,9 +1897,6 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
     // What's cut is shown whole on hovering the row, with any proof.
     let mut cut: Vec<String> = vec![];
     let pt = ui.painter().clone();
-    if r.attn {
-        pt.rect_filled(rect, 6.0, mix(p.bad_soft, if p.dark { 0.8 } else { 0.6 }, p.raised));
-    }
     if !first {
         pt.hline(rect.x_range(), rect.top(), Stroke::new(1.0, p.line_soft));
     }
@@ -1918,77 +1912,12 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
         rect.center().y
     };
     let cy2 = rect.top() + 32.0;
-    // Where the buttons go: the second line, or narrow the third.
-    let by_two = if three { rect.top() + 55.0 } else { cy2 };
     let mut x = rect.left() + if r.attn { 8.0 } else { 0.0 };
     if let Some(n) = r.n {
         pt.text(pos2(x + 18.0, cy), egui::Align2::RIGHT_CENTER, n.to_string(), crate::theme::tnum(13.0, 400), p.subtle);
         x += 30.0;
     } else {
         x += 4.0;
-    }
-    // Buttons: on the second line of a row that needs you.
-    let mut right2 = rect.right() - 6.0;
-    let mut clicked = None;
-    // Right to left: the quiet ones (Keep it anyway, Skip this track), More ▾, then the
-    // buttons, so they read buttons first.
-    let mut order: Vec<&(String, String, bool)> = r.acts.iter().filter(|a| a.2).collect();
-    order.reverse();
-    let loud: Vec<&(String, String, bool)> = r.acts.iter().filter(|a| !a.2).collect();
-    let mut drew_more = r.more.is_empty();
-    let mut seq: Vec<Option<&(String, String, bool)>> = order.into_iter().map(Some).collect();
-    seq.push(None);
-    seq.extend(loud.into_iter().rev().map(Some));
-    for entry in seq {
-        let Some((label, id, quiet)) = entry else {
-            if !drew_more {
-                drew_more = true;
-                let by = if two { by_two } else { cy };
-                let mw = 74.0;
-                let mr = Rect::from_center_size(pos2(right2 - mw / 2.0, by), vec2(mw, 20.0));
-                let mut ch = None;
-                ui.scope_builder(egui::UiBuilder::new().max_rect(mr).layout(L::left_to_right(Align::Center)), |ui| {
-                    // "More" and the app's chevron, as a quiet button.
-                    let acc = format!("More, {}", r.title);
-                    let b = more_button(ui, p, &acc);
-                    egui::Popup::menu(&b).show(|ui| {
-                        for (label, id) in &r.more {
-                            if ui.button(RichText::new(label).font(font(13.0, 400))).clicked() {
-                                ch = Some(id.clone());
-                                ui.close();
-                            }
-                        }
-                    });
-                });
-                if let Some(id) = ch {
-                    clicked = r.item.clone().map(|i| (i, id));
-                }
-                right2 = mr.left() - 4.0;
-            }
-            continue;
-        };
-        let g = pt.layout_no_wrap(label.clone(), font(13.0, 500), if *quiet { p.muted } else { p.ink });
-        let bw = g.size().x + 16.0;
-        let by = if two { by_two } else { cy };
-        let br = Rect::from_center_size(pos2(right2 - bw / 2.0, by), vec2(bw, 20.0));
-        let bresp = ui.interact(br, ui.scope_id().with(("act", &r.item, id)), Sense::click());
-        let acc = format!("{label}, {}", r.title);
-        bresp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &acc));
-        if *quiet {
-            if bresp.hovered() {
-                pt.rect_filled(br, 6.0, mix(p.ink, 0.06, p.raised));
-            }
-        } else {
-            pt.rect(br, 6.0, if bresp.hovered() { mix(p.ink, 0.04, p.raised) } else { p.raised }, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
-        }
-        if bresp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        pt.galley(pos2(br.left() + 8.0, by - g.size().y / 2.0), g, p.ink);
-        if bresp.clicked() {
-            clicked = r.item.clone().map(|i| (i, id.clone()));
-        }
-        right2 = br.left() - 4.0;
     }
     let mut right = rect.right() - 6.0;
     // A row that opens: its chevron at the end, turning as it opens.
@@ -2039,9 +1968,6 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
             pt.galley(pos2(nx, cy - g.size().y / 2.0 + 1.0), g, p.subtle);
         }
         right = vx - 12.0;
-    }
-    if !two && !r.acts.is_empty() {
-        right = right.min(right2 - 8.0);
     }
     let dest_font = if under { crate::theme::tnum(12.5, 400) } else { crate::theme::tnum(13.0, 400) };
     let dest_job = |w: f32| {
@@ -2104,8 +2030,8 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
         cut.insert(0, r.title.clone());
     }
     if let Some(why) = &r.why {
-        let end = if three { rect.right() - 6.0 } else { right2 - 12.0 };
-        let ww = (end - x).max(40.0);
+        // The whole width: the buttons are on a line of their own.
+        let ww = (rect.right() - 6.0 - x).max(40.0);
         if measure(why, small.clone()) > ww + 0.5 {
             cut.push(why.clone());
         }
@@ -2118,6 +2044,46 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
     let tip: Vec<String> = cut.iter().cloned().chain(r.hover.clone()).collect();
     if !tip.is_empty() {
         resp.on_hover_text(tip.join("\n"));
+    }
+    // Its choices, on a line of their own under its reason, lined up with
+    // its title: the first filled, the others outlined, settling it without
+    // a good read (Keep it anyway, Skip) quiet. What doesn't fit wraps.
+    let mut clicked = None;
+    let mut bottom = rect.bottom();
+    if !r.acts.is_empty() {
+        let indent = x - rect.left();
+        let width = (w - indent - 8.0).max(80.0);
+        let placed = ui
+            .allocate_ui_with_layout(vec2(w, 0.0), L::left_to_right(Align::Min), |ui| {
+                ui.add_space(indent);
+                ui.allocate_ui_with_layout(vec2(width, 0.0), L::left_to_right(Align::Center).with_main_wrap(true), |ui| {
+                    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                    let first = r.acts.iter().position(|a| !a.2);
+                    for (k, (label, id, quiet)) in r.acts.iter().enumerate() {
+                        let acc = format!("{label}, {}", r.title);
+                        let look = if *quiet {
+                            Look::Quiet
+                        } else if Some(k) == first {
+                            Look::Primary
+                        } else {
+                            Look::Plain
+                        };
+                        let b = Btn::new("", label).look(look).font(font(13.0, 500)).pad(if *quiet { vec2(8.0, 5.0) } else { vec2(11.0, 5.0) }).name(&acc).show(ui, p);
+                        if b.clicked() {
+                            clicked = r.item.clone().map(|i| (i, id.clone()));
+                        }
+                    }
+                })
+                .response
+                .rect
+            })
+            .inner;
+        ui.add_space(10.0);
+        bottom = placed.bottom() + 10.0;
+    }
+    if r.attn {
+        let all = Rect::from_min_max(rect.min, pos2(rect.right(), bottom));
+        ui.painter().set(bg, egui::Shape::rect_filled(all, 6.0, mix(p.bad_soft, if p.dark { 0.8 } else { 0.6 }, p.raised)));
     }
     (clicked, cut_short || !cut.is_empty(), toggled)
 }
@@ -2140,24 +2106,6 @@ fn keep_extension(name: &str, w: f32, measure: impl Fn(&str) -> f32) -> String {
         }
     }
     format!("…{ext}")
-}
-
-/// A quiet "More" with the chevron after it, the menu under it.
-fn more_button(ui: &mut Ui, p: &Pal, name: &str) -> egui::Response {
-    let g = ui.painter().layout_no_wrap("More".into(), font(12.5, 500), p.muted);
-    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 12.0 + 6.0 + 16.0, 24.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, name));
-    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    if resp.is_pointer_button_down_on() {
-        ui.painter().rect_filled(r, 6.0, mix(p.ink, 0.10, p.raised));
-    } else if resp.hovered() || open {
-        ui.painter().rect_filled(r, 6.0, p.bg);
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, p.muted);
-    crate::widgets::chevron(ui.painter(), pos2(r.right() - 13.0, r.center().y + 0.5), 13.0, if open { std::f32::consts::PI } else { 0.0 }, p.muted);
-    crate::widgets::focus_ring(ui, &resp, r, 6.0, p);
-    resp
 }
 
 /// What a Rip note says, as a verdict: words, tone, a faint note, and why
@@ -2190,6 +2138,10 @@ pub fn rip_verdict(state: ItemState, note: &str) -> (String, Tone, String, Optio
                 ("Doesn't match", "Other people's rips of this disc differ".into())
             } else if n.is_empty() {
                 ("Couldn't be read", "Nothing came back from the drive".into())
+            } else if n == drt_steps::real::TRAY_OPENED {
+                ("Stopped", n.to_owned())
+            } else if n == drt_steps::real::NO_DISC {
+                ("Not read", n.to_owned())
             } else {
                 let mut c = n.chars();
                 ("Unverified", c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default())
@@ -2228,12 +2180,11 @@ fn reads_differ(n: &str) -> String {
     }
 }
 
-/// The step's own retries on a row that needs you: the first two as
-/// buttons, Keep it anyway and Skip as quiet words, the rest under More.
+/// The step's own retries on a row that needs you: each a button, then
+/// Keep it anyway and Skip as quiet words.
 fn retries(r: &mut Row, info: &StepInfo) {
     let (settle, tries): (Vec<_>, Vec<_>) = info.retries.iter().partition(|o| matches!(o.id, "keep" | "leave_out"));
-    r.acts = tries.iter().take(2).map(|o| (o.label.to_owned(), o.id.to_owned(), false)).collect();
-    r.more = tries.iter().skip(2).map(|o| (o.label.to_owned(), o.id.to_owned())).collect();
+    r.acts = tries.iter().map(|o| (o.label.to_owned(), o.id.to_owned(), false)).collect();
     r.acts.extend(settle.iter().map(|o| (o.label.to_owned(), o.id.to_owned(), true)));
 }
 
@@ -2665,12 +2616,6 @@ fn rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepI
             r.widest = vec![if narrow(ui.available_width()) { (String::new(), "000".into()) } else { ("Verified".into(), "000  DDDDDDDD".into()) }];
             if r.attn {
                 retries(&mut r, info);
-                // One to decide: its main retries and Keep are the header's
-                // actions; the row keeps the rest.
-                if v.count(ItemState::Bad) == 1 {
-                    let header: Vec<&str> = info.retries.iter().filter(|o| !matches!(o.id, "keep" | "leave_out")).take(2).map(|o| o.id).chain(["keep"]).collect();
-                    r.acts.retain(|a| !header.contains(&a.1.as_str()));
-                }
             }
             if it.state == ItemState::Busy {
                 let (pct, left) = progress(&it.note);
@@ -2839,8 +2784,11 @@ fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &Step
                     _ => None,
                 };
                 let needs = v.count(ItemState::Bad);
+                // Tracks the tray stopped, or that found no disc, weren't read.
+                let unread = v.items.iter().filter(|i| i.state == ItemState::Bad && matches!(i.note.as_str(), drt_steps::real::TRAY_OPENED | drt_steps::real::NO_DISC)).count();
                 if needs > 0 {
-                    ui.add(egui::Label::new(RichText::new(format!("All {} read", v.items.len())).font(font(16.0, 600)).color(p.ink)).wrap());
+                    let head = if unread > 0 { format!("{} of {} read", v.items.len() - unread, v.items.len()) } else { format!("All {} read", v.items.len()) };
+                    ui.add(egui::Label::new(RichText::new(head).font(font(16.0, 600)).color(p.ink)).wrap());
                 } else if let Some(tk) = took {
                     ui.add(egui::Label::new(RichText::new(tk).font(crate::theme::tnum(16.0, 600)).color(p.ink)).wrap());
                 }

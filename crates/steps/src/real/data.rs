@@ -193,7 +193,9 @@ impl Image {
     /// and keeping its findings in the log.
     pub(crate) async fn phase(&self, cx: &Cx, item: &Item, t: &redumper::Target, args: Vec<String>, out: &mut String) -> Result<bool> {
         cx.log(format!("redumper {}", args.join(" ")));
-        let (text, ok) = redumper::run(&args, t, cx.cancelled(), |line| {
+        // Opening the tray stops it.
+        let hold = cx.drive_read();
+        let (text, ok) = redumper::run(&args, t, hold.stop(), |line| {
             if let Some(p) = redumper::phase(line) {
                 cx.status("", p);
                 cx.drive_says(StepState::Busy, p, "");

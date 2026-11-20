@@ -25,7 +25,12 @@ pub fn real() -> Registry {
 }
 
 pub fn simulated(bad_track: Option<u32>) -> Registry {
+    simulated_bad(bad_track.into_iter().collect())
+}
+
+/// Every step, simulated, with several tracks Rip fails to verify.
+pub fn simulated_bad(bad_tracks: Vec<u32>) -> Registry {
     let mut r = Registry::default();
-    sim::register(&mut r, bad_track);
+    sim::register(&mut r, bad_tracks);
     r
 }
