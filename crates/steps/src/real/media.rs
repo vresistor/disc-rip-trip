@@ -181,6 +181,32 @@ pub fn read(device: &str) -> Found {
 }
 
 /// The disc's size from sysfs, which counts 512-byte sectors.
+/// Whether there's a disc in the drive, as the drive says just now.
+/// Not the block device's size: that keeps the last disc's size after
+/// the tray opens, until something reads the drive again.
+#[cfg(target_os = "linux")]
+pub fn disc_in(device: &str) -> bool {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    const CDROM_DRIVE_STATUS: libc::c_ulong = 0x5326;
+    const CDS_NO_INFO: libc::c_int = 0;
+    const CDS_DISC_OK: libc::c_int = 4;
+    let Ok(f) = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(device) else { return false };
+    // SAFETY: an ioctl taking a slot number (CDSL_CURRENT) on a descriptor we hold open.
+    let status = unsafe { libc::ioctl(f.as_raw_fd(), CDROM_DRIVE_STATUS, libc::c_int::MAX) };
+    match status {
+        CDS_DISC_OK => true,
+        // A drive that can't say: fall back on the size.
+        s if s < 0 || s == CDS_NO_INFO => sysfs_bytes(device) > 0,
+        _ => false,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn disc_in(device: &str) -> bool {
+    sysfs_bytes(device) > 0
+}
+
 pub fn sysfs_bytes(device: &str) -> u64 {
     let real = std::fs::canonicalize(device).unwrap_or_else(|_| Path::new(device).to_path_buf());
     let name = real.file_name().and_then(|n| n.to_str()).unwrap_or("");

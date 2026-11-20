@@ -135,7 +135,7 @@ impl Step for Drive {
         inlet.recv().await;
         let name = cx.text("drive");
         let Some(dev) = find_drive(&name) else { bail!("{name} isn't connected") };
-        while media::sysfs_bytes(&dev) == 0 {
+        while !media::disc_in(&dev) {
             cx.status("Empty", "Insert a disc");
             cx.sleep(1000).await?;
         }
@@ -1065,7 +1065,9 @@ impl Step for NextDisc {
                     cx.state(StepState::Bad);
                     cx.status("Didn't open", d);
                 }
-                None => cx.status("Nothing to eject", ""),
+                // Nothing was read: no disc to take out, and starting
+                // again would only find the same empty drive.
+                None => bail!("no disc was read, so it doesn't start on another"),
             }
         } else {
             cx.sleep(500).await?;
