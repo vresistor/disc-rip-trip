@@ -482,6 +482,7 @@ impl Step for Place {
         let mut done = 0;
         let mut last = String::new();
         let root = PathBuf::from(&folder);
+        let mut taken: Vec<(Item, PathBuf)> = Vec::new();
         while let Some(file) = inlet.recv().await {
             if file.id.starts_with(crate::real::video::ITEM_PREFIX) {
                 // Where it would go, from the real template.
@@ -508,6 +509,13 @@ impl Step for Place {
                 continue;
             }
             let total = parts(file.context());
+            // A file really at its place (a test puts one there) is asked
+            // about, once, as the real Folder does.
+            if let Some(dest) = Some(sim_dest(&folder, &file)).filter(|d| d.exists()) {
+                cx.item(&file, ItemState::Waiting, "a different file has this name");
+                taken.push((file, dest));
+                continue;
+            }
             let _f = cx.lane(LaneKind::File(folder.clone())).await;
             cx.item(&file, ItemState::Busy, "copying");
             let name = file.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -519,26 +527,61 @@ impl Step for Place {
             cx.sleep(250).await?;
             done += 1;
             cx.item(&file, ItemState::Ok, "");
-            // Filed under its folder, as the real one names it (roughly).
-            let name = file.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let ext = std::path::Path::new(&name).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-            let dest = match file.index {
-                Some(n) => PathBuf::from(&folder).join("The White Stripes/The White Stripes").join(format!("{n:02} - {}.{ext}", file.label)),
-                None => PathBuf::from(&folder).join("The White Stripes/The White Stripes").join(&name),
-            };
-            let secs = file.index.and_then(|n| TRACKS.get(n as usize - 1)).map_or(1, |t| t.1) as u64;
-            cx.made_sized(&dest, if file.index.is_some() { secs * sim_rate(&ext) } else { 2_048 });
-            let file = file.becomes(file.kind, Some(dest));
+            let dest = sim_dest(&folder, &file);
+            let file = filed(&cx, file, dest);
             last = crate::real::where_filed(&root, file.path.as_deref().unwrap_or(&root));
             crate::real::filed_says(&cx, done, "");
             cx.progress(Some(done as f32 / total as f32));
             outlet.send(file).await;
+        }
+        if !taken.is_empty() && !cx.stopped() {
+            let place = crate::real::where_filed(&root, &taken[0].1);
+            let Ok(answer) = cx.ask(crate::real::name_taken(taken.len(), &place)).await else { return Ok(()) };
+            let _f = cx.lane(LaneKind::File(folder.clone())).await;
+            for (file, dest) in taken {
+                let dest = match answer {
+                    drt_engine::Answer::Pick(0) => dest,
+                    drt_engine::Answer::Pick(2) | drt_engine::Answer::Skip => {
+                        cx.item(&file, ItemState::Skipped, "not filed: a different file has this name");
+                        continue;
+                    }
+                    _ => (2..).map(|n| crate::real::numbered(&dest, n)).find(|d| !d.exists()).unwrap_or(dest),
+                };
+                cx.sleep(250).await?;
+                done += 1;
+                cx.item(&file, ItemState::Ok, "");
+                let file = filed(&cx, file, dest);
+                last = crate::real::where_filed(&root, file.path.as_deref().unwrap_or(&root));
+                outlet.send(file).await;
+            }
+            cx.state(StepState::Busy);
         }
         if done > 0 {
             crate::real::filed_says(&cx, done, last);
         }
         Ok(())
     }
+}
+
+/// Where the simulated Folder files a file, as the real one names it
+/// (roughly): under its folder, not `~` expanded, so only a test's folder
+/// can already hold one.
+fn sim_dest(folder: &str, file: &Item) -> PathBuf {
+    let name = file.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = std::path::Path::new(&name).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let dir = PathBuf::from(folder).join("The White Stripes/The White Stripes");
+    match file.index {
+        Some(n) => dir.join(format!("{n:02} - {}.{ext}", file.label)),
+        None => dir.join(&name),
+    }
+}
+
+/// The file, filed at `dest`: noted as made there, its size as it would be.
+fn filed(cx: &Cx, file: Item, dest: PathBuf) -> Item {
+    let ext = dest.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let secs = file.index.and_then(|n| TRACKS.get(n as usize - 1)).map_or(1, |t| t.1) as u64;
+    cx.made_sized(&dest, if file.index.is_some() { secs * sim_rate(&ext) } else { 2_048 });
+    file.becomes(file.kind, Some(dest))
 }
 
 // ---- steps that need everything first -------------------------------------------------------------

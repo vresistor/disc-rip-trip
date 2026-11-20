@@ -177,6 +177,10 @@ impl StepView {
 pub struct Choice {
     pub label: String,
     pub detail: String,
+    /// Picking it loses something already there (Replace them): its
+    /// button is drawn in the bad colour.
+    #[serde(default)]
+    pub destructive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -342,7 +346,7 @@ mod tests {
                     ItemChoice { id: "title-1".into(), label: "Title 1".into(), detail: "50:12".into(), preselected: Some(0) },
                     ItemChoice { id: "title-5".into(), label: "Title 5".into(), detail: "duplicate of title 2".into(), preselected: None },
                 ],
-                options: vec![Choice { label: "S03E01".into(), detail: "Mr. Ruggerio's Neighborhood".into() }],
+                options: vec![Choice { label: "S03E01".into(), detail: "Mr. Ruggerio's Neighborhood".into(), destructive: false }],
             },
         };
         let json = serde_json::to_string(&q).unwrap();

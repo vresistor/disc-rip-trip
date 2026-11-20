@@ -1557,15 +1557,15 @@ enum Taken {
 /// The one question a Folder asks when names are taken: *3 files already
 /// in Parquet Courts / Wide Awake!*. Keep both is picked: it loses nothing.
 pub fn name_taken(n: usize, place: &str) -> drt_engine::Question {
-    let choice = |l: &str, d: &str| drt_engine::Choice { label: l.into(), detail: d.into() };
+    let choice = |l: &str, d: &str, destructive| drt_engine::Choice { label: l.into(), detail: d.into(), destructive };
     let files = if n == 1 { "1 file".to_owned() } else { format!("{n} files") };
     drt_engine::Question {
         prompt: format!("{files} already in {place}"),
         shape: drt_engine::QuestionShape::PickOne {
             options: vec![
-                choice("Replace them", "The files there now are overwritten"),
-                choice("Keep both", "The new files get \" (2)\" after their names"),
-                choice("Skip", "The new files aren't filed"),
+                choice("Replace them", "The files there now are overwritten", true),
+                choice("Keep both", "The new files get \" (2)\" after their names", false),
+                choice("Skip", "The new files aren't filed", false),
             ],
             preselected: 1,
             details: None,

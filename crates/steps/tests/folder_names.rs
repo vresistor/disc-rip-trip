@@ -133,3 +133,43 @@ async fn a_folder_asks_once_and_the_cue_sheet_gets_the_names_it_chose() {
     assert_eq!(names(&base).len(), 4);
     std::fs::remove_dir_all(base).unwrap();
 }
+
+/// Each answer to *2 files already in …*, from a folder holding only the
+/// first copies: Replace overwrites them, Keep both adds " (2)", Skip
+/// files nothing and sends nothing on.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_answer_does_what_it_says() {
+    for (pick, what) in [(0, "replace"), (1, "keep-both"), (2, "skip")] {
+        let base = std::env::current_dir().unwrap().join(format!("../../target/drt-test/folder-answer-{what}"));
+        let _ = std::fs::remove_dir_all(&base);
+        run(&base, ["a1", "a2"], pick).await;
+        let before = cue(&base);
+        let (s, asked) = run(&base, ["b1", "b2"], pick).await;
+        assert_eq!(asked, ["2 files already in Parquet Courts / Wide Awake!"], "{what}");
+        let read = |name: &str| std::fs::read_to_string(album(&base).join(name)).unwrap();
+        let lib = &s.steps["lib"];
+        match what {
+            "replace" => {
+                assert_eq!(names(&base), ["01 - Total Football.flac", "02 - Violence.flac"], "no \" (2)\"");
+                assert_eq!((read("01 - Total Football.flac"), read("02 - Violence.flac")), ("b1".into(), "b2".into()), "overwritten");
+                assert!(lib.items.iter().all(|i| i.state == ItemState::Ok), "{:?}", lib.items);
+                assert_eq!(lib.status, "2 filed");
+                assert!(cue(&base).contains("FILE \"02 - Violence.flac\" WAVE"));
+            }
+            "keep-both" => {
+                assert_eq!(names(&base), ["01 - Total Football (2).flac", "01 - Total Football.flac", "02 - Violence (2).flac", "02 - Violence.flac"]);
+                assert_eq!((read("01 - Total Football.flac"), read("02 - Violence.flac")), ("a1".into(), "a2".into()), "the old ones untouched");
+                assert_eq!((read("01 - Total Football (2).flac"), read("02 - Violence (2).flac")), ("b1".into(), "b2".into()));
+                assert!(cue(&base).contains("FILE \"02 - Violence (2).flac\" WAVE"));
+            }
+            _ => {
+                assert_eq!(names(&base), ["01 - Total Football.flac", "02 - Violence.flac"], "nothing new");
+                assert_eq!((read("01 - Total Football.flac"), read("02 - Violence.flac")), ("a1".into(), "a2".into()), "untouched");
+                assert!(lib.items.iter().all(|i| i.state == ItemState::Skipped), "{:?}", lib.items);
+                assert!(s.steps["cue"].items.is_empty(), "nothing went on: {:?}", s.steps["cue"].items);
+                assert_eq!(cue(&base), before, "the cue sheet is the first one's");
+            }
+        }
+        std::fs::remove_dir_all(base).unwrap();
+    }
+}

@@ -115,6 +115,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
             (Tray::Question { step }, Body::Value) => value_question(app, ui, p, snap, step),
             (Tray::Question { .. }, Body::PerItem) => per_item(app, ui, p, snap),
             (Tray::Question { step }, Body::Choose) => choose(app, ui, p, snap, step, t),
+            (Tray::Question { step }, Body::Answers) => answers(app, ui, p, snap, step),
             (Tray::Step { id, focus }, body) => match tab {
                 Some(Tab::Progress) if *body == Body::Choose => choose(app, ui, p, snap, id, t),
                 Some(Tab::Progress) => result(app, ui, p, snap, id, t),
@@ -144,7 +145,15 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
 pub fn wants_wide(app: &App) -> bool {
     let Some(Tray::Question { step }) = &app.tray else { return false };
     let snap = app.m.snapshot(app.sel);
-    matches!(&snap.question, Some((s, q)) if s == step && matches!(q.shape, QuestionShape::PickOne { .. }))
+    let offered = snap.steps.get(step).is_some_and(|v| v.record.options.is_some());
+    offered && matches!(&snap.question, Some((s, q)) if s == step && matches!(q.shape, QuestionShape::PickOne { .. }))
+}
+
+/// Whether a step's question is one of its own few answers (a Folder's
+/// *Replace them*, *Keep both*, *Skip*) rather than candidates it was
+/// offered: it never put candidates to you.
+fn own_answers(v: &StepView, options: &[drt_engine::Choice]) -> bool {
+    !options.is_empty() && v.record.options.is_none()
 }
 
 /// Whether a step has a run to show: it has started, or has a record.
@@ -373,6 +382,8 @@ enum Body {
     /// settings and details, once it has one.
     Step,
     Choose,
+    /// The question's own answers, a button for each.
+    Answers,
     Value,
     /// A choice for each item.
     PerItem,
@@ -399,6 +410,18 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
             let v = snap.steps.get(step)?;
             let p = Pal::get(app.dark);
             match &q.shape {
+                QuestionShape::PickOne { options, skip, .. } if own_answers(v, options) => Some(Plan {
+                    icon: v.step.clone(),
+                    colour: p.kind(&v.step),
+                    name: v.name.clone(),
+                    pill: Some(("Needs you".into(), Tone::Warn, Some(StepState::Needs))),
+                    say: q.prompt.clone(),
+                    // A button for each answer, in the body with what it does.
+                    acts: if *skip { vec![Act::Skip] } else { vec![] },
+                    body: Body::Answers,
+                    rename: None,
+                    remove: false,
+                }),
                 QuestionShape::PickOne { options, preselected, details, skip } => {
                     let n = options.len();
                     // With nothing found, the form is the only choice.
@@ -3283,6 +3306,43 @@ fn cover(app: &mut App, ui: &mut Ui, p: &Pal, v: &StepView, ctx: Option<&Context
         if crate::widgets::link_at(ui, p, r.right(), r.center().y, label, "Open on Cover Art Archive", &url).1 {
             app.m.open_url(&url);
         }
+    }
+}
+
+// ---- a question's own answers -----------------------------------------------------------------
+
+/// Each answer as a button named for what it does, with what that means
+/// beside it: the one it would pick filled, one that loses what's there red.
+fn answers(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, step: &str) {
+    let Some((_, q)) = &snap.question else { return };
+    let QuestionShape::PickOne { options, preselected, .. } = &q.shape else { return };
+    let w = ui.available_width();
+    for (k, o) in options.iter().enumerate() {
+        let clicked = ui
+            .horizontal(|ui| {
+                ui.set_min_height(36.0);
+                ui.spacing_mut().item_spacing.x = 12.0;
+                // The buttons line up, the widest setting the column.
+                let bw = options.iter().map(|o| ui.painter().layout_no_wrap(o.label.clone(), font(14.0, 500), p.ink).size().x).fold(0.0, f32::max) + 28.0;
+                let x0 = ui.cursor().left();
+                let clicked = match (o.destructive, k == *preselected) {
+                    (true, _) => danger_button(ui, p, &o.label),
+                    (false, true) => Btn::new("", &o.label).look(Look::Primary).show(ui, p).clicked(),
+                    (false, false) => Btn::new("", &o.label).look(Look::Plain).show(ui, p).clicked(),
+                };
+                ui.add_space((x0 + bw - ui.cursor().left()).max(0.0));
+                if !o.detail.is_empty() {
+                    ui.allocate_ui_with_layout(vec2((w - bw - 12.0).max(80.0), 32.0), L::left_to_right(Align::Center), |ui| {
+                        ui.add(egui::Label::new(RichText::new(&o.detail).font(font(13.0, 400)).color(p.muted)).wrap());
+                    });
+                }
+                clicked
+            })
+            .inner;
+        if clicked {
+            app.m.send(app.sel, Command::Answer { step: step.to_owned(), answer: Answer::Pick(k) });
+        }
+        ui.add_space(6.0);
     }
 }
 

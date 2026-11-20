@@ -248,7 +248,7 @@ fn files_already_there_are_asked_about_with_a_button_for_each_answer() {
     click(&mut h, "Start");
     to_the_hold(&mut h);
     until(&mut h, "Review's question", |a| matches!(&a.tray, Some(Tray::Question { step }) if step == "review"));
-    h.get_by_label_contains("2 files already in The White Stripes / The White Stripes");
+    assert!(h.query_all_by_label_contains("2 files already in The White Stripes / The White Stripes").next().is_some());
     // Each answer is a button that says what it does, with what that means.
     for (button, means) in [("Replace them", "The files there now are overwritten"), ("Keep both", "The new files get \" (2)\" after their names"), ("Skip", "The new files aren't filed")] {
         h.get_by_label(button);
