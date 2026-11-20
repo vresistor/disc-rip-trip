@@ -3491,3 +3491,50 @@ fn notify_makes_up_a_topic_and_sends_a_test() {
     until_label(&mut h, "Sent to this computer, but ntfy: couldn't reach down.example");
     shot(&mut h, "step-notify-failed");
 }
+
+/// The sim Drive, but every disc after the first waits until `disc` is set.
+struct WaitingDrive {
+    inner: std::sync::Arc<dyn drt_engine::Step>,
+    runs: std::sync::atomic::AtomicUsize,
+    disc: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl drt_engine::Step for WaitingDrive {
+    fn info(&self) -> drt_engine::StepInfo {
+        self.inner.info()
+    }
+    async fn run(&self, inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+        if self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+            while !self.disc.load(std::sync::atomic::Ordering::SeqCst) {
+                cx.status("Empty", "Insert a disc");
+                cx.sleep(5).await?;
+            }
+        }
+        self.inner.run(inlet, outlet, cx).await
+    }
+}
+
+#[test]
+fn the_disc_before_stays_on_the_canvas_until_the_next_goes_in() {
+    let e = env();
+    let inner = simulated(None).get("drive").unwrap().0;
+    let disc = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut reg = simulated(None);
+    reg.add(WaitingDrive { inner, runs: Default::default(), disc: disc.clone() });
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
+    app_mut(&mut h).m.repeat_limit = Some(1);
+    click(&mut h, "Start");
+    to_the_hold(&mut h);
+    until(&mut h, "the second disc", |a| a.m.runs.get(&0).is_some_and(|v| v.len() == 2));
+    until(&mut h, "the drive to wait", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].status == "Empty"));
+    // The first disc's tracks are still there; the Drive says it's empty.
+    let s = app(&h).m.snapshot(0);
+    assert_eq!(s.steps["rip"].items.len(), 17, "the disc before, as it ended");
+    assert_eq!(s.steps["drive"].status, "Empty");
+    disc.store(true, std::sync::atomic::Ordering::SeqCst);
+    // In: the canvas is the new disc's from here.
+    until(&mut h, "the new disc", |a| a.m.newest(0).is_some_and(|r| r.snap.steps["drive"].state == StepState::Ok));
+    let a = app(&h);
+    assert_eq!(a.m.snapshot(0).steps["rip"].items.len(), a.m.newest(0).unwrap().snap.steps["rip"].items.len());
+}

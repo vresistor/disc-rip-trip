@@ -88,6 +88,9 @@ pub struct Model {
     /// header. Empty in the flatpak, which has them all.
     pub missing_tools: Vec<&'static str>,
     auto_left: HashMap<usize, Option<usize>>,
+    /// The disc before, as it ended: shown until the next disc goes in, so
+    /// the graph doesn't empty the moment the tray opens.
+    before_disc: HashMap<usize, Snapshot>,
     /// Recipes whose findable settings (a drive's offset) are being looked
     /// up, and whether by measuring.
     pub finding: HashMap<usize, bool>,
@@ -196,6 +199,7 @@ impl Model {
             repeat_limit: None,
             missing_tools: Vec::new(),
             auto_left: HashMap::new(),
+            before_disc: HashMap::new(),
             finding: HashMap::new(),
             connected: None,
             last: HashMap::new(),
@@ -596,6 +600,15 @@ impl Model {
 
     fn snapshot_inner(&self, i: usize) -> Snapshot {
         if let Some(r) = self.shown_run(i) {
+            // Waiting for the next disc: the one before as it ended, with
+            // the Drive as it is now.
+            if let Some(before) = self.before_disc.get(&i).filter(|_| self.shows_newest(i) && waiting_for_disc(&r.snap)) {
+                let mut snap = before.clone();
+                for (id, v) in r.snap.steps.iter().filter(|(_, v)| v.step == "drive") {
+                    snap.steps.insert(id.clone(), v.clone());
+                }
+                return snap;
+            }
             return r.snap.clone();
         }
         let recipe = &self.recipes[i];
@@ -731,6 +744,15 @@ impl Model {
     }
 
     fn start_run(&mut self, i: usize) -> Result<()> {
+        match self.newest(i).filter(|r| r.snap.finished || self.loops_back_done(Some(&r.snap))) {
+            Some(r) => {
+                let snap = r.snap.clone();
+                self.before_disc.insert(i, snap);
+            }
+            None => {
+                self.before_disc.remove(&i);
+            }
+        }
         let run = {
             let _g = self.rt.enter();
             self.engine.start(&self.recipes[i])?
@@ -1241,6 +1263,11 @@ pub fn known_name(system: &str, known: &[String]) -> String {
 
 /// A run's line: *Which release?*, *Holding*, *6 of 17*. For an
 /// earlier disc, what it's doing now (*2 encoding*) rather than the rip.
+/// A run whose Drive hasn't a disc yet: nothing of this disc to show.
+fn waiting_for_disc(s: &Snapshot) -> bool {
+    !s.finished && !s.stopped && s.steps.values().any(|v| v.step == "drive" && matches!(v.state, StepState::Busy | StepState::Idle | StepState::Wait))
+}
+
 pub fn run_line(s: &Snapshot, earlier: bool) -> (String, StepState) {
     if s.stopped {
         return ("Stopped".into(), StepState::Idle);
