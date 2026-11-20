@@ -153,7 +153,14 @@ impl Model {
                 eprintln!("couldn't save the recipes: {e:#}");
             }
         }
-        if let Some(s) = d.store.load_settings() {
+        if let Some(mut s) = d.store.load_settings() {
+            // The ntfy topic and server were once one for the whole app;
+            // each Notify has its own now, starting from that one.
+            if ntfy_to_each_notify(&mut recipes, &mut s) {
+                if let Err(e) = d.store.save_recipes(&recipes).and_then(|_| d.store.save_settings(&s)) {
+                    eprintln!("couldn't save the recipes: {e:#}");
+                }
+            }
             *d.engine.settings.lock().unwrap() = s;
         }
         // Drives under the names recipes and settings already use.
@@ -1540,6 +1547,27 @@ fn move_old_cues(root: &mut Node) -> bool {
 
 /// Lyrics' old *.lrc files too*, on: the setting goes, and a Lyrics file
 /// step follows each Library instead.
+/// Gives every Notify the ntfy topic and server that were set for the
+/// whole app, unless it has its own, and forgets the app-wide ones.
+pub fn ntfy_to_each_notify(recipes: &mut [Recipe], s: &mut drt_engine::Settings) -> bool {
+    let keys = ["ntfy_topic", "ntfy_server"];
+    let old: Vec<(&str, Setting<serde_json::Value>)> = keys.iter().filter_map(|k| s.app.remove(&format!("tell.{k}")).map(|v| (*k, v))).collect();
+    if old.is_empty() {
+        return false;
+    }
+    for r in recipes.iter_mut() {
+        let ids: Vec<String> = r.root.steps().into_iter().filter(|n| matches!(n, Node::Step { step, .. } if step == "tell")).map(|n| n.ids()[0].to_owned()).collect();
+        for id in ids {
+            if let Some(Node::Step { params, .. }) = r.root.find_mut(&id) {
+                for (k, v) in &old {
+                    params.entry((*k).to_owned()).or_insert_with(|| v.clone());
+                }
+            }
+        }
+    }
+    true
+}
+
 fn lrc_to_lyrics_file(root: &mut Node) -> bool {
     let ids: Vec<String> = root
         .steps()
@@ -1691,6 +1719,28 @@ pub fn plain_misfit(reg: &drt_engine::Registry, root: &Node, e: &drt_engine::Che
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_app_wide_ntfy_topic_goes_to_each_notify_that_has_none() {
+        let mut s = Settings::default();
+        s.set_app("tell", "ntfy_topic", Setting::Chosen { value: "rip-old-topic-1234".into(), at: 1 });
+        let mine = Node::step("t2", "tell").with("ntfy_topic", "its-own");
+        let mut recipes = vec![
+            Recipe { name: "A".into(), root: drt_engine::recipe::chain([Node::step("d", "drive"), Node::step("t1", "tell")]) },
+            Recipe { name: "B".into(), root: drt_engine::recipe::chain([Node::step("d", "drive"), mine]) },
+        ];
+        assert!(ntfy_to_each_notify(&mut recipes, &mut s));
+        let topic = |r: &Recipe, id: &str| {
+            r.root.steps().into_iter().find_map(|n| match n {
+                Node::Step { id: i, params, .. } if i == id => params.get("ntfy_topic").and_then(|v| v.resolve(None)),
+                _ => None,
+            })
+        };
+        assert_eq!(topic(&recipes[0], "t1"), Some(serde_json::Value::from("rip-old-topic-1234")));
+        assert_eq!(topic(&recipes[1], "t2"), Some(serde_json::Value::from("its-own")), "its own is kept");
+        assert_eq!(s.app("tell", "ntfy_topic"), Setting::Default, "no longer app-wide");
+        assert!(!ntfy_to_each_notify(&mut recipes, &mut s), "once");
+    }
 
     #[test]
     fn a_drive_keeps_the_name_it_already_has() {

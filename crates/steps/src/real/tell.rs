@@ -48,11 +48,10 @@ pub fn info() -> StepInfo {
         .param(
             ParamSpec::new("ntfy_topic", "Phone alerts (ntfy topic)", ParamKind::Text)
                 .default("")
-                .app_wide()
                 .suggest(made_up_topic)
                 .help("Anyone who knows or guesses this topic can read your alerts: a disc's name and how it went."),
         )
-        .param(ParamSpec::new("ntfy_server", "ntfy server", ParamKind::Text).default("https://ntfy.sh").app_wide().section("Advanced"))
+        .param(ParamSpec::new("ntfy_server", "ntfy server", ParamKind::Text).default("https://ntfy.sh").section("Advanced"))
         .summary(|g| {
             let topic = g("ntfy_topic").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
             let desktop = g("desktop").and_then(|v| v.as_bool()).unwrap_or(true);

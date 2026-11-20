@@ -3453,7 +3453,7 @@ fn until_label(h: &mut Harness<Window>, label: &str) {
     h.run_steps(2);
 }
 
-/// Notify makes up a topic for you, app-wide, and sends a test through
+/// Notify makes up a topic for you, its own, and sends a test through
 /// each way that's on.
 #[test]
 fn notify_makes_up_a_topic_and_sends_a_test() {
@@ -3466,17 +3466,25 @@ fn notify_makes_up_a_topic_and_sends_a_test() {
     if h.query_all_by_role(Role::Tab).count() > 0 {
         tab(&mut h, "Settings");
     }
+    let topic_of = |h: &Harness<'_, Window>| -> Option<String> {
+        app(h).m.recipes[i].root.steps().into_iter().find_map(|n| match n {
+            Node::Step { id, params, .. } if id == "a_tell" => params.get("ntfy_topic").and_then(|s| s.resolve(None)).and_then(|v| v.as_str().map(str::to_owned)),
+            _ => None,
+        })
+    };
     click(&mut h, "Make one up");
-    let topic = app(&h).m.engine.settings.lock().unwrap().app("tell", "ntfy_topic").resolve(None).and_then(|v| v.as_str().map(str::to_owned)).unwrap();
+    let topic = topic_of(&h).unwrap();
     let parts: Vec<&str> = topic.split('-').collect();
     assert!(parts.len() == 4 && parts[0] == "rip" && parts[3].len() == 4, "{topic}");
     assert!(text_boxes(&h).contains(&topic), "the box shows it: {:?}", text_boxes(&h));
-    let saved: Settings = serde_json::from_str(&std::fs::read_to_string(e.dir.path().join("config/settings.json")).unwrap()).unwrap();
-    assert_eq!(saved.app("tell", "ntfy_topic").resolve(None), Some(Value::from(topic.clone())), "saved for every recipe");
-    assert!(h.query_all_by_label_contains("yours").count() > 0 && h.query_all_by_label_contains("app-wide").count() > 0);
+    // Saved with this Notify, in this recipe only.
+    let saved = std::fs::read_to_string(e.dir.path().join("config/recipes.json")).unwrap();
+    assert_eq!(saved.matches(&topic).count(), 1, "{saved}");
+    assert!(app(&h).m.engine.settings.lock().unwrap().app("tell", "ntfy_topic") == Setting::Default);
+    assert!(h.query_all_by_label_contains("yours").count() > 0 && h.query_all_by_label_contains("app-wide").count() == 0);
     // Another one, different.
     click(&mut h, "Make one up");
-    let again = app(&h).m.engine.settings.lock().unwrap().app("tell", "ntfy_topic").resolve(None).unwrap();
+    let again = Value::from(topic_of(&h).unwrap());
     assert_ne!(again, Value::from(topic.clone()));
 
     click(&mut h, "Send a test");
