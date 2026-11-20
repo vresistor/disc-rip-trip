@@ -1405,7 +1405,8 @@ impl App {
                     }
                     ui.add_space(4.0);
                     let tip = "Keep the step that's working, or waiting for you, in view";
-                    if crate::widgets::switch(ui, p, "Follow", self.follow, f).on_hover_text(tip).clicked() {
+                    let words = if canvas.width() >= 360.0 { "Follow" } else { "" };
+                    if crate::widgets::switch(ui, p, "Follow", words, self.follow, f).on_hover_text(tip).clicked() {
                         self.set_follow(!self.follow);
                     }
                 });

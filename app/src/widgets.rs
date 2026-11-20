@@ -283,16 +283,17 @@ pub fn segmented(ui: &mut Ui, p: &Pal, name: &str, options: &[&str], chosen: Opt
     clicked
 }
 
-/// A small on/off switch with its words after it, as quiet as the
-/// buttons beside it.
-pub fn switch(ui: &mut Ui, p: &Pal, label: &str, on: bool, f: FontId) -> Response {
+/// A small on/off switch with its words after it (none where there's no
+/// room; `name` is still its name), as quiet as the buttons beside it.
+pub fn switch(ui: &mut Ui, p: &Pal, name: &str, words: &str, on: bool, f: FontId) -> Response {
     let fg = if on { p.ink } else { p.muted };
-    let g = ui.painter().layout_no_wrap(label.to_owned(), f, fg);
+    let g = ui.painter().layout_no_wrap(words.to_owned(), f, fg);
     let track = vec2(24.0, 14.0);
     let pad = vec2(6.0, 4.0);
-    let size = vec2(track.x + 6.0 + g.size().x, g.size().y.max(track.y)) + pad * 2.0;
+    let gap = if words.is_empty() { 0.0 } else { 6.0 };
+    let size = vec2(track.x + gap + g.size().x, g.size().y.max(track.y)) + pad * 2.0;
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Switch, true, on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Switch, true, on, name));
     let hov = crate::motion::tween(ui.ctx(), resp.id.with("hover"), resp.hovered(), 0.09, crate::motion::cubic_out);
     let k = crate::motion::tween(ui.ctx(), resp.id.with("on"), on, 0.14, crate::motion::cubic_out);
     let pt = ui.painter();
@@ -306,7 +307,7 @@ pub fn switch(ui: &mut Ui, p: &Pal, label: &str, on: bool, f: FontId) -> Respons
     let knob = track.y / 2.0 - 2.0;
     let cx = tr.left() + track.y / 2.0 + k * (track.x - track.y);
     pt.circle_filled(pos2(cx, tr.center().y), knob, if on { p.action_ink } else { p.raised });
-    pt.galley(pos2(tr.right() + 6.0, r.center().y - g.size().y / 2.0), g, fg);
+    pt.galley(pos2(tr.right() + gap, r.center().y - g.size().y / 2.0), g, fg);
     focus_ring(ui, &resp, r, 6.0, p);
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
