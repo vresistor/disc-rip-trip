@@ -147,14 +147,43 @@ impl Layout {
         let (Some(f), Some(start)) = (self.tile(from).map(|t| t.rect), self.tiles.first().map(|t| t.rect)) else { return };
         let below = self.tiles.iter().map(|t| t.rect.y + t.rect.h).fold(0.0, f32::max) + 32.0 + 16.0 * self.loops.len() as f32;
         let (fx, sx) = (f.x + f.w / 2.0, start.x + start.w / 2.0);
-        self.loops.push(vec![(fx, f.y + f.h), (fx, below), (sx, below), (sx, start.y + start.h)]);
+        // Does anything stand in a vertical line's way, from `y` down?
+        let blocked = |x: f32, y: f32| self.tiles.iter().any(|t| t.rect != f && t.rect.x < x && x < t.rect.x + t.rect.w && t.rect.y + t.rect.h > y);
+        let path = if !blocked(fx, f.y + f.h) {
+            // Straight down from under the step.
+            vec![(fx, f.y + f.h), (fx, below), (sx, below), (sx, start.y + start.h)]
+        } else {
+            // Something is below it: leave from its side and drop through
+            // the gap beside it (the right if it's clear, else the left).
+            let mid = f.y + f.h / 2.0;
+            let gap = 16.0;
+            let (edge, x) = if !blocked(f.x + f.w + gap, mid) { (f.x + f.w, f.x + f.w + gap) } else { (f.x, f.x - gap) };
+            vec![(edge, mid), (x, mid), (x, below), (sx, below), (sx, start.y + start.h)]
+        };
+        self.loops.push(path);
         self.height = self.height.max(below + 16.0);
     }
 }
 
 /// The layout, with every step that ends a disc leading back to the start.
 pub fn layout_with_loops(root: &Node, m: Metrics, loops_back: impl Fn(&str) -> bool) -> Layout {
-    let mut l = layout(root, m);
+    // A branch that leads back to the start is drawn last of its siblings,
+    // so its line back runs under the others rather than through them.
+    fn last(n: &Node, f: &dyn Fn(&str) -> bool) -> Node {
+        let leads_back = |n: &Node| n.ids().into_iter().any(f);
+        match n {
+            Node::Chain { nodes } => Node::Chain { nodes: nodes.iter().map(|n| last(n, f)).collect() },
+            Node::Branches { branches } => {
+                let mut bs: Vec<Node> = branches.iter().map(|n| last(n, f)).collect();
+                bs.sort_by_key(|b| leads_back(b));
+                Node::Branches { branches: bs }
+            }
+            Node::Group { name, body } => Node::Group { name: name.clone(), body: Box::new(last(body, f)) },
+            step => step.clone(),
+        }
+    }
+    let root = last(root, &loops_back);
+    let mut l = layout(&root, m);
     let ids: Vec<String> = l.tiles.iter().map(|t| t.id.clone()).filter(|id| loops_back(id)).collect();
     for id in ids {
         l.loop_back(&id);
@@ -316,6 +345,41 @@ fn wire_all(outs: &[((f32, f32), String)], ins: &[((f32, f32), String)], gap: f3
 mod tests {
     use super::*;
     use drt_steps::recipes;
+
+    /// No vertical or horizontal leg of a line back crosses any card.
+    fn crosses(l: &Layout, path: &[(f32, f32)], own: &str) -> Option<String> {
+        for w in path.windows(2) {
+            let ((x0, y0), (x1, y1)) = (w[0], w[1]);
+            for t in l.tiles.iter().filter(|t| t.id != own) {
+                let r = t.rect;
+                let (lx, hx, ly, hy) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+                if lx < r.x + r.w - 0.5 && hx > r.x + 0.5 && ly < r.y + r.h - 0.5 && hy > r.y + 0.5 {
+                    return Some(t.id.clone());
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn the_line_back_from_next_disc_goes_round_what_shares_its_branch() {
+        use drt_engine::recipe::{branches, chain};
+        let m = Metrics::default();
+        // Next disc listed before Notify: it's still drawn last, under it.
+        let root = chain([Node::step("d", "drive"), Node::step("r", "rip"), branches([Node::step("f", "flac"), Node::step("next", "next-disc"), Node::step("tell", "tell")])]);
+        let l = layout_with_loops(&root, m, |id| id == "next");
+        let (next, tell) = (l.tile("next").unwrap().rect, l.tile("tell").unwrap().rect);
+        assert!(next.y > tell.y, "Next disc is drawn below Notify");
+        assert_eq!(crosses(&l, &l.loops[0], "next"), None);
+        // Something after the join, below Next disc's column: the line
+        // leaves from the side instead of going through it.
+        let root = chain([Node::step("d", "drive"), Node::step("r", "rip"), branches([Node::step("f", "flac"), chain([Node::step("next", "next-disc")])])]);
+        let l = layout_with_loops(&root, m, |id| id == "next");
+        assert_eq!(crosses(&l, &l.loops[0], "next"), None);
+        // The CD recipe, as built in.
+        let l = layout_with_loops(&recipes::cd().root, m, |id| id == "next");
+        assert_eq!(crosses(&l, &l.loops[0], "next"), None);
+    }
 
     #[test]
     fn the_cd_recipe_is_ten_tiles_long_and_three_rows_tall() {
