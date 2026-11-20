@@ -109,7 +109,9 @@ jobs:
           key: flatpak-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Build the bundle
-        run: ./scripts/build-flatpak.sh
+        # Flathub's builder installs the SDK over the session bus, which a
+        # runner doesn't start: give it one for the length of the build.
+        run: dbus-run-session -- ./scripts/build-flatpak.sh
 
       # MakeMKV decrypts CSS, and distributing circumvention software is a
       # different act from distributing something that drives it (CDPA
