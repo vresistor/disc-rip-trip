@@ -1434,6 +1434,18 @@ fn a_cover_from_another_edition_and_every_scan() {
     h.get_by_label("The cover").click();
     h.run_steps(2);
     assert_eq!(e.opened.lock().unwrap().len(), 2, "a click on the picture opens it too");
+    // So does the cover on its card, rather than its sidebar.
+    let (lay, v, c) = (app(&h).layout(1), app(&h).views_of(1), app(&h).canvas_rect());
+    let t = lay.tile("a_art").unwrap().rect;
+    let at = c.min + v.pan + egui::vec2(t.x + 64.0, t.y + 128.0) * v.zoom;
+    assert!(c.contains(at), "the card's cover is in view");
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(e.opened.lock().unwrap().len(), 3, "a click on the card's cover opens it");
+    assert!(matches!(&app(&h).tray, Some(Tray::Step { id, .. }) if id == "a_art"), "and leaves the sidebar as it was");
     click(&mut h, "Settings");
     assert!(h.query_all_by_label_contains("Which cover").count() > 0);
     shot(&mut h, "step-cover-settings");

@@ -309,6 +309,7 @@ impl App {
             self.cue_key = Some(key);
             self.cue_seen.clear();
             self.cues.clear();
+            self.follow_last = None;
         }
         // By the state the card shows: a track to decide rings as a
         // question, as does a Hold once it's full.
@@ -1276,6 +1277,11 @@ impl App {
         }
         match clicked {
             Some(Click::Tile(id)) => self.tile_clicked(id),
+            Some(Click::Cover(id)) => {
+                if let Some(path) = snap.steps.get(&id).and_then(|v| v.record.files.iter().map(|f| drt_steps::real::expand(&f.path)).find(|f| f.is_absolute())) {
+                    self.m.open(&path);
+                }
+            }
             // Empty canvas: the sidebar goes, and any tile only selected.
             Some(Click::Empty) => {
                 self.close_tray();

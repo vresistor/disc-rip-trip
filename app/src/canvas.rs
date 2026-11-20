@@ -70,6 +70,8 @@ pub enum Click {
     Tile(String),
     /// A +: after a strip, on a seam, or where branches meet.
     Plus(Spot),
+    /// The cover on a tile's card.
+    Cover(String),
     /// The canvas itself, away from any tile.
     Empty,
 }
@@ -234,9 +236,13 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
         let resp = ui.interact(r, ui.scope_id().with(("tile", &tp.id)), Sense::click());
         let label = card.said();
         resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Button, true, marks.open == Some(tp.id.as_str()), &label));
+        // Its cover, when it has one, opens at full size.
+        let ready = matches!(extra.picture, crate::card::Picture::Ready(..));
+        let on_cover = |pos: Option<Pos2>| ready && pos.is_some_and(|pos| crate::card::COVER.contains(pos2(0.0, 0.0) + (pos - r.min) / z));
         if resp.clicked() {
-            click = Some(Click::Tile(tp.id.clone()));
+            click = Some(if on_cover(resp.interact_pointer_pos()) { Click::Cover(tp.id.clone()) } else { Click::Tile(tp.id.clone()) });
         }
+        let over_cover = on_cover(resp.hover_pos());
         let hovered = resp.hovered();
         if hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -244,6 +250,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
         // A setting's help over its label; else what had to be shortened, in full.
         let help = resp.hover_pos().and_then(|pos| card.help_at((pos - r.min) / z));
         let resp = match help {
+            _ if over_cover => resp.on_hover_text("Open full size"),
             Some(h) => resp.on_hover_text(h),
             None if !card.cut.is_empty() => resp.on_hover_text(card.cut.join("\n")),
             None => resp,
