@@ -398,7 +398,7 @@ pub fn cover_art_info() -> StepInfo {
             "Small (500 px)",
             "Original, as uploaded",
         ]))
-        .param(ParamSpec::new("bigger", "Use a bigger cover from another edition", ParamKind::Toggle).default(true).help("When this release's front is small or missing, another pressing's is used."))
+        .param(ParamSpec::new("bigger", "Use a bigger cover from another edition", ParamKind::Toggle).default(true).help("When this release's front is small or missing, another edition's is used."))
         .param(ParamSpec::new("pick", "Let me pick the cover", ParamKind::Toggle).default(false).help("Shows every edition's front to choose from before it's used."))
         .summary(|g| match g("size").and_then(|v| v.as_str().map(str::to_owned)).as_deref() {
             Some("Original") => "original size".into(),
@@ -434,10 +434,16 @@ pub fn cover_says(size: Option<(u32, u32)>, elsewhere: Option<&artwork::Elsewher
     (status, if elsewhere.is_some() { "From another edition".to_owned() } else { String::new() })
 }
 
-/// Puts every front there is to you, as pictures, and gives the other
-/// edition you picked (`None`: the release's own, or only one to pick
-/// from). The one it would take by itself is picked to start with.
-async fn pick_cover(cx: &Cx, archive: &artwork::Online, release: &str, group: Option<&str>, size: &str, dir: &Path) -> Result<Option<artwork::Elsewhere>> {
+/// How long Cover art looks at other editions by itself before going on
+/// with the release's own front.
+const EDITIONS_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Puts every front there is to you, as pictures, and gives what you
+/// picked: another edition's, or `Some(None)` for the release's own. `None`
+/// when there's nothing to choose between, so Cover art goes by itself. The
+/// one it would take by itself is picked to start with.
+#[allow(clippy::option_option)]
+async fn pick_cover(cx: &Cx, archive: &artwork::Online, release: &str, group: Option<&str>, size: &str, dir: &Path) -> Result<Option<Option<artwork::Elsewhere>>> {
     let fronts = artwork::fronts(archive, release, group).await?;
     if fronts.len() < 2 {
         return Ok(None);
@@ -456,7 +462,7 @@ async fn pick_cover(cx: &Cx, archive: &artwork::Online, release: &str, group: Op
         _ => pre,
     };
     cx.log(format!("you picked {} ({} × {})", fronts[k].words, fronts[k].size.0, fronts[k].size.1));
-    Ok(fronts[k].elsewhere(fronts.len() - 1))
+    Ok(Some(fronts[k].elsewhere(fronts.len() - 1)))
 }
 
 struct CoverArt;
@@ -493,7 +499,9 @@ impl Step for CoverArt {
                             let archive = artwork::Online::new(&cx);
                             // Another edition's front to take instead: the one you
                             // pick, or a bigger one when the release's own falls short.
-                            let target = if cx.flag("pick") {
+                            // `Some`: you were asked (and picked this); `None`: there was
+                            // nothing to ask, so it goes by itself.
+                            let picked = if cx.flag("pick") {
                                 cx.status("", "Looking at other editions");
                                 let picked = tokio::select! {
                                     p = pick_cover(&cx, &archive, &id, group.as_deref(), &size, &dir) => p,
@@ -506,13 +514,21 @@ impl Step for CoverArt {
                                         None
                                     }
                                 }
+                            } else {
+                                None
+                            };
+                            let target = if let Some(p) = picked {
+                                p
                             } else if falls_short(own_px, wanted_px(&size)) && cx.flag("bigger") {
                                 match group {
                                     Some(group) => {
                                         cx.status("", "Looking at other editions");
                                         let longer_than = own_px.map_or(0, |(w, h)| w.max(h));
+                                        // The disc waits on this before Rip: not for long.
                                         let search = tokio::select! {
-                                            s = artwork::bigger_front(&archive, &id, &group, longer_than) => s,
+                                            s = tokio::time::timeout(EDITIONS_WAIT, artwork::bigger_front(&archive, &id, &group, longer_than)) => {
+                                                s.unwrap_or_else(|_| Err(anyhow!("no answer within {} s", EDITIONS_WAIT.as_secs())))
+                                            }
                                             _ = cx.cancelled() => return Ok(()),
                                         };
                                         match search {

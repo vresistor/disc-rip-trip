@@ -54,7 +54,7 @@ _Avoid_: Work item, entry
 **Item kind**:
 What a step takes or gives: a disc (before and after its kind step says
 what it is), tracks, videos, a dump, or a file of one kind (audio, image,
-video, text). *Any file* is what a step that takes every kind of file
+video, text, pictures). *Any file* is what a step that takes every kind of file
 takes, such as Folder.
 _Avoid_: Type (alone), format
 

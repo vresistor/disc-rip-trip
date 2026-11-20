@@ -1415,6 +1415,10 @@ fn a_cover_from_another_edition_and_every_scan() {
     open_tile(&mut h, "Cover art,");
     until(&mut h, "the cover", |a| a.covers.values().any(|c| matches!(c, drt_app::tray::Cover::Ready(..))));
     shot(&mut h, "step-cover-edition");
+    click(&mut h, "Settings");
+    assert!(h.query_all_by_label_contains("Use a bigger cover from another edition").count() > 0);
+    assert!(h.query_all_by_label_contains("Let me pick the cover").count() > 0);
+    shot(&mut h, "step-cover-settings");
     open_tile(&mut h, "Artwork files,");
     h.get_by_label_contains("Booklet 01.jpg");
     shot(&mut h, "step-artwork-files");

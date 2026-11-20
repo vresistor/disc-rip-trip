@@ -3360,6 +3360,10 @@ fn answers(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, step: &str) {
 fn pictures(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, step: &str) {
     let Some((_, q)) = &snap.question else { return };
     let QuestionShape::PickOne { options, preselected, .. } = &q.shape else { return };
+    // A pick left from another question doesn't carry over.
+    if app.pick.is_some_and(|k| k >= options.len()) {
+        app.pick = None;
+    }
     let pick = *app.pick.get_or_insert(*preselected);
     let w = ui.available_width();
     // As many across as fit, at least two, never wider than 200.

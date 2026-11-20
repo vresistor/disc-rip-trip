@@ -34,7 +34,7 @@ A simulated CD from start to the next disc.
 
 | Disc | Reads with | Finds out what it is from | You get |
 |---|---|---|---|
-| Audio CD | cyanrip, checked against AccurateRip | MusicBrainz, CD-Text, Discogs, GnuDB | each track in the formats you pick (FLAC, MP3, Opus, AAC, ALAC, Vorbis, WavPack, WAV), tagged, with cover art and lyrics |
+| Audio CD | cyanrip, checked against AccurateRip | MusicBrainz, CD-Text, Discogs, GnuDB | each track in the formats you pick (FLAC, MP3, Opus, AAC, ALAC, Vorbis, WavPack, WAV), tagged, with cover art and lyrics, and the album's scans beside them if you like |
 | Data disc | redumper | Redump, by checksum | a checked disc image, as a CHD or as a plain image |
 | PlayStation game | redumper | Redump, by checksum, else by serial | a verified CHD named for the exact release, with its LibCrypt `.sbi` and a `.m3u` for multi-disc games |
 | DVD, Blu-ray | MakeMKV | TMDb | films and episodes, converted to H.265 or AV1 or kept as they are, named the way Jellyfin likes |
@@ -170,8 +170,8 @@ uses them, and every recipe shares them.
 
 | Service | Used for | Key |
 |---|---|---|
-| [MusicBrainz](https://musicbrainz.org) | releases, by disc ID | none |
-| [Cover Art Archive](https://coverartarchive.org) | the chosen release's cover | none |
+| [MusicBrainz](https://musicbrainz.org) | releases, by disc ID, and the other editions of the album chosen | none |
+| [Cover Art Archive](https://coverartarchive.org) | the chosen release's cover (or a bigger one from another edition of the album), and its scans for Artwork files | none |
 | [LRCLIB](https://lrclib.net) | lyrics, synced when it has them | none |
 | [Discogs](https://www.discogs.com) | releases, by barcode, catalogue number, or artist and album | a personal access token (Discogs: Settings, Developers). Without one, the step is skipped. |
 | [GnuDB](https://gnudb.org) | releases, by CDDB ID | your email address, which GnuDB asks for. Without one, the step is skipped. |
