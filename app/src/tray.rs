@@ -2753,7 +2753,7 @@ fn ring_headline(ui: &mut Ui, p: &Pal, text: &str) {
 /// the strip's colours, the outcome in its middle (`big` over `word`);
 /// beside it, what `beside` draws: what's happening now, or once done, the
 /// proof.
-fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], big: String, word: String, beside: impl FnOnce(&mut Ui, bool)) {
+fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], ticks: Option<&[Tick]>, big: String, word: String, beside: impl FnOnce(&mut Ui, bool)) {
     let wide = ui.available_width() >= 560.0;
     let size = if wide { 144.0 } else { 120.0 };
     let total: f32 = arcs.iter().map(|a| a.share).sum::<f32>().max(f32::EPSILON);
@@ -2763,7 +2763,8 @@ fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], big: String, word: String, besi
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Image, true, format!("The disc, {big} {word}")));
         let pt = ui.painter();
         let c = r.center();
-        let rad = size / 2.0 - 8.0;
+        // A map of the disc keeps room round the ring for its marks.
+        let rad = size / 2.0 - if ticks.is_some() { 12.0 } else { 8.0 };
         let thick = if wide { 12.0 } else { 10.0 };
         // A gap between arcs; none for one arc, which is the whole ring.
         let gap = if arcs.len() > 40 || arcs.len() < 2 { 0.0 } else { 0.035 };
@@ -2792,6 +2793,24 @@ fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], big: String, word: String, besi
             }
             a0 = a1;
         }
+        // Marks where something went wrong, gathered into places round
+        // the ring: where the drive reported errors as it read, as bars
+        // outside it, longer where there were more; sectors found wrong,
+        // across it.
+        let top = -std::f32::consts::FRAC_PI_2;
+        let place = std::f32::consts::TAU / PLACES as f32;
+        for (k, col, strength, across) in gathered(ticks.unwrap_or(&[])) {
+            let mid = top + (k as f32 + 0.5) * place;
+            let dir = vec2(mid.cos(), mid.sin());
+            if across {
+                let w = (3.0 / rad).max(place * 0.6) / 2.0;
+                let pts: Vec<egui::Pos2> = [mid - w, mid, mid + w].iter().map(|a| c + vec2(a.cos(), a.sin()) * rad).collect();
+                pt.add(egui::Shape::line(pts, Stroke::new(thick + 4.0, col)));
+            } else {
+                let from = rad + thick / 2.0 + 1.0;
+                pt.line_segment([c + dir * from, c + dir * (from + 2.0 + 3.0 * strength)], Stroke::new(2.0, col));
+            }
+        }
         let g = pt.layout_no_wrap(big.clone(), crate::theme::tnum(if wide { 22.0 } else { 20.0 }, 600), p.ink);
         let gw = pt.layout(word.clone(), font(11.5, 500), p.muted, rad * 1.4);
         let hh = g.size().y + gw.size().y;
@@ -2804,6 +2823,53 @@ fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], big: String, word: String, besi
         });
     });
     ui.add_space(16.0);
+}
+
+/// A mark on a ring: from and to as shares of the disc (0 to 1), how
+/// much went wrong there, its colour, and whether it lies across the ring
+/// (sectors found wrong) or outside it (errors the drive reported).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tick {
+    from: f32,
+    to: f32,
+    weight: f32,
+    col: Color32,
+    across: bool,
+}
+
+/// How many places round a ring marks are gathered into: 4° each, a few
+/// pixels, so 200 errors make a pattern, not a smear, and one shows.
+const PLACES: usize = 90;
+
+/// Marks as drawn: each colour's gathered into [`PLACES`], each place with
+/// anything in it one mark, with how much went wrong there beside the
+/// worst place of that colour (0 to 1). `(place, colour, strength, across)`, the
+/// later colours over the earlier.
+fn gathered(ticks: &[Tick]) -> Vec<(usize, Color32, f32, bool)> {
+    let mut kinds: Vec<(Color32, bool)> = vec![];
+    for t in ticks {
+        if !kinds.contains(&(t.col, t.across)) {
+            kinds.push((t.col, t.across));
+        }
+    }
+    let mut out = vec![];
+    for (col, across) in kinds {
+        let mut at = [0f32; PLACES];
+        for t in ticks.iter().filter(|t| t.col == col && t.across == across) {
+            let (a, b) = (t.from.clamp(0.0, 1.0), t.to.clamp(0.0, 1.0).max(t.from));
+            let (pa, pb) = (((a * PLACES as f32) as usize).min(PLACES - 1), ((b * PLACES as f32 - 1e-4).max(0.0) as usize).clamp(0, PLACES - 1));
+            let pb = pb.max(pa);
+            let share = t.weight / (pb - pa + 1) as f32;
+            for x in &mut at[pa..=pb] {
+                *x += share;
+            }
+        }
+        let most = at.iter().copied().fold(0.0, f32::max);
+        for (k, w) in at.iter().enumerate().filter(|(_, w)| **w > 0.0) {
+            out.push((k, col, (w / most).sqrt(), across));
+        }
+    }
+    out
 }
 
 /// The arcs for a step's items: each as long as it plays when every
@@ -2834,7 +2900,7 @@ fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &Step
     } else {
         (format!("{verified}/{counted}"), "verified".to_owned())
     };
-    ring_head(ui, p, &arcs, big, word, |ui, _| {
+    ring_head(ui, p, &arcs, None, big, word, |ui, _| {
         if let Some(k) = busy {
             let it = &v.items[k];
             let n = number(it, k);
@@ -2954,8 +3020,19 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
         ItemState::Bad => (it.note.split_whitespace().next().filter(|w| w.chars().all(|c| c.is_ascii_digit())).unwrap_or("!").to_owned(), word),
         _ => (size.clone().unwrap_or_else(|| cap(&word)), word),
     };
+    // The disc from its start to its end round the ring, with where the
+    // drive reported errors as it read, and where the check of every
+    // sector found some wrong: as Rip logged them.
+    let map = drt_steps::real::redumper::disc_map(log.iter().copied());
+    let sectors = if map.sectors > 0 { map.sectors } else { crate::pace::sectors(&it.note).map_or(0, |s| s.1) };
+    let put_right = passes.iter().any(|p| p.kind == drt_steps::real::redumper::PassKind::Reread) && drt_steps::real::redumper::left_after(&passes, passes.len().saturating_sub(1)) == 0;
+    let ticks = disc_ticks(p, &map, sectors, put_right && !busy);
+    // The ring in the verdict's colour; but sectors found wrong, red
+    // across it, are the verdict, and stand out only on a plain ring.
+    let cell = if matches!(cell, crate::card::Cell::Bad | crate::card::Cell::Needs) && !map.wrong.is_empty() { crate::card::Cell::Done } else { cell };
+    let where_line = map_line(&map, sectors);
     let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
-    ring_head(ui, p, &arcs, big, small, |ui, _| {
+    ring_head(ui, p, &arcs, Some(&ticks), big, small, |ui, _| {
         if busy {
             // The pass, the disc, how far, then the time left and speed.
             let doing = if v.detail.is_empty() { "Reading".to_owned() } else { v.detail.split(" · ").next().unwrap_or("").to_owned() };
@@ -2964,6 +3041,9 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             now_reading(ui, p, &format!("Pass {pass} · {doing}"), &it.label, pct, times, t);
             if let Some((at, of)) = crate::pace::sectors(&it.note) {
                 ring_note(ui, p, &format!("Sector {} of {}", thousands(at), thousands(of)));
+            }
+            if let Some(l) = &where_line {
+                ring_note(ui, p, l);
             }
         } else {
             // Needing you, the row says what's wrong, with what to do.
@@ -2978,6 +3058,9 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             let line = [size.clone(), took.map(|t| t.replacen("Read in", "read in", 1))].into_iter().flatten().collect::<Vec<_>>().join(", ");
             if !line.is_empty() {
                 ring_note(ui, p, &cap(&line));
+            }
+            if let Some(l) = &where_line {
+                ring_note(ui, p, l);
             }
             if !drive.is_empty() {
                 ring_note(ui, p, &drive);
@@ -3048,6 +3131,47 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     rows(app, ui, p, &key, list, "", t)
 }
 
+/// The marks on a game or data disc's ring: where the drive reported
+/// errors as it read (orange; green once re-reading put them all right),
+/// then over them where the check of every sector found some wrong (red).
+fn disc_ticks(p: &Pal, map: &drt_steps::real::redumper::DiscMap, sectors: u64, put_right: bool) -> Vec<Tick> {
+    if sectors == 0 {
+        return vec![];
+    }
+    let at = |s: u64| s as f32 / sectors as f32;
+    let read = if put_right { p.ok } else { p.warn };
+    let mark = |s: &drt_steps::real::redumper::Span, col, across| Tick { from: at(s.from), to: at(s.to + 1), weight: s.weight as f32, col, across };
+    map.read.iter().map(|s| mark(s, read, false)).chain(map.wrong.iter().map(|s| mark(s, p.bad, true))).collect()
+}
+
+/// Where on the disc things went wrong, in a line: *25 bad sectors, most
+/// between 49% and 68%*; or, when the check found none, where the drive
+/// reported errors as it read.
+fn map_line(map: &drt_steps::real::redumper::DiscMap, sectors: u64) -> Option<String> {
+    use drt_steps::real::redumper::most_between;
+    if sectors == 0 {
+        return None;
+    }
+    let pc = |s: u64| (s * 100 / sectors).min(100);
+    let place = |spans| {
+        let (a, b, whole) = most_between(spans)?;
+        Some(match (pc(a), pc(b)) {
+            (a, b) if a == b => (format!("at {a}%"), whole),
+            (a, b) => (format!("between {a}% and {b}%"), whole),
+        })
+    };
+    if map.wrong_count > 0 {
+        let n = map.wrong_count;
+        let head = format!("{} bad sector{}", thousands(n), if n == 1 { "" } else { "s" });
+        return Some(match place(&map.wrong) {
+            Some((w, true)) => format!("{head}, {w}"),
+            Some((w, false)) => format!("{head}, most {w}"),
+            None => head,
+        });
+    }
+    place(&map.read).map(|(w, whole)| if whole { format!("Read errors {w}") } else { format!("Most read errors {w}") })
+}
+
 /// Each counter's errors left after pass `upto`: the read's, less what
 /// every re-read since put right.
 fn still_wrong(passes: &[drt_steps::real::redumper::Pass], upto: usize) -> Vec<(String, u64)> {
@@ -3110,7 +3234,7 @@ fn video_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     let counted = v.items.iter().filter(|i| i.state != ItemState::Skipped).count();
     let needs = v.count(ItemState::Bad);
     let (big, word) = (format!("{read}/{counted}"), "read".to_owned());
-    ring_head(ui, p, &arcs, big, word, |ui, _| {
+    ring_head(ui, p, &arcs, None, big, word, |ui, _| {
         if let Some(k) = busy {
             let it = &v.items[k];
             let at = v.items.iter().take(k + 1).filter(|i| i.state != ItemState::Skipped).count();

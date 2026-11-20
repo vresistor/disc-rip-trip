@@ -215,7 +215,7 @@ pub fn read_log(log: &str) -> Read {
 }
 
 /// One of redumper's sector ranges: `112697`, `0-299`, `-150--1`.
-fn range(s: &str) -> Option<(i64, i64)> {
+pub(crate) fn range(s: &str) -> Option<(i64, i64)> {
     let s = s.trim();
     match s[1.min(s.len())..].find('-').map(|i| i + 1) {
         Some(i) => Some((s[..i].parse().ok()?, s[i + 1..].parse().ok()?)),

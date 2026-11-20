@@ -841,21 +841,32 @@ impl Step for Image {
 pub(crate) async fn dump(cx: &Cx, item: &Item, sectors: u64, bad: bool) -> Result<Option<String>> {
     use crate::real::redumper;
     let size = crate::real::media::size(sectors * 2048);
-    // A pass: its heading, then four progress lines over `ms`.
+    // A pass: its heading, then twenty progress lines over `ms`, any
+    // errors met 60% of the way through; where they are logged as Image
+    // logs them.
     let pass = |heading: &'static str, ms: u64, errors: (u64, u64)| async move {
+        let mut trail = redumper::ErrorTrail::new();
+        trail.line(&format!("*** {heading}"));
         cx.log(format!("*** {heading} (time check: 0s)"));
         if let Some(p) = redumper::phase(&format!("*** {heading}")) {
             cx.status("", p);
             cx.drive_says(StepState::Busy, p, "");
         }
-        for i in 1..=4u64 {
-            let line = redumper::progress_line(sectors * i / 4, sectors, true, errors.0 * i / 4, errors.1 * i / 4);
+        for i in 1..=20u64 {
+            let met = if i >= 12 { errors } else { (0, 0) };
+            let line = redumper::progress_line(sectors * i / 20, sectors, true, met.0, met.1);
+            if let Some(l) = trail.line(&line) {
+                cx.log(l);
+            }
             cx.raw(&line);
             if let Some(p) = redumper::parse_progress(&line) {
                 cx.progress(Some(p.fraction));
                 cx.item(item, ItemState::Busy, redumper::progress_note(&p));
             }
-            cx.sleep(ms / 4).await?;
+            cx.sleep(ms / 20).await?;
+        }
+        if let Some(l) = trail.finish() {
+            cx.log(l);
         }
         anyhow::Ok(())
     };

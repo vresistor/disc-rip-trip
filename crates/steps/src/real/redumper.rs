@@ -438,6 +438,214 @@ pub fn sector_problems(info: &str) -> Vec<(&'static str, u64)> {
         .collect()
 }
 
+// ---- where on the disc the errors are ---------------------------------------------------------
+
+/// Where the drive reported errors as it read, from its progress lines:
+/// a counter that rises between two lines puts errors between their
+/// sectors. Nearby ones are joined, so a disc with errors everywhere
+/// gives a few hundred lines, not one per sector. Only the first read
+/// (`dump`) is followed; a re-read's counters count what's left.
+///
+/// Fed every line a run prints; gives a line for Rip's log each time a
+/// stretch of errors ends: [`ERRORS_AT`] (see [`disc_map`]).
+#[derive(Debug, Default)]
+pub struct ErrorTrail {
+    reading: bool,
+    /// The last progress line's sector and counters.
+    prev: Option<(u64, Vec<(String, u64)>)>,
+    /// The stretch being gathered: from, to, the disc's sectors, its counts.
+    open: Option<Stretch>,
+}
+
+type Stretch = (u64, u64, u64, Vec<(String, u64)>);
+
+/// How a stretch of the drive's errors starts in Rip's log: *read errors
+/// at sectors 49120-49300 of 332999: SCSI 2, C2 37*. The counts are the
+/// drive's, in samples for a CD.
+pub const ERRORS_AT: &str = "read errors at sectors ";
+
+/// Errors this close (a 400th of the disc) are one stretch.
+fn near(of: u64) -> u64 {
+    (of / 400).max(1)
+}
+
+impl ErrorTrail {
+    pub fn new() -> ErrorTrail {
+        ErrorTrail::default()
+    }
+
+    /// Takes one printed line; gives a line to log when a stretch ends.
+    pub fn line(&mut self, line: &str) -> Option<String> {
+        let t = line.trim();
+        if let Some(h) = t.strip_prefix("*** ") {
+            let done = self.finish();
+            self.reading = h.split_whitespace().next() == Some("DUMP");
+            self.prev = None;
+            return done;
+        }
+        let Some((at, of)) = lba_of(t) else {
+            // Anything else it says ends a stretch, so it's logged first.
+            return if parse_progress(t).is_some() { None } else { self.finish() };
+        };
+        if !self.reading {
+            return None;
+        }
+        let counts: Vec<(String, u64)> = counts_in(t).into_iter().filter(|c| c.0 != "Q").collect();
+        let rose: Vec<(String, u64)> = match &self.prev {
+            Some((_, before)) => counts.iter().map(|(k, n)| (k.clone(), n.saturating_sub(before.iter().find(|b| b.0 == *k).map_or(*n, |b| b.1)))).filter(|c| c.1 > 0).collect(),
+            None => vec![],
+        };
+        let from = self.prev.as_ref().map_or(at, |p| p.0.min(at));
+        self.prev = Some((at, counts));
+        let mut out = None;
+        if self.open.as_ref().is_some_and(|o| at > o.1 + near(of)) {
+            out = self.finish();
+        }
+        if !rose.is_empty() {
+            match &mut self.open {
+                Some(o) => {
+                    o.1 = at;
+                    for (k, n) in rose {
+                        match o.3.iter_mut().find(|c| c.0 == k) {
+                            Some(c) => c.1 += n,
+                            None => o.3.push((k, n)),
+                        }
+                    }
+                }
+                None => self.open = Some((from, at, of, rose)),
+            }
+        }
+        out
+    }
+
+    /// The stretch being gathered, if any, as a line to log.
+    pub fn finish(&mut self) -> Option<String> {
+        let (from, to, of, counts) = self.open.take()?;
+        Some(format!("{ERRORS_AT}{from}-{to} of {of}: {}", errors_text(&counts)))
+    }
+}
+
+/// The sector and the disc's sectors in a progress line: `LBA: 12345/317787`.
+fn lba_of(line: &str) -> Option<(u64, u64)> {
+    parse_progress(line)?;
+    let rest = &line[line.find("LBA:")? + 4..];
+    let (at, rest) = rest.split_once('/')?;
+    let of: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    Some((at.trim().parse().ok()?, of.parse().ok()?))
+}
+
+/// A stretch of sectors, and how much went wrong in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub from: u64,
+    pub to: u64,
+    /// The drive's count (samples on a CD), or the sectors found wrong.
+    pub weight: u64,
+}
+
+/// The disc as Rip's log maps it: its length, where the drive reported
+/// errors as it read, and where the check of every sector found sectors
+/// wrong (`MSF`, `ECC`, `EDC`), by the lists redumper's `info` gives.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiscMap {
+    pub sectors: u64,
+    pub read: Vec<Span>,
+    pub wrong: Vec<Span>,
+    /// Sectors found wrong: each listed once, however many checks it
+    /// fails; at least as many as the commonest kind's count.
+    pub wrong_count: u64,
+}
+
+impl DiscMap {
+    pub fn is_empty(&self) -> bool {
+        self.read.is_empty() && self.wrong.is_empty()
+    }
+}
+
+/// Reads the map of the disc from Rip's log: the [`ERRORS_AT`] lines Rip
+/// writes as it reads, and the last `info`'s lists of sectors.
+pub fn disc_map<'a>(log: impl IntoIterator<Item = &'a str>) -> DiscMap {
+    let mut m = DiscMap::default();
+    let mut info: Vec<&str> = vec![];
+    let mut in_info = false;
+    for line in log {
+        let t = line.trim();
+        if let Some(h) = t.strip_prefix("*** ") {
+            let word = h.split_whitespace().next();
+            if word == Some("INFO") {
+                info.clear();
+                in_info = true;
+            } else {
+                in_info = false;
+            }
+            continue;
+        }
+        if in_info {
+            info.push(t);
+        }
+        let Some(rest) = t.strip_prefix(ERRORS_AT) else { continue };
+        let Some((span, counts)) = rest.split_once(": ") else { continue };
+        let Some((range, of)) = span.split_once(" of ") else { continue };
+        let Some((a, b)) = range.split_once('-') else { continue };
+        let (Ok(from), Ok(to), Ok(of)) = (a.parse::<u64>(), b.parse::<u64>(), of.parse::<u64>()) else { continue };
+        let weight = counts.split(", ").filter_map(|c| c.rsplit_once(' ')?.1.parse::<u64>().ok()).sum::<u64>().max(1);
+        m.sectors = m.sectors.max(of);
+        m.read.push(Span { from, to, weight });
+    }
+    let mut listed: Vec<(u64, u64)> = vec![];
+    let mut most = 0u64;
+    for (key, _) in PROBLEMS.iter().filter(|(k, _)| *k != "invalid sync sectors:") {
+        let mut count = 0;
+        for l in info.iter().filter_map(|l| l.strip_prefix(key)) {
+            count += l.split_whitespace().next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+            let list = l.split_once("(LBA:").map(|(_, r)| r.trim_end_matches(')')).unwrap_or("");
+            listed.extend(list.split(',').filter_map(super::mismatch::range).map(|(a, b)| (a.max(0) as u64, b.max(0) as u64)));
+        }
+        most = most.max(count);
+    }
+    // Each sector once, however many checks it fails.
+    listed.sort_unstable();
+    for (a, b) in listed {
+        match m.wrong.last_mut() {
+            Some(w) if a <= w.to + 1 => w.to = w.to.max(b),
+            _ => m.wrong.push(Span { from: a, to: b, weight: 0 }),
+        }
+    }
+    for w in &mut m.wrong {
+        w.weight = w.to - w.from + 1;
+    }
+    m.wrong_count = m.wrong.iter().map(|w| w.weight).sum::<u64>().max(most);
+    if m.sectors == 0 {
+        m.sectors = info.iter().filter_map(|l| l.strip_prefix("sectors count:")?.trim().parse::<u64>().ok()).sum();
+    }
+    m
+}
+
+/// The shortest stretch holding most (four in five) of the spans' weight,
+/// as sectors; and whether it's the whole of where they are.
+pub fn most_between(spans: &[Span]) -> Option<(u64, u64, bool)> {
+    let mut s: Vec<&Span> = spans.iter().collect();
+    s.sort_by_key(|x| x.from);
+    let total: u64 = s.iter().map(|x| x.weight).sum();
+    let (first, last) = (s.first()?.from, s.iter().map(|x| x.to).max()?);
+    let want = (total * 4).div_ceil(5);
+    let mut best = (first, last);
+    let mut sum = 0u64;
+    let mut lo = 0usize;
+    for hi in 0..s.len() {
+        sum += s[hi].weight;
+        while sum - s[lo].weight >= want && lo < hi {
+            sum -= s[lo].weight;
+            lo += 1;
+        }
+        let to = s[lo..=hi].iter().map(|x| x.to).max().unwrap_or(s[hi].to);
+        if sum >= want && to - s[lo].from < best.1 - best.0 {
+            best = (s[lo].from, to);
+        }
+    }
+    Some((best.0, best.1, best == (first, last)))
+}
+
 /// The last thing redumper said that explains a failure.
 pub fn reason(output: &str) -> String {
     output
@@ -708,6 +916,62 @@ error: data errors detected, unable to continue
         assert_eq!(image_name("WIN/XP: SP2"), "WIN_XP_ SP2");
         assert_eq!(group_name("root:x:0:\ndisk:x:6:\ncdrom:x:11:\n", 6).as_deref(), Some("disk"));
         assert_eq!(group_name("optical:x:93:\n", 93).as_deref(), Some("optical"));
+    }
+
+    #[test]
+    fn the_trail_puts_errors_where_the_counters_rose() {
+        let mut t = ErrorTrail::new();
+        let mut logged: Vec<String> = vec![];
+        let mut feed = |l: &str| logged.extend(t.line(l));
+        feed("*** DUMP (time check: 0s)");
+        for (at, scsi, c2) in [(1000, 0, 0), (2000, 0, 0), (3000, 588, 10), (3100, 588, 30), (90_000, 588, 30), (90_100, 1176, 30), (200_000, 1176, 30)] {
+            feed(&progress_line(at, 400_000, true, scsi, c2));
+        }
+        feed("media errors:");
+        feed("SCSI: 1176 samples");
+        // A re-read's counters aren't followed.
+        feed("*** REFINE (time check: 0s)");
+        feed(&progress_line(10, 400_000, true, 0, 0));
+        feed(&progress_line(20, 400_000, true, 588, 0));
+        assert_eq!(t.finish(), None);
+        assert_eq!(logged, ["read errors at sectors 2000-3100 of 400000: SCSI 588, C2 30", "read errors at sectors 90000-90100 of 400000: SCSI 588"]);
+        // passes() takes no notice of them.
+        let log: Vec<&str> = ["*** DUMP (time check: 0s)", logged[0].as_str(), "media errors:", "SCSI: 588 samples", "C2: 30 samples"].to_vec();
+        assert_eq!(passes(log.iter().copied())[0].errors, [("SCSI".to_owned(), 588), ("C2".to_owned(), 30)]);
+    }
+
+    #[test]
+    fn the_map_from_rip_s_log() {
+        let log = [
+            "*** DUMP (time check: 0s)",
+            "read errors at sectors 2000-3100 of 400000: SCSI 588, C2 30",
+            "read errors at sectors 90000-90100 of 400000: SCSI 588",
+            "*** INFO (time check: 0s)",
+            "MSF errors: 40 (LBA: 20000, 20500, 98000-98001, 136000)",
+            "ECC errors: 5 (LBA: 98000, 99000, 110000, 120000, 136000)",
+            "EDC errors: 4 (LBA: 98000, 99000, 120000, 136000)",
+            "*** END (time check: 1s)",
+        ];
+        let m = disc_map(log);
+        assert_eq!(m.sectors, 400_000);
+        assert_eq!(m.read, [Span { from: 2000, to: 3100, weight: 618 }, Span { from: 90_000, to: 90_100, weight: 588 }]);
+        assert_eq!(m.wrong.len(), 7);
+        assert_eq!(m.wrong[2], Span { from: 98_000, to: 98_001, weight: 2 });
+        // Listed: 8 sectors; MSF says 40.
+        assert_eq!(m.wrong_count, 40);
+        assert!(disc_map(["*** DUMP"]).is_empty());
+    }
+
+    #[test]
+    fn most_of_the_errors_are_where_they_bunch() {
+        let one = |at: u64, w: u64| Span { from: at, to: at, weight: w };
+        let mut spans: Vec<Span> = (0..20).map(|k| one(490 + k * 10, 1)).collect();
+        spans.push(one(100, 1));
+        spans.push(one(900, 1));
+        let (a, b, whole) = most_between(&spans).unwrap();
+        assert!(a >= 490 && b <= 680 && !whole, "{a}-{b}");
+        assert_eq!(most_between(&[one(5, 1)]), Some((5, 5, true)));
+        assert_eq!(most_between(&[]), None);
     }
 
     /// Runs the real redumper (`DRT_REDUMPER`) through `run`, as Image does,

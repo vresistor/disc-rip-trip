@@ -210,7 +210,12 @@ impl Image {
         cx.log(format!("redumper {}", args.join(" ")));
         // Opening the tray stops it.
         let hold = cx.drive_read();
+        // Where the drive reports errors, for the map of the disc.
+        let mut trail = redumper::ErrorTrail::new();
         let (text, ok) = redumper::run(&args, t, hold.stop(), |line| {
+            if let Some(l) = trail.line(line) {
+                cx.log(l);
+            }
             if let Some(p) = redumper::phase(line) {
                 cx.status("", p);
                 cx.drive_says(StepState::Busy, p, "");
@@ -224,6 +229,9 @@ impl Image {
             }
         })
         .await?;
+        if let Some(l) = trail.finish() {
+            cx.log(l);
+        }
         out.push_str(&text);
         Ok(ok)
     }

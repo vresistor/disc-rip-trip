@@ -4075,6 +4075,65 @@ enum At {
     Done,
     /// Sectors left unreadable: it needs you.
     Failed,
+    /// Read cleanly at the first go: no errors anywhere.
+    Clean,
+    /// Read with ~200 errors spread from 10% to 70%, re-read, and 25
+    /// sectors found wrong between 47% and 68%: a disc like Koudelka's.
+    Wrong,
+}
+
+/// redumper's first read of a CD as Image logs it, its progress lines fed
+/// through the real trail: `n` places with errors, spread from `from` to
+/// `to` (shares of the disc), stopping at `upto`. Gives the counts at the end.
+fn slips(cx: &drt_engine::Cx, n: u64, from: f64, to: f64, upto: u64) -> (u64, u64) {
+    use drt_steps::real::redumper;
+    let mut trail = redumper::ErrorTrail::new();
+    trail.line("*** DUMP (time check: 0s)");
+    cx.log("*** DUMP (time check: 0s)");
+    let mut seed = 0x2545_f491u64;
+    let mut places: Vec<u64> = (0..n)
+        .map(|_| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            // Bunched towards the middle of the stretch: two draws averaged.
+            let a = (seed >> 33) as f64 / (1u64 << 31) as f64;
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let b = (seed >> 33) as f64 / (1u64 << 31) as f64;
+            ((from + (to - from) * (a * 0.4 + b * 0.6)) * CD_SECTORS as f64) as u64
+        })
+        .collect();
+    places.sort_unstable();
+    let (mut scsi, mut c2, mut next) = (0u64, 0u64, 0usize);
+    let mut at = 0u64;
+    while at <= upto {
+        while next < places.len() && places[next] <= at {
+            if next % 3 == 0 {
+                scsi += 588;
+            } else {
+                c2 += 40 + (next as u64 * 7) % 200;
+            }
+            next += 1;
+        }
+        if let Some(l) = trail.line(&redumper::progress_line(at, CD_SECTORS, true, scsi, c2)) {
+            cx.log(l);
+        }
+        at += 150;
+    }
+    if let Some(l) = trail.finish() {
+        cx.log(l);
+    }
+    (scsi, c2)
+}
+
+/// The sectors `info` lists wrong on a disc like Koudelka's: 25, from 47%
+/// to 68%, some side by side.
+fn koudelka_wrong() -> String {
+    let at = |pc: f64| (pc / 100.0 * CD_SECTORS as f64) as u64;
+    let mut list: Vec<String> = vec![];
+    for (k, pc) in [47.2, 49.0, 49.1, 52.5, 55.0, 55.05, 57.3, 58.0, 60.2, 61.0, 61.02, 62.4, 63.3, 64.0, 65.1, 66.0, 66.4, 67.2, 67.9].iter().enumerate() {
+        let s = at(*pc);
+        list.push(if k % 3 == 1 { format!("{s}-{}", s + 1) } else { s.to_string() });
+    }
+    format!("EDC errors: 25 (LBA: {})", list.join(", "))
 }
 
 /// Image, a game's Rip or a video Rip as the real ones report (their notes,
@@ -4090,10 +4149,10 @@ const CD_SECTORS: u64 = 332_999;
 
 impl HeldRip {
     /// The first pass, from sector `from` for `secs` at 8× (600 sectors a
-    /// second), as redumper prints it and Image reports it.
+    /// second), as redumper prints it and Image reports it; its heading
+    /// already logged.
     async fn read(cx: &drt_engine::Cx, item: &drt_engine::Item, from: u64, secs: f32, scsi: u64, c2: u64) {
         use drt_steps::real::redumper;
-        cx.log("*** DUMP (time check: 0s)");
         cx.status("", "Reading");
         let mut at = from;
         for k in 0..=(secs * 4.0) as u32 {
@@ -4115,10 +4174,46 @@ impl HeldRip {
         cx.log(format!("redumper dump --drive=/dev/sr0 --retries=20 --image-name={}", disc.label));
         match self.at {
             At::Reading => {
+                // Errors met so far, up to where it is, then reading on.
+                slips(cx, 160, 0.10, 0.70, 141_500);
                 Self::read(cx, &item, 141_500, 4.5, 2, 37).await;
             }
+            At::Clean => {
+                slips(cx, 0, 0.0, 1.0, CD_SECTORS);
+                for l in ["media errors:", "SCSI: 0 samples", "C2: 0 samples", "Q: 0", "*** SPLIT (time check: 0s)", "*** INFO (time check: 0s)", "*** END (time check: 1s)"] {
+                    cx.log(l);
+                }
+                cx.item(&item, ItemState::Ok, "✓ 682 MB, read cleanly");
+                cx.status("682 MB", "");
+                outlet.send(item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))))).await;
+            }
+            At::Wrong => {
+                let (scsi, c2) = slips(cx, 200, 0.10, 0.70, CD_SECTORS);
+                for l in [
+                    "media errors:".to_owned(),
+                    format!("SCSI: {scsi} samples"),
+                    format!("C2: {c2} samples"),
+                    "Q: 0".into(),
+                    "*** REFINE (time check: 52s)".into(),
+                    "correction statistics:".into(),
+                    format!("SCSI: {scsi} samples"),
+                    format!("C2: {} samples", c2 - 300),
+                    "Q: 0 sectors".into(),
+                    "*** SPLIT (time check: 0s)".into(),
+                    "*** INFO (time check: 0s)".into(),
+                    koudelka_wrong(),
+                    koudelka_wrong().replace("EDC", "ECC"),
+                    "*** END (time check: 1s)".into(),
+                ] {
+                    cx.log(l);
+                }
+                cx.item(&item, ItemState::Ok, "read, but 25 sectors came back wrong");
+                cx.status("682 MB", "");
+                outlet.send(item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))))).await;
+            }
             At::Done | At::Failed => {
-                for l in ["*** DUMP (time check: 0s)", "media errors:", "SCSI: 105840 samples", "C2: 211731 samples", "Q: 2641", "*** END (time check: 348s)"] {
+                slips(cx, 120, 0.15, 0.55, CD_SECTORS);
+                for l in ["media errors:", "SCSI: 105840 samples", "C2: 211731 samples", "Q: 2641", "*** END (time check: 348s)"] {
                     cx.log(l);
                 }
                 cx.status("", "Re-reading bad parts");
@@ -4185,7 +4280,7 @@ impl HeldRip {
             }
         }
         match self.at {
-            At::Done => cx.status(video::titles_word(items.len()), ""),
+            At::Done | At::Clean | At::Wrong => cx.status(video::titles_word(items.len()), ""),
             At::Reading => {
                 let it = &items[busy];
                 cx.status(format!("{busy} of {}", video::titles_word(items.len())), it.label.clone());
@@ -4220,7 +4315,7 @@ impl drt_engine::Step for HeldRip {
         }
         self.held.store(true, std::sync::atomic::Ordering::SeqCst);
         // Done ends; the others stay where they are.
-        if self.at != At::Done {
+        if !matches!(self.at, At::Done | At::Clean | At::Wrong) {
             cx.cancelled().await;
         }
         Ok(())
@@ -4257,7 +4352,7 @@ fn held_rip<'a>(e: &Env, kind: &str, at: At, size: egui::Vec2) -> (Harness<'a, W
         h.run_steps(2);
     }
     until(&mut h, &format!("{kind} held"), |_| ready.load(std::sync::atomic::Ordering::SeqCst));
-    if at == At::Done {
+    if matches!(at, At::Done | At::Clean | At::Wrong) {
         until(&mut h, "Rip to finish", |a| a.m.snapshot(a.sel).steps[id].state == StepState::Ok);
     }
     h.run_steps(3);
@@ -4300,10 +4395,13 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                     assert!(times.ends_with('×'), "{times}");
                     h.get_by_label_contains("Sector 14");
                     assert!(row_says(&h, &["Read the disc", "SCSI 2, C2 37", "Reading"]), "the errors so far");
+                    // Where they were met, from Rip's own log.
+                    h.get_by_label("Most read errors between 22% and 41%");
                 }
                 ("data" | "game", At::Done) => {
                     h.get_by_label("The disc, 682 MB read");
                     h.get_by_label("Bad parts re-read");
+                    h.get_by_label("Most read errors between 23% and 45%");
                     assert!(row_says(&h, &["Read the disc", "SCSI 105840, C2 211731", "Errors"]));
                     assert!(row_says(&h, &["Re-read bad parts", "All put right"]));
                     assert!(row_says(&h, &["Check every sector", "None wrong"]));
@@ -4342,9 +4440,26 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                     h.get_by_label("Read again, S03E02 Proshai, Livushka");
                     h.get_by_label("Skip this video, S03E02 Proshai, Livushka");
                 }
+                (_, At::Clean | At::Wrong) => unreachable!(),
             }
             shot(&mut h, &format!("rip-{kind}-{word}{tag}"));
         }
+    }
+    // A game read cleanly, and one like Koudelka's: errors as it read,
+    // and sectors found wrong.
+    for (at, word) in [(At::Clean, "clean"), (At::Wrong, "wrong")] {
+        let e = env();
+        let (mut h, _) = held_rip(&e, "game", at, size);
+        if at == At::Clean {
+            h.get_by_label("The disc, 682 MB read");
+            h.get_by_label("Read cleanly");
+            assert!(h.query_by_label_contains("bad sector").is_none() && h.query_by_label_contains("read errors").is_none());
+        } else {
+            h.get_by_label("The disc, 682 MB not clean");
+            h.get_by_label("25 sectors came back wrong");
+            h.get_by_label("25 bad sectors, most between 54% and 67%");
+        }
+        shot(&mut h, &format!("rip-game-{word}{tag}"));
     }
     // One title: the emptiest list.
     let e = env();
