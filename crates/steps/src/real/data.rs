@@ -658,10 +658,11 @@ mod tests {
         let (presets, v) = at(recipes::cd(), "lib1", None);
         assert_eq!(v, Some(Value::from(template::DEFAULT)));
         assert_eq!(presets, ["Artist / Album / 01 - Title", "Sorted artist / Album / 01 Artist - Title", "Album / 01 - Title", "01 - Title"]);
-        // A game's image: by system, as the Games recipe files it.
+        // A game's image: a folder for the game under its system, as the
+        // Games recipe files it.
         let (presets, v) = at(recipes::games(), "g_lib", None);
-        assert_eq!(v, Some(Value::from("{system}/{name}")));
-        assert_eq!(presets, ["System / Name", "System / Game", "Name", "Date and disc name"]);
+        assert_eq!(v, Some(Value::from("{system}/{title}")));
+        assert_eq!(presets, ["System / Game", "System / Name", "Name", "Date and disc name"]);
         // Any other disc's image: by name.
         let (presets, v) = at(recipes::data(), "d_lib", None);
         assert_eq!(v, Some(Value::from("{name}")));
@@ -677,10 +678,12 @@ mod tests {
         use crate::recipes;
         for saved in [template::DEFAULT, "Artist / Album / 01 - Title", ""] {
             assert_eq!(names_in(&recipes::data().root, "d_lib", Some(saved)).1, Some(Value::from(template::DUMP_DEFAULT)), "{saved:?}");
-            assert_eq!(names_in(&recipes::games().root, "g_lib", Some(saved)).1, Some(Value::from(template::GAME_DEFAULT)), "{saved:?}");
+            assert_eq!(names_in(&recipes::games().root, "g_lib", Some(saved)).1, Some(Value::from(template::GAME_FOLDER)), "{saved:?}");
             assert_eq!(names_in(&recipes::video().root, "v_lib", Some(saved)).1, Some(Value::from("Jellyfin")), "{saved:?}");
         }
-        // What you chose stays, another kind's default included.
+        // What you chose stays, another kind's default included, and a
+        // game's disc in a folder of its own.
+        assert_eq!(names_in(&recipes::games().root, "g_lib", Some("{system}/{name}")).1, Some(Value::from("{system}/{name}")));
         assert_eq!(names_in(&recipes::data().root, "d_lib", Some("System / Name")).1, Some(Value::from("System / Name")));
         assert_eq!(names_in(&recipes::games().root, "g_lib", Some("{name}")).1, Some(Value::from("{name}")));
         // And on music, the music default is just the default.
@@ -693,6 +696,7 @@ mod tests {
         let words = info.params.iter().find(|p| p.key == "names").and_then(|p| p.on_card).and_then(|c| c.value).unwrap();
         let says = |v: &str| words(&|k| (k == "names").then(|| Value::from(v)));
         assert_eq!(says("{system}/{name}"), "System / Name");
+        assert_eq!(says("{system}/{title}"), "System / Game");
         assert_eq!(says("{name}"), "Name");
         assert_eq!(says("Jellyfin"), "Jellyfin");
         assert_eq!(says(template::DEFAULT), "Artist / Album / 01 - Title");

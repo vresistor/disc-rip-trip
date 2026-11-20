@@ -95,7 +95,7 @@ pub fn data() -> Recipe {
 
 /// Games: the dump checked against Redump, named by the entry its hash
 /// matches (asking only when it matches nothing), made into a CHD, filed
-/// under its system with Redump's LibCrypt sidecar if it needs one, and a
+/// in a folder for the game under its system with Redump's LibCrypt sidecar if it needs one, and a
 /// multi-disc game's playlist kept beside its discs; and, as soon as it's checked, the tray opened for the next disc.
 pub fn games() -> Recipe {
     Recipe {
@@ -110,7 +110,7 @@ pub fn games() -> Recipe {
             branches([
                 chain([
                     Node::step("g_chd", "chd"),
-                    Node::step("g_lib", "folder").labelled("Library").with("folder", "~/Games").with("names", "{system}/{name}"),
+                    Node::step("g_lib", "folder").labelled("Library").with("folder", "~/Games").with("names", crate::template::GAME_FOLDER),
                     Node::step("g_sbi", "libcrypt"),
                     Node::step("g_m3u", "m3u"),
                 ]),

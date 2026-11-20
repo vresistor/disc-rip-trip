@@ -1961,18 +1961,20 @@ fn a_folder_s_names_follow_what_reaches_it() {
     shot(&mut h, "step-folder-music");
     assert_eq!(presets_offered(&mut h), ["Artist / Album / 01 - Title", "Sorted artist / Album / 01 Artist - Title", "Album / 01 - Title", "01 - Title"]);
     assert_eq!(card_says(&mut h, "lib1")[1], "Names Artist / Album / 01 - Title");
-    // A game's CHD: by system, and only the image layouts and tokens.
+    // A game's CHD: a folder for the game under its system, and only the
+    // image layouts and tokens.
     h.get_by_label_contains("Games").click();
     h.run_steps(2);
     open_tile(&mut h, "Library,");
-    h.get_by_value("System / Name");
-    assert_eq!(template_box(&h), "{system}/{name}");
-    h.get_by_label_contains("PlayStation/Colony Wars (Europe) (Disc 1)/");
+    h.get_by_value("System / Game");
+    assert_eq!(template_box(&h), "{system}/{title}");
+    h.get_by_label_contains("PlayStation/Colony Wars (Europe)/");
+    assert!(h.query_by_label_contains("(Disc 1)/").is_none(), "the game's folder, not the disc's");
     h.get_by_label("Insert {serial}");
     assert!(h.query_by_label("Insert {album}").is_none());
     shot(&mut h, "step-folder-game");
     assert_eq!(presets_offered(&mut h), ["Name", "System / Name", "System / Game", "Date and disc name"]);
-    assert_eq!(card_says(&mut h, "g_lib"), ["Folder ~/Games", "Names System / Name"]);
+    assert_eq!(card_says(&mut h, "g_lib"), ["Folder ~/Games", "Names System / Game"]);
     // Films and episodes, made smaller: Jellyfin's.
     h.get_by_label_contains("Films and TV").click();
     h.run_steps(2);
@@ -4271,7 +4273,6 @@ fn a_ps1_recipe_is_built_by_hand_with_its_side_by_side_steps_joined() {
     // Where to file it: the folder picker is the system's, so set directly.
     let i = app(&h).sel;
     app_mut(&mut h).m.set_param(i, "folder", "folder", Value::from("~/Games")).unwrap();
-    app_mut(&mut h).m.set_param(i, "folder", "names", Value::from("{system}/{name}")).unwrap();
     let plus = format!("Add after {}", n(&h, "folder"));
     add_with_plus(&mut h, &plus, "libcrypt");
     // The playlist beside the protection file, not after it: both fit in

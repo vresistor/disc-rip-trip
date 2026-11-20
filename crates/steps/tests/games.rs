@@ -212,11 +212,13 @@ async fn a_two_disc_game_gets_its_playlist_once_both_are_filed() {
     let e = engine(vec![COLONY_WARS_1, COLONY_WARS_2]);
     let (one, _) = drive(e.start(&recipes::games()).unwrap(), Answer::Skip).await;
     assert_eq!((one.steps["g_disc"].status.as_str(), one.steps["g_disc"].qualifier.as_str()), ("SLES-00860", "PlayStation"));
-    assert_eq!(one.steps["g_lib"].items[0].note, "~/Games/PlayStation/Colony Wars (Europe) (Disc 1)");
+    // In the game's folder, which disc 2 joins.
+    assert_eq!(one.steps["g_lib"].items[0].note, "~/Games/PlayStation/Colony Wars (Europe)");
     assert_eq!((one.steps["g_m3u"].status.as_str(), one.steps["g_m3u"].detail.as_str()), ("Disc 1 of Colony Wars (Europe)", "Waits for another disc"));
     let (two, asked) = drive(e.start(&recipes::games()).unwrap(), Answer::Skip).await;
     assert!(asked.is_empty());
     assert_eq!(two.steps["g_choose"].status, "Colony Wars (Europe) (Disc 2)");
+    assert_eq!(two.steps["g_lib"].items[0].note, "~/Games/PlayStation/Colony Wars (Europe)");
     assert_eq!((two.steps["g_m3u"].status.as_str(), two.steps["g_m3u"].qualifier.as_str()), ("Colony Wars (Europe).m3u", "2 discs"));
 }
 
@@ -276,9 +278,11 @@ async fn a_two_disc_game_is_verified_made_into_chds_filed_and_given_its_playlist
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_two_disc_game_filed_in_one_folder_has_its_playlist_beside_its_discs() {
+    // A Folder's default for a game: a folder for the game under its
+    // system, the discs, LibCrypt file and playlist in it.
     two_discs(
         "real-games-folder",
-        "System / Game",
+        "",
         |name| format!("PlayStation/Colony Wars (Europe)/{name}"),
         "PlayStation/Colony Wars (Europe)/Colony Wars (Europe).m3u",
         "Colony Wars (Europe) (Disc 1).chd\nColony Wars (Europe) (Disc 2).chd\n",
@@ -286,7 +290,8 @@ async fn a_two_disc_game_filed_in_one_folder_has_its_playlist_beside_its_discs()
     .await;
 }
 
-/// Two discs of a set through the real steps, filed with `names`: `at`
+/// Two discs of a set through the real steps, filed with `names` (its
+/// default when empty): `at`
 /// gives where a disc's files go (without extension), relative.
 async fn two_discs(dir: &str, names: &str, at: fn(&str) -> String, m3u: &str, body: &str) {
     let base = std::env::current_dir().unwrap().join("../../target/drt-test").join(dir);
@@ -329,7 +334,14 @@ async fn two_discs(dir: &str, names: &str, at: fn(&str) -> String, m3u: &str, bo
             Node::step("redump", "redump"),
             Node::step("choose", "game-choose"),
             Node::step("chd", "chd"),
-            Node::step("lib", "folder").with("folder", lib.display().to_string().as_str()).with("names", names),
+            {
+                let lib = Node::step("lib", "folder").with("folder", lib.display().to_string().as_str());
+                if names.is_empty() {
+                    lib
+                } else {
+                    lib.with("names", names)
+                }
+            },
             Node::step("sbi", "libcrypt"),
             Node::step("m3u", "m3u"),
         ]),

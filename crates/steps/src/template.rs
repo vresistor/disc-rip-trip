@@ -27,21 +27,23 @@ pub const DEFAULT: &str = "{albumartist}/{album}/{track} - {title}";
 // files go in under the names they were made with. Renaming tracks would
 // mean rewriting the cue, which changes the file Redump's hash describes.
 
-/// A game's discs in one folder: the discs of a set together, with their
-/// playlist beside them.
+/// Every game in a folder of its own under its system, named for the game
+/// without its disc (`PlayStation/Final Fantasy VII (Europe)/`): a set's
+/// discs together, with their playlist and LibCrypt files beside them,
+/// and a one-disc game in a folder too. What a game is filed as unless
+/// you choose otherwise.
 pub const GAME_FOLDER: &str = "{system}/{title}";
 
 pub const DUMP_DEFAULT: &str = "{name}";
 
-/// A game's discs, each in its own folder under its system, by Redump's
-/// name: what the built-in Games recipe files them as.
-pub const GAME_DEFAULT: &str = "{system}/{name}";
+/// Each disc in a folder of its own under its system, by Redump's name.
+pub const SYSTEM_NAME: &str = "{system}/{name}";
 
 /// The layouts for a game disc's image: a system's games together.
-pub const GAME_PRESETS: &[(&str, &str)] = &[("System / Name", GAME_DEFAULT), ("System / Game", GAME_FOLDER), ("Name", "{name}"), ("Date and disc name", "{date} {label}")];
+pub const GAME_PRESETS: &[(&str, &str)] = &[("System / Game", GAME_FOLDER), ("System / Name", SYSTEM_NAME), ("Name", "{name}"), ("Date and disc name", "{date} {label}")];
 
 /// The layouts for any other disc's image.
-pub const DATA_PRESETS: &[(&str, &str)] = &[("Name", "{name}"), ("System / Name", GAME_DEFAULT), ("Date and disc name", "{date} {label}")];
+pub const DATA_PRESETS: &[(&str, &str)] = &[("Name", "{name}"), ("System / Name", SYSTEM_NAME), ("Date and disc name", "{date} {label}")];
 
 /// What a Library offers: the music layouts and the image ones.
 pub const LIBRARY_PRESETS: &[(&str, &str)] = &[
@@ -211,7 +213,7 @@ impl Files {
         const MUSIC_DEFAULT: &[&str] = &[DEFAULT, PRESETS[0].0];
         let (default, presets, tokens, was_default) = match self {
             Files::Music => (DEFAULT, PRESETS, TOKENS, &[][..]),
-            Files::Game => (GAME_DEFAULT, GAME_PRESETS, DUMP_TOKENS, MUSIC_DEFAULT),
+            Files::Game => (GAME_FOLDER, GAME_PRESETS, DUMP_TOKENS, MUSIC_DEFAULT),
             Files::Data => (DUMP_DEFAULT, DATA_PRESETS, DATA_TOKENS, MUSIC_DEFAULT),
             Files::Video => (JELLYFIN, VIDEO_PRESETS, VIDEO_TOKENS, MUSIC_DEFAULT),
         };
