@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -170,6 +170,6 @@ jobs:
           you where to get it.
 
           Licensing, and the source of the bundled GPL and LGPL tools, are in
-          [THIRD-PARTY.md](https://github.com/vresistor/disc-rip-trip/blob/master/THIRD-PARTY.md)
+          [THIRD-PARTY.md](https://github.com/vresistor/disc-rip-trip/blob/main/THIRD-PARTY.md)
           and `tools-provenance.txt`.
           EOF
