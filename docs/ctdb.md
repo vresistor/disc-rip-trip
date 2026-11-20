@@ -101,7 +101,8 @@ left out at the start (track 1) and at the end (track 13).
   gives the same answer over HTTPS; `https://db.cuetools.net` fails its
   certificate check.
 
-The answer for the disc in our drive (fuzzy, 20 November 2026; trimmed):
+The answer for the disc in our drive (20 November 2026, trimmed; the same
+three entries with `fuzzy=0` and `fuzzy=1`):
 
 ```xml
 <ctdb xmlns="http://db.cuetools.net/ns/mmd-1.0#" xmlns:ext="http://db.cuetools.net/ns/ext-1.0#">
@@ -220,15 +221,21 @@ policy on it either.
    goes. It doesn't hold the stream in memory: one pass over the files,
    keeping 11,760 × npar syndromes (376 KB for npar 16) and the CRC
    state. Then it finds each entry's shift, and for each waiting track:
-   - **its checksum matches an entry** at that entry's shift: verified by
-     CTDB, sent on;
+   - **its samples are all covered by matching checksums** at an
+     entry's shift: verified by CTDB, sent on. At a shift other than 0
+     a track's checksum doesn't line up with its file: at +12, track N's
+     checksum leaves out its own first 12 samples and takes track N+1's
+     first 12. So a track counts when its own checksum matches and so
+     does the neighbour's on the side its file reaches into (track N−1
+     for a positive shift, N+1 for a negative one), or when the disc's
+     `crc32` matches;
    - **it's damaged** (reads disagree, or two agree but CTDB disagrees)
      **and an entry has repair data:** Rip fetches it and repairs. A
      repair counts only if (a) every correction falls in tracks that
      aren't already proven (a correction inside an AccurateRip match
      means the entry isn't our audio: no repair), (b) the repaired disc's
-     checksum equals the entry's `crc32`, and (c) each repaired track's
-     checksum equals its `trackcrcs`. Then the repaired WAV is the
+     checksum equals the entry's `crc32`, and (c) each repaired track
+     passes the rule above. Then the repaired WAV is the
      track's file, and it's sent on;
    - **neither:** as today. *Two reads agree* still settles a track, and
      a damaged track waits for you with the usual choices.
@@ -240,6 +247,13 @@ policy on it either.
 For repair: the entry with the most confidence among those with repair
 data that the disc's proven tracks agree with. An entry of confidence 1
 can still repair, but the row says 1.
+
+**The disc's two ends** are in no CTDB checksum and can't be repaired:
+track 1's first 5,880 samples (plus the shift) and the last track's final
+5,880 to 11,759. (AccurateRip leaves out 2,939 at the start and 2,940 at the end.)
+So for track 1 and the last track, CTDB's word counts only if the reads
+also agree on those samples, compared sample by sample; if they don't,
+the track is as unsettled as before, and the row says where.
 
 **Tracks to rip other than *all*:** no CTDB. It needs the whole disc; the
 log says so once. **The hidden track** isn't in CTDB's stream; it's
@@ -341,9 +355,11 @@ drive name left out.
 - **The shift's sign.** CUETools' code turns it round twice
   (`CUEToolsDB.cs` 355, 574). Our test fixes it: CTDB's audio is 12
   samples earlier than ours on this disc.
-- **Why 12.** Our rip matched AccurateRip at +103 with confidence 30, and
-  CTDB's main entry is 12 samples away. Either AccurateRip holds both
-  pressings or something else differs. Not known.
+- **Why 12.** Our rip matched AccurateRip at confidence 30, while the
+  same logs say AccurateRip's best for the disc is 67–68 (*max
+  confidence*). So AccurateRip holds a more common pressing too, most
+  likely the one CTDB's main entry is from, 12 samples from ours. Likely,
+  not shown.
 - **The service.** One person runs it. The HTTPS lookup name and the S3
   address aren't what CUETools uses and could change.
 - **Discs with data tracks** need the TOC with the data track marked and

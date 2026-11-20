@@ -141,10 +141,11 @@ reports `PARANOIA_CB_CACHEERR` (`paranoia.c` 114, 2598–2621, called at
 2738). That is how level 3's own re-reads inside one process stay
 honest, as long as the drive's real cache is no bigger than the model.
 
-**What it can't see.** The model starts empty in every process
-(`cdcache_begin`/`cdcache_end` start at 9999999, `p_block.c` 427–428),
-and every one of our reads is its own cyanrip process. So paranoia knows
-nothing about what the previous read left in the drive. Between our
+**What it can't see.** Every one of our reads is its own cyanrip
+process, and the model knows nothing of what came before: both its ends
+start at 9999999 (`p_block.c` 427–428), so the first read of each
+process only probes the sector before the track, timed. It doesn't know
+what the previous read left in the drive. Between our
 reads, only the order of reading protects us: a re-read starts at the
 track's first sector, while the drive holds the last sectors the
 previous read took, the track's end (and its read-ahead past it). By the
@@ -170,8 +171,11 @@ cache (*Cache access insufficiently faster than media access*,
 `src/cachetest.c` 785–787). Then track 3 (105 s) read twice with Rip's
 exact arguments, `-P 0` then `-P 3`, offset +103: the same samples
 (byte-identical WAVs, EAC CRC `FD03A15A`, AccurateRip v2 match at
-confidence 30), no `CACHEERR` in either. Nor in the 13 first reads kept
-from an earlier run.
+confidence 30), no `CACHEERR` in either, nor in the 12 first reads of
+an earlier run that printed their counts. On this drive that proves
+little: paranoia only calls a read *cache* when it comes back in under
+6 ms, and `-A` timed this drive's cached reads at 15.67 ms a sector. A
+hit here would never be reported.
 
 **So, today.** With this drive, *two reads agree* is sound for every
 track of 2.5 s or more, which is every real track: the Red Book's
@@ -201,19 +205,22 @@ is the vendor's description, not code we could read.
    compared, read 2400 sectors (twice paranoia's model, 5.6 MB) from a
    part of the disc at least that far from the track, and throw them
    away, over SG_IO as the TOC read already does; about two seconds at
-   this drive's speed. It
-   costs nothing on a drive that doesn't cache, and it doesn't depend
-   on knowing the cache's size. This is EAC's approach.
-2. **Read paranoia's counts.** Parse `CACHEERR` from each read's output
-   and record it with the read. A re-read with any doesn't count towards
-   *two reads agree*; the row says why.
-3. **A test that catches it.** With a track shorter than the drive's
-   cache (a hidden track of a second or two, or a drive with a large
-   cache): read it, read it again at once, and time the second read; a
-   read many times faster than the disc can turn means memory. Then do
-   the same after (1) and check the time is the disc's. In the unit
-   tests, a stand-in cyanrip that prints `CACHEERR: 3` must leave the
-   track unsettled.
+   this drive's speed. It does no harm on a drive that doesn't cache,
+   and it doesn't depend on knowing the cache's size. This is EAC's
+   approach.
+   This is the fix: it works whether or not the cache can be detected.
+2. **Read paranoia's counts as well.** Parse `CACHEERR` from each read's
+   output and record it with the read; a re-read with any doesn't count
+   towards *two reads agree*, and the row says why. It's a signal on
+   drives whose cache answers fast. On this one it can't fire (above).
+3. **A test, still to be designed properly.** Timing can't tell on this
+   drive, so it has to be the samples: on a scratched disc where
+   careful reads of one short stretch come back different each time,
+   read the stretch twice in a row, then twice with (1) between. If only
+   the reads without (1) agree, the drive is answering from memory. In
+   the unit tests, a stand-in cyanrip that prints `CACHEERR: 3` must
+   leave the track unsettled, and Rip must read elsewhere before every
+   re-read it compares.
 
 Until (1) is in, a hidden track of under 3 s settled by two reads that
 agree should be taken with that in mind.
