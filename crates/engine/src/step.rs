@@ -261,6 +261,10 @@ impl Inlet {
         self.cx.view(|v| {
             if first {
                 if matches!(v.state, StepState::Idle | StepState::Wait) {
+                    // What it waited for is behind it.
+                    if v.state == StepState::Wait {
+                        v.detail.clear();
+                    }
                     v.state = StepState::Busy;
                     v.status.clear();
                 }
@@ -642,6 +646,12 @@ impl Cx {
     pub fn decided(&self, chosen: Option<&Candidate>, why: impl Into<String>) {
         let d = crate::snapshot::Decision { chosen: chosen.map(|c| c.id.clone()), title: chosen.map(|c| c.title.clone()).unwrap_or_default(), why: why.into() };
         self.view(|v| v.record.decided = Some(d));
+    }
+
+    /// What this step found, in its own shape, for its sidebar (`None`
+    /// takes it away).
+    pub fn report(&self, report: Option<Value>) {
+        self.view(|v| v.record.report = report);
     }
 
     /// A file this step wrote; its size is read now (one already noted

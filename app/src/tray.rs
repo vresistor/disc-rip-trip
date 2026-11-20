@@ -267,6 +267,10 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     let Some(v) = snap.steps.get(id).cloned() else { return };
     let Some(info) = app.m.info(i, id) else { return };
     let ctx = app.m.shown_context(i);
+    // Why Check holds a dump: Redump's copy beside it.
+    if let Some(m) = crate::compare::mismatch(&v) {
+        crate::compare::show(ui, p, &m);
+    }
     // A choice: the one chosen, and why; the others below it.
     if let Some(d) = &v.record.decided {
         let options = options_of(&v, ctx.as_ref());
@@ -624,6 +628,9 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                 "cover-art" => {
                     plan.say = String::new();
                 }
+                // What each does, and what came of it.
+                "check" => plan.say = crate::compare::check_say(&v),
+                "redump" => plan.say = crate::compare::redump_say(&v),
                 "cd-text" => {
                     plan.say = match ctx.as_ref().map(|c| cdtext_rows(c, id).len()) {
                         Some(0) if v.state == StepState::Ok => "No CD-Text on this disc.".into(),

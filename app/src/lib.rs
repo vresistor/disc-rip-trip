@@ -6,6 +6,7 @@ pub mod app;
 pub mod canvas;
 pub mod card;
 pub mod chrome;
+pub mod compare;
 pub mod links;
 pub mod model;
 pub mod motion;

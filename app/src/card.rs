@@ -343,7 +343,9 @@ pub fn build(inp: &Input, measure: Measure) -> Card {
     }
 
     // The outcome and its qualifier; a question asked here is the detail.
-    let quiet = idle_word(&v.status) && matches!(v.state, StepState::Idle | StepState::Wait | StepState::Hold);
+    // Straight after a step that needs you, it says what it waits for.
+    let waits = v.state == StepState::Wait && v.status.starts_with("Waits for ") && !v.detail.is_empty();
+    let quiet = idle_word(&v.status) && matches!(v.state, StepState::Idle | StepState::Wait | StepState::Hold) && !waits;
     let asking = inp.asking || (v.state == StepState::Needs && v.status.ends_with('?') && v.record.started.is_none());
     let (outcome, qualifier, detail) = if asking {
         let d = [v.status.as_str(), v.detail.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
@@ -370,7 +372,7 @@ pub fn build(inp: &Input, measure: Measure) -> Card {
     // Not run yet: a blueprint, only its name and settings. The Drive
     // has something to say before a run (a disc in, or none).
     // Only while it has nothing to say: Not available or Not connected is said.
-    let plan = v.record.started.is_none() && v.step != "drive" && !asking && matches!(v.state, StepState::Idle | StepState::Wait) && idle_word(&v.status);
+    let plan = v.record.started.is_none() && v.step != "drive" && !asking && !waits && matches!(v.state, StepState::Idle | StepState::Wait) && idle_word(&v.status);
     if plan {
         return Card { shown, name, rows, locked: inp.locked, outcome: vec![], qualifier: String::new(), detail: String::new(), working: false, cells: vec![], cover: false, cut, plan };
     }

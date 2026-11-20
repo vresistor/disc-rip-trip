@@ -16,6 +16,7 @@ pub mod gnudb;
 pub mod hash;
 pub mod lyrics;
 pub mod media;
+pub mod mismatch;
 pub mod musicbrainz;
 pub mod net;
 pub mod offset;

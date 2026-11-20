@@ -53,6 +53,14 @@ pub struct Options {
     pub retries: u32,
     /// Read speed in redumper's units (×), or `None` for the drive's best.
     pub speed: Option<u32>,
+    /// The drive's read offset in samples, when the app knows it. redumper
+    /// has its own list of drives; one not on it is read at +0. A data
+    /// track comes out the same either way (redumper finds where its
+    /// sectors start), but an audio-only disc doesn't, and the write
+    /// offset redumper reports is only right with the right read offset.
+    /// The same value for the dump and every re-read of it: redumper
+    /// places what it reads by it.
+    pub read_offset: Option<i64>,
 }
 
 pub fn dump_args(o: &Options, t: &Target) -> Vec<String> {
@@ -67,8 +75,15 @@ pub fn dump_args(o: &Options, t: &Target) -> Vec<String> {
     if let Some(s) = o.speed {
         a.push(format!("--speed={s}"));
     }
+    a.extend(o.offset_arg());
     a.extend(t.args());
     a
+}
+
+impl Options {
+    fn offset_arg(&self) -> Option<String> {
+        self.read_offset.map(|o| format!("--drive-read-offset={o}"))
+    }
 }
 
 pub fn refine_args(o: &Options, t: &Target) -> Vec<String> {
@@ -76,6 +91,7 @@ pub fn refine_args(o: &Options, t: &Target) -> Vec<String> {
     if let Some(s) = o.speed {
         a.push(format!("--speed={s}"));
     }
+    a.extend(o.offset_arg());
     a.extend(t.args());
     a
 }
@@ -659,8 +675,13 @@ error: data errors detected, unable to continue
     #[test]
     fn the_commands_for_each_phase() {
         let t = Target { dir: PathBuf::from("/nonexistent/work/image"), name: "MY_DISC".into() };
-        let o = Options { drive: "/dev/sr0".into(), retries: 20, speed: None };
+        let o = Options { drive: "/dev/sr0".into(), retries: 20, speed: None, read_offset: None };
         assert_eq!(dump_args(&o, &t), ["dump", "--drive=/dev/sr0", "--retries=20", "--auto-detect", "--overwrite", "--image-path=/nonexistent/work/image", "--image-name=MY_DISC"]);
+        // The drive's offset, when known, for the dump and its re-reads alike.
+        let known = Options { read_offset: Some(-472), ..o.clone() };
+        assert!(dump_args(&known, &t).contains(&"--drive-read-offset=-472".to_owned()));
+        assert!(refine_args(&known, &t).contains(&"--drive-read-offset=-472".to_owned()));
+        assert!(!dump_args(&o, &t).iter().any(|a| a.starts_with("--drive-read-offset")));
         let o = Options { speed: Some(8), retries: 0, ..o };
         assert!(refine_args(&o, &t).contains(&"--retries=1".to_owned()), "refine with no retries does nothing");
         assert!(refine_args(&o, &t).contains(&"--speed=8".to_owned()));

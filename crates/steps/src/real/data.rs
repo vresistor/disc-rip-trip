@@ -250,6 +250,11 @@ impl Image {
     }
 }
 
+/// The drive's read offset, which Drive put on the disc when it knew it.
+pub fn read_offset(c: &Context) -> Option<i64> {
+    c.get(Subject::Disc, "offset").and_then(|v| v.parse().ok())
+}
+
 fn plural(n: u64, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
@@ -287,7 +292,11 @@ impl Step for Image {
         let name = redumper::image_name(disc.context().get(Subject::Disc, "label").unwrap_or(""));
         let t = redumper::Target { dir: cx.work()?.join("image"), name };
         let speed = cx.text("speed").trim_end_matches('×').parse().ok();
-        let opts = redumper::Options { drive: dev, retries: cx.param("retries").and_then(|v| v.as_u64()).unwrap_or(20) as u32, speed };
+        let read_offset = read_offset(disc.context());
+        let opts = redumper::Options { drive: dev, retries: cx.param("retries").and_then(|v| v.as_u64()).unwrap_or(20) as u32, speed, read_offset };
+        if let Some(o) = read_offset {
+            cx.log(format!("the drive's read offset, {o:+}, given to redumper"));
+        }
         let item = Item::new(DUMP, ItemKind::Dump, label, None, None).knowing(&disc);
         cx.item(&item, ItemState::Busy, "reading");
         let mut out = String::new();

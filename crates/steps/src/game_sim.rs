@@ -64,6 +64,15 @@ pub const GAME_DAT: &str = r#"<?xml version="1.0"?>
     <version>Rev 1</version>
     <rom name="Tomb Raider (USA) (Rev 1) (Track 01).bin" size="2352000" crc="02" md5="02" sha1="7700000000000000000000000000000000000002"/>
   </game>
+  <game name="Lantern Keep (Europe) (Disc 1)">
+    <serial>SLES-04711</serial>
+    <rom name="Lantern Keep (Europe) (Disc 1).cue" size="90" crc="04" md5="04" sha1="7700000000000000000000000000000000000004"/>
+    <rom name="Lantern Keep (Europe) (Disc 1).bin" size="470400000" crc="05" md5="05" sha1="43c1fe2600000000000000000000000000000005"/>
+  </game>
+  <game name="Lantern Keep (Europe) (Disc 1) (Rev 1)">
+    <serial>SLES-04711</serial>
+    <rom name="Lantern Keep (Europe) (Disc 1) (Rev 1).bin" size="471105600" crc="06" md5="06" sha1="7700000000000000000000000000000000000006"/>
+  </game>
   <game name="Sonic CD (Europe)">
     <serial>4407</serial>
     <rom name="Sonic CD (Europe).bin" size="2352" crc="03" md5="03" sha1="7700000000000000000000000000000000000003"/>
@@ -80,6 +89,11 @@ pub struct Disc {
     pub bytes: u64,
     /// The dump's files and their SHA-1s, cue first.
     pub roms: &'static [(&'static str, &'static str)],
+    /// Their sizes, in the same order, when they matter (an empty list
+    /// takes Redump's).
+    pub sizes: &'static [u64],
+    /// redumper's log of the read, when there's something to say.
+    pub log: &'static str,
 }
 
 pub const APE_ESCAPE: Disc = Disc {
@@ -89,6 +103,8 @@ pub const APE_ESCAPE: Disc = Disc {
     sectors: 181_632,
     bytes: 371_982_336,
     roms: &[("SCES_015.64.cue", "0000000000000000000000000000000000000000"), ("SCES_015.64.bin", "abe619ea253b6af1ceee54d31499f0db2919915d")],
+    sizes: &[],
+    log: "",
 };
 
 pub const COLONY_WARS_1: Disc = Disc {
@@ -102,6 +118,8 @@ pub const COLONY_WARS_1: Disc = Disc {
         ("SLES_008.60 (Track 1).bin", "7210064da9a542124d4e32d6202672cc6b5756d2"),
         ("SLES_008.60 (Track 2).bin", "28a06c34d53442f736fed283c086340d7c56321e"),
     ],
+    sizes: &[],
+    log: "",
 };
 
 pub const COLONY_WARS_2: Disc = Disc {
@@ -115,6 +133,8 @@ pub const COLONY_WARS_2: Disc = Disc {
         ("SLES_108.60 (Track 1).bin", "4c1ee2aa8703e3d3d85d96fc82947dfd679bb9d6"),
         ("SLES_108.60 (Track 2).bin", "28a06c34d53442f736fed283c086340d7c56321e"),
     ],
+    sizes: &[],
+    log: "",
 };
 
 /// A Tomb Raider whose hash Redump doesn't have: its serial names two
@@ -126,10 +146,59 @@ pub const TOMB_RAIDER_UNKNOWN: Disc = Disc {
     sectors: 1_010,
     bytes: 2_068_480,
     roms: &[("SLUS_001.52.cue", "0000000000000000000000000000000000000000"), ("SLUS_001.52.bin", "1234000000000000000000000000000000000000")],
+    sizes: &[],
+    log: "",
 };
+
+/// A made-up game read badly by a drive redumper doesn't know: the same
+/// size as Redump's copy, some sectors wrong, and the drive none the wiser.
+pub const LANTERN_KEEP_DAMAGED: Disc = Disc {
+    label: "SLES_047.11",
+    serial: "SLES-04711",
+    region: "Europe",
+    sectors: 200_000,
+    bytes: 409_600_000,
+    roms: &[("SLES_047.11.cue", "0000000000000000000000000000000000000000"), ("SLES_047.11.bin", "9b07a5e100000000000000000000000000000000")],
+    sizes: &[90, 470_400_000],
+    log: LANTERN_KEEP_LOG,
+};
+
+/// Its log, in the shape redumper (b744) writes one: trimmed, made up.
+pub const LANTERN_KEEP_LOG: &str = "\
+redumper (build: b744)
+arguments: dump --drive=/dev/sr0 --retries=20 --auto-detect --overwrite --image-path=image --image-name=SLES_047.11
+warning: drive read offset not found in the database
+warning: drive not found in the database
+warning: using generic drive
+drive information
+  inquiry: ACME - DVD-RW XY123 (revision level: 1.01)
+  configuration: GENERIC (read offset: +0, C2 shift: 0, pre-gap start: +0, read method: BE, sector order: DATA_C2_SUB)
+*** DUMP (time check: 0s)
+disc TOC:
+  track 1 {  data }
+    index 01 { LBA:      0, MSF: 00:02:00 }
+  track A {  data }
+    index 01 { LBA: 200000, MSF: 44:28:50 }
+media errors:
+  SCSI: 0 samples
+  C2: 0 samples
+  Q: 316
+*** END (time check: 376s)
+*** INFO (time check: 0s)
+CD-ROM [SLES_047.11.bin]:
+  sectors count: 200000
+  MSF errors: 140 (LBA: 22000, 31000, 98000-98001, 136000)
+  ECC errors: 15 (LBA: 98000, 99000, 110000, 120000, 136000)
+  EDC errors: 12 (LBA: 98000, 99000, 120000, 136000)
+
+  REDUMP.INFO errors: 15
+*** END (time check: 1s)
+";
 
 /// The dump's files as `name=sha1`, for Check.
 const ROMS: &str = "sim roms";
+/// redumper's log of the simulated read.
+const LOG: &str = "sim log";
 
 // ---- Game disc ----------------------------------------------------------------------------------
 
@@ -174,8 +243,11 @@ impl Step for GameDisc {
             };
             let mut item = disc.becomes(ItemKind::GameDisc, None);
             let (status, system, detail) = game::record(item.context_mut(), &id, &found);
-            let roms: Vec<String> = d.roms.iter().map(|(n, s)| format!("{n}={s}")).collect();
+            let roms: Vec<String> = d.roms.iter().enumerate().map(|(i, (n, s))| format!("{n}={s}={}", d.sizes.get(i).copied().unwrap_or(0))).collect();
             item.context_mut().add(Subject::Disc, ROMS, roms.join("|"), "the disc");
+            if !d.log.is_empty() {
+                item.context_mut().add(Subject::Disc, LOG, d.log, "the disc");
+            }
             cx.outcome(status, system, detail);
             item.label = d.label.into();
             outlet.send(item).await;
@@ -186,7 +258,15 @@ impl Step for GameDisc {
 
 fn sim_roms(c: &Context) -> Option<Vec<redump::Rom>> {
     let all = c.get(Subject::Disc, ROMS)?;
-    Some(all.split('|').filter_map(|r| r.split_once('=')).map(|(name, sha1)| redump::Rom { name: name.into(), size: 0, crc: String::new(), md5: String::new(), sha1: sha1.into() }).collect())
+    Some(
+        all.split('|')
+            .filter_map(|r| {
+                let mut f = r.split('=');
+                Some((f.next()?, f.next()?, f.next().and_then(|n| n.parse().ok()).unwrap_or(0)))
+            })
+            .map(|(name, sha1, size)| redump::Rom { name: name.into(), size, crc: String::new(), md5: String::new(), sha1: sha1.into() })
+            .collect(),
+    )
 }
 
 // ---- Rip ----------------------------------------------------------------------------------------
@@ -249,12 +329,20 @@ pub async fn check(cx: &Cx, dump: &Item, outlet: &Outlet) -> Result<bool> {
     let serial = dump.context().get(Subject::Disc, "serial").unwrap_or("").to_owned();
     let cat = redump::parse(GAME_DAT.as_bytes())?;
     let dump = if found.is_none() && game::is_suspect(&cat, &serial, &roms) {
-        game::hold(cx, dump, &serial, |cx, _| {
-            Box::pin(async move {
-                cx.sleep(2000).await?;
-                Ok(None)
-            })
-        })
+        let log = dump.context().get(Subject::Disc, LOG).map(str::to_owned);
+        let explain = |_: &Item| crate::real::mismatch::explain(&serial, &cat.by_serial(&serial), &roms, log.as_deref());
+        game::hold(
+            cx,
+            dump,
+            &serial,
+            |cx, _| {
+                Box::pin(async move {
+                    cx.sleep(2000).await?;
+                    Ok(None)
+                })
+            },
+            explain,
+        )
         .await?
     } else {
         Some(dump)
@@ -276,7 +364,9 @@ impl Step for Redump {
     }
 
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        let mut any = false;
         while let Some(mut dump) = inlet.recv().await {
+            any = true;
             let (system, serial, sectors) = game::known(dump.context());
             let system = system.unwrap_or_default();
             cx.status("", format!("Looking up {system}"));
@@ -287,6 +377,9 @@ impl Step for Redump {
             let cat = redump::parse(GAME_DAT.as_bytes())?;
             game::offer(&cx, &mut dump, game::lookup(&cat, &system, serial.as_deref(), sectors, &roms));
             outlet.send(dump).await;
+        }
+        if !any {
+            game::nothing_came(&cx);
         }
         Ok(())
     }

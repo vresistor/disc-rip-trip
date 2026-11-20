@@ -100,6 +100,11 @@ pub struct StepRecord {
     /// Choose's choice, and why.
     #[serde(default)]
     pub decided: Option<Decision>,
+    /// What the step found, in its own shape, for its sidebar to show:
+    /// Check's comparison of a dump with Redump's. Only the window reads
+    /// it; no step does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<serde_json::Value>,
     /// Files it wrote, with their sizes.
     #[serde(default)]
     pub files: Vec<Made>,
@@ -256,7 +261,9 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Steps that are idle because something before them needs you show it,
-    /// so the tile reads *Waits for choose* rather than just *Ready*.
+    /// so the tile reads *Waits for Choose* rather than just *Ready*. One
+    /// straight after the step that needs you also says why (*Check needs
+    /// you*), which its card shows; one further on only waits.
     pub(crate) fn derive_waits(&mut self) {
         for id in self.order.clone() {
             let view = &self.steps[&id];
@@ -265,22 +272,29 @@ impl Snapshot {
             }
             let blocker = view.preds.iter().find_map(|p| {
                 let pv = &self.steps[p];
+                // Holding an item for you to settle (Check's dump Redump
+                // disagrees with) is needing you too.
+                let holding = pv.state == StepState::Bad && pv.record.finished.is_none() && pv.items.iter().any(|i| i.state == ItemState::Bad);
                 match pv.state {
-                    StepState::Needs | StepState::Hold => Some(pv.name.to_lowercase()),
-                    StepState::Wait => pv.status.strip_prefix("Waits for ").map(str::to_owned),
+                    StepState::Needs => Some((pv.name.clone(), true)),
+                    StepState::Hold => Some((pv.name.clone(), false)),
+                    _ if holding => Some((pv.name.clone(), true)),
+                    StepState::Wait => pv.status.strip_prefix("Waits for ").map(|n| (n.to_owned(), false)),
                     _ => None,
                 }
             });
             let idle = idle_status(&view.preds, &self.steps);
             let view = self.steps.get_mut(&id).unwrap();
             match blocker {
-                Some(name) => {
+                Some((name, asks)) => {
                     view.state = StepState::Wait;
                     view.status = format!("Waits for {name}");
+                    view.detail = if asks { format!("{name} needs you") } else { String::new() };
                 }
                 None if view.state == StepState::Wait => {
                     view.state = StepState::Idle;
                     view.status = idle;
+                    view.detail.clear();
                 }
                 None => {}
             }

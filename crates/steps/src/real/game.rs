@@ -11,6 +11,7 @@
 //! revisions), so identity waits for the hash. Each step's `StepInfo` is
 //! here once and shared by the real and the simulated step.
 
+use super::mismatch::{self, Mismatch};
 use super::playstation::{self, Sectors, Volume};
 use super::{data, media, redump};
 use crate::template;
@@ -350,14 +351,23 @@ pub type Refine = for<'a> fn(&'a Cx, &'a mut drt_engine::Item) -> std::pin::Pin<
 
 /// Holds a suspect dump, Bad, until you say: Refine (re-read, and it goes
 /// on if it now matches), Keep it anyway, or Skip this disc (it isn't filed). Filing
-/// waits meanwhile. Gives the dump to send on, if any.
-pub async fn hold(cx: &Cx, mut dump: drt_engine::Item, serial: &str, refine: Refine) -> Result<Option<drt_engine::Item>> {
+/// waits meanwhile. `explain` says why it doesn't match, for the card and
+/// the sidebar, again after each re-read. Gives the dump to send on, if any.
+pub async fn hold(cx: &Cx, mut dump: drt_engine::Item, serial: &str, refine: Refine, explain: impl Fn(&drt_engine::Item) -> Option<Mismatch>) -> Result<Option<drt_engine::Item>> {
     let bad = format!("Doesn't match Redump's dumps of {serial}");
     cx.log(&bad);
     loop {
-        cx.item(&dump, ItemState::Bad, bad.clone());
+        let why = explain(&dump);
+        if let Some(m) = &why {
+            cx.log(format!("compared with {}: {}", m.entry, m.short()));
+            for line in &m.reading {
+                cx.log(format!("  {line}"));
+            }
+        }
+        cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
+        cx.status("Doesn't match Redump", why.as_ref().map_or_else(|| serial.to_owned(), Mismatch::short));
         cx.state(StepState::Bad);
-        cx.status("Doesn't match Redump", serial.to_owned());
+        cx.item(&dump, ItemState::Bad, bad.clone());
         let req = loop {
             match cx.next_retry().await {
                 None => return Ok(None),
@@ -381,6 +391,7 @@ pub async fn hold(cx: &Cx, mut dump: drt_engine::Item, serial: &str, refine: Ref
                 cx.item(&dump, ItemState::Busy, "re-reading bad parts");
                 cx.status("Re-reading bad parts", serial.to_owned());
                 if let Some(name) = refine(cx, &mut dump).await? {
+                    cx.report(None);
                     cx.item(&dump, ItemState::Ok, format!("Verified: {name}"));
                     cx.status("Verified", "after re-reading bad parts");
                     return Ok(Some(dump));
@@ -401,7 +412,14 @@ pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Ro
     if !is_suspect(&cat, &serial, roms) {
         return Ok(Some(dump));
     }
-    hold(cx, dump, &serial, |cx, dump| Box::pin(refine(cx, dump))).await
+    // Redump's copies beside the dump's files as they are now (a re-read
+    // changes them), and what redumper's log says about the read.
+    let explain = |d: &drt_engine::Item| {
+        let main = d.path.as_deref()?;
+        let log = std::fs::read_to_string(main.with_extension("log")).ok();
+        mismatch::explain(&serial, &cat.by_serial(&serial), &hashed(d.context(), main), log.as_deref())
+    };
+    hold(cx, dump, &serial, |cx, dump| Box::pin(refine(cx, dump)), explain).await
 }
 
 /// redumper's refine on the dump, a fresh split and check of it, then its
@@ -411,7 +429,8 @@ async fn refine(cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>> 
     let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
     let dir = main.parent().ok_or_else(|| anyhow!("{} has no folder", main.display()))?.to_path_buf();
     let t = redumper::Target { dir, name: main.file_stem().unwrap_or_default().to_string_lossy().into_owned() };
-    let opts = redumper::Options { drive: redumper::drive_access(&super::device(dump.context())?)?, retries: 20, speed: None };
+    // At the offset the dump was read at: redumper places what it reads by it.
+    let opts = redumper::Options { drive: redumper::drive_access(&super::device(dump.context())?)?, retries: 20, speed: None, read_offset: data::read_offset(dump.context()) };
     {
         let _drive = cx.lane(LaneKind::Drive).await;
         let mut out = String::new();
@@ -516,12 +535,14 @@ pub fn candidate(g: &redump::Game, system: &str, score: f32, detail: String) -> 
     }
 }
 
-/// Looks a disc up in its system's catalogue: the entry its hashes match,
-/// when they do; otherwise every entry for its serial, the ones close to
-/// its size first. Before the dump (no hashes), the serial's entries.
+/// Looks a disc up in its system's catalogue by its serial, when Check
+/// couldn't name it by its checksums; otherwise there's nothing to look
+/// up, and the entry Check matched goes on to Choose as it is. The
+/// serial's entries come close to its size first. Before the dump (no
+/// hashes), the serial's entries.
 pub fn lookup(cat: &redump::Catalogue, system: &str, serial: Option<&str>, sectors: Option<u64>, roms: &[redump::Rom]) -> Lookup {
     if let Some(g) = (!roms.is_empty()).then(|| cat.by_hashes(roms)).flatten() {
-        return Lookup { candidates: vec![candidate(g, system, BY_HASH, "exact match".into())], status: "1 match".into(), qualifier: String::new(), detail: String::new() };
+        return Lookup { candidates: vec![candidate(g, system, BY_HASH, "found by Check".into())], status: NOT_NEEDED.into(), qualifier: String::new(), detail: CHECK_FOUND.into() };
     }
     let hashed = !roms.is_empty();
     let mut family: Vec<(bool, &redump::Game)> =
@@ -531,21 +552,22 @@ pub fn lookup(cat: &redump::Catalogue, system: &str, serial: Option<&str>, secto
     let candidates: Vec<Candidate> = family
         .iter()
         .map(|(close, g)| {
-            let why = if hashed { "same serial, but not an exact match" } else { "by serial" };
+            let why = if hashed { "same serial, different checksums" } else { "same serial" };
             let size = if *close { ", the same size" } else { "" };
             candidate(g, system, if *close { BY_SERIAL_CLOSE } else { BY_SERIAL }, format!("{why}{size}"))
         })
         .collect();
-    let serial = serial.unwrap_or("no serial");
-    let entries = |n: usize| format!("{n} match{}", if n == 1 { "" } else { "es" });
-    let (status, qualifier, detail) = match (hashed, candidates.len()) {
-        (true, 0) => ("Not in Redump".to_owned(), String::new(), serial.to_owned()),
-        (true, n) => (entries(n), "by serial only".to_owned(), format!("no exact match for {serial}")),
-        (false, 0) => ("Not listed".to_owned(), String::new(), serial.to_owned()),
-        (false, n) => (entries(n), "by serial only".to_owned(), serial.to_owned()),
+    let (status, detail) = match (serial, candidates.len()) {
+        (None, _) => ("Nothing to look up".to_owned(), "no serial on the disc".to_owned()),
+        (Some(s), 0) => ("Not in Redump".to_owned(), format!("no games with serial {s}")),
+        (Some(s), n) => (format!("Found {n} game{}", if n == 1 { "" } else { "s" }), format!("with serial {s}")),
     };
-    Lookup { candidates, status, qualifier, detail }
+    Lookup { candidates, status, qualifier: String::new(), detail }
 }
+
+/// Redump's card when Check already named the game.
+pub const NOT_NEEDED: &str = "Not needed";
+pub const CHECK_FOUND: &str = "Check found the game";
 
 /// A system's catalogue, with its serials: a copy cached before games
 /// asked for them is fetched again.
@@ -586,12 +608,18 @@ pub fn offer(cx: &Cx, dump: &mut drt_engine::Item, l: Lookup) {
     for c in &l.candidates {
         cx.log(format!("  {} ({})", c.title, c.detail));
     }
-    cx.item(dump, ItemState::Ok, [l.status.as_str(), l.qualifier.as_str(), l.detail.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(", "));
+    let note = if l.status == NOT_NEEDED { CHECK_FOUND.to_owned() } else { [l.status.as_str(), l.detail.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ") };
+    cx.item(dump, ItemState::Ok, note);
     cx.outcome(l.status, l.qualifier, l.detail);
     dump.context_mut().offer(l.candidates);
 }
 
 pub struct Redump;
+
+/// Check sent nothing on (you skipped the disc there): nothing to look up.
+pub fn nothing_came(cx: &Cx) {
+    cx.status(NOT_NEEDED, "nothing came from Check");
+}
 
 #[async_trait]
 impl Step for Redump {
@@ -600,7 +628,9 @@ impl Step for Redump {
     }
 
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
+        let mut any = false;
         while let Some(mut dump) = inlet.recv().await {
+            any = true;
             let (system, serial, sectors) = known(dump.context());
             let Some((system, slug)) = system.as_deref().and_then(|s| Some((s.to_owned(), slug_of(s)?))) else {
                 cx.item(&dump, ItemState::Ok, "no system to look in");
@@ -625,6 +655,9 @@ impl Step for Redump {
                 }
             }
             outlet.send(dump).await;
+        }
+        if !any {
+            nothing_came(&cx);
         }
         Ok(())
     }
@@ -1067,19 +1100,22 @@ mod tests {
         let cat = redump::parse(DAT.as_bytes()).unwrap();
         // Tomb Raider: two revisions under one serial, a few sectors apart.
         let l = lookup(&cat, "PlayStation", Some("SLUS_001.52"), None, &[]);
-        assert_eq!(l.qualifier, "by serial only");
         assert_eq!(l.candidates.len(), 2);
-        assert_eq!(l.status, "2 matches");
+        assert_eq!((l.status.as_str(), l.detail.as_str()), ("Found 2 games", "with serial SLUS_001.52"));
         assert!(!sure(&l.candidates), "a serial alone never decides");
         // Hashed, matching nothing: the serial's entries, the one of this size first.
         let l = lookup(&cat, "PlayStation", Some("SLUS-00152"), Some(1_000), &[rom("x.bin", "0000")]);
-        assert_eq!((l.status.as_str(), l.qualifier.as_str(), l.candidates[0].title.as_str()), ("2 matches", "by serial only", "Tomb Raider (USA) (Rev 1)"));
+        assert_eq!((l.status.as_str(), l.candidates[0].title.as_str()), ("Found 2 games", "Tomb Raider (USA) (Rev 1)"));
         assert_eq!(l.candidates[0].score, BY_SERIAL_CLOSE);
-        assert!(l.candidates[0].detail.starts_with("same serial, but not an exact match"));
+        assert_eq!(l.candidates[0].detail, "same serial, different checksums, the same size");
         // Nothing for the serial either.
         let l = lookup(&cat, "PlayStation", Some("SLES-99999"), None, &[rom("x.bin", "0000")]);
         assert!(l.candidates.is_empty());
-        assert_eq!(l.status, "Not in Redump");
+        assert_eq!((l.status.as_str(), l.detail.as_str()), ("Not in Redump", "no games with serial SLES-99999"));
+        // Check named it by its checksums: nothing to look up.
+        let named = [rom("a (Track 1).bin", "7210064da9a542124d4e32d6202672cc6b5756d2"), rom("a (Track 2).bin", "28a06c34d53442f736fed283c086340d7c56321e")];
+        let l = lookup(&cat, "PlayStation", Some("SLES-00860"), None, &named);
+        assert_eq!((l.status.as_str(), l.detail.as_str()), (NOT_NEEDED, CHECK_FOUND));
     }
 
     #[test]

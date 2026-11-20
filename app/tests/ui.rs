@@ -2654,6 +2654,75 @@ fn a_game_redump_doesnt_know_is_named_by_typing_it() {
     h.get_by_label_contains("Choose, Tomb Raider (USA) (Prototype)");
 }
 
+/// A game Redump has under its serial but read badly: Check holds it and
+/// says why, Redump beside it says it waits for Check, then what it found;
+/// a game Check names leaves Redump nothing to do, and it says so.
+#[test]
+fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
+    let e = env();
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 1040.0), 1.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(2);
+    // Before a run, each says what it's for.
+    open_id(&mut h, "g_redump");
+    h.get_by_label_contains("Looks the game up by its serial when Check can't name it");
+    open_id(&mut h, "g_check");
+    h.get_by_label_contains("Compares the copy's checksums with Redump's list");
+    app_mut(&mut h).close_tray();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    until(&mut h, "Check to hold the dump", |a| a.m.snapshot(a.sel).steps["g_check"].items.first().is_some_and(|i| i.state == ItemState::Bad));
+    // Close enough to read the cards: Check holding, Redump waiting for it.
+    let i = app(&h).sel;
+    app_mut(&mut h).set_view(i, (0.9, egui::vec2(-560.0, 40.0)));
+    h.run_steps(3);
+    h.get_by_label_contains("Redump, Waits for Check, Check needs you");
+    h.get_by_label_contains("Check, Doesn't match Redump, same size, 15 bad sectors");
+    shot(&mut h, "games-check-holds");
+    open_id(&mut h, "g_check");
+    h.get_by_label_contains("Redump has 2 copies of SLES-04711, and this one matches none of them.");
+    h.get_by_label("Compared with Redump");
+    h.get_by_label("Size: Redump 200,000 sectors, this copy 200,000 sectors, the same");
+    h.get_by_label_contains("SHA-1: Redump 43c1fe26…, this copy 9b07a5e1…, different");
+    h.get_by_label("The drive reported no read errors");
+    h.get_by_label("15 sectors: fail their error correction");
+    h.get_by_label("between 49% and 68% of the way through (ECC)");
+    h.get_by_label("redumper doesn't know this drive, so it used general settings and a read offset of +0");
+    h.get_by_label_contains("15 sectors read wrong. Clean the disc and try Re-read bad parts.");
+    shot(&mut h, "step-check-mismatch");
+    open_id(&mut h, "g_redump");
+    h.get_by_label_contains("Waits for Check, which needs you to decide about the dump.");
+    shot(&mut h, "step-redump-waiting");
+    // Kept: Redump looks the serial up, and Choose asks.
+    open_id(&mut h, "g_check");
+    h.get_all_by_label_contains("Keep it anyway, ").next().expect("Keep it anyway on the dump's row").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "Choose to ask", |a| matches!(&a.m.snapshot(a.sel).question, Some((s, _)) if s == "g_choose"));
+    open_id(&mut h, "g_redump");
+    h.get_by_label_contains("Found 2 games with serial SLES-04711. None has this copy's checksums, so Choose asks you which it is.");
+    assert!(h.query_all_by_label_contains("Lantern Keep (Europe) (Disc 1) (Rev 1)").next().is_some(), "the serial's games are listed");
+    shot(&mut h, "step-redump-found");
+    h.get_by_label_contains("Redump, Found 2 games, with serial SLES-04711");
+
+    // A game Check names: nothing for Redump to look up.
+    let e = env();
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::APE_ESCAPE]));
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 800.0), 1.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    until(&mut h, "Redump", |a| a.m.snapshot(a.sel).steps["g_redump"].state == StepState::Ok);
+    open_id(&mut h, "g_redump");
+    h.get_by_label_contains("Check found the game by its checksums, so there was nothing to look up.");
+    h.get_by_label_contains("Redump, Not needed, Check found the game");
+    shot(&mut h, "step-redump-not-needed");
+    open_id(&mut h, "g_check");
+    h.get_by_label_contains("Its checksums match Redump's copy of Ape Escape (Europe).");
+}
+
 #[test]
 fn every_step_has_its_own_icon_and_colour() {
     let p = drt_app::theme::Pal::get(false);
