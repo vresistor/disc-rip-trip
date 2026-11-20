@@ -2690,7 +2690,7 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     h.get_by_label("15 sectors: fail their error correction");
     h.get_by_label("between 49% and 68% of the way through (ECC)");
     h.get_by_label("redumper doesn't know this drive, so it used general settings and a read offset of +0");
-    h.get_by_label_contains("15 sectors read wrong. Clean the disc and try Re-read bad parts.");
+    h.get_by_label_contains("15 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts won't read them again.");
     shot(&mut h, "step-check-mismatch");
     open_id(&mut h, "g_redump");
     h.get_by_label_contains("Waits for Check, which needs you to decide about the dump.");

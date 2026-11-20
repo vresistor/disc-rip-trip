@@ -331,10 +331,11 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
     } else if !m.same_size() {
         out.push("The size differs from Redump's, so this is likely a different version of the disc from Redump's.".into());
     } else if m.files.len() > 1 && m.files[0].sha1_ok() && !m.files[1..].iter().all(Pair::sha1_ok) {
-        out.push("The first track matches Redump's, so it's the same disc, but the music tracks don't. Music has no checksums of its own, so a drive can read it wrong without noticing. Clean the disc and rip it again, or try another drive.".into());
+        out.push("The first track matches Redump's, so it's likely the same disc, but the music tracks don't. Music has no checksums of its own, so a drive can read it wrong without noticing. Clean the disc and rip it again, or try another drive.".into());
     } else if bad > 0 && !reported {
+        // redumper re-reads only what the drive reported bad: these it won't.
         out.push(format!(
-            "The size is right, so it's likely the same version of the disc, but {} read wrong. Clean the disc and try Re-read bad parts. This drive didn't report the bad reads itself, so a re-read may not find them; another drive might.",
+            "The size is right, so it's likely the same version of the disc, but {} read wrong. The drive didn't report them as bad, so Re-read bad parts won't read them again. Clean the disc and rip it again, or try another drive.",
             sectors(bad)
         ));
     } else if reported {
@@ -365,17 +366,17 @@ mod tests {
     /// writes it: a drive it doesn't know, no errors reported, and sectors
     /// `info` finds wrong. The names and numbers are made up.
     pub const LOG: &str = "\
-=== 2026-11-20 18:35:32 ========================================================
+=== 2026-01-01 12:00:00 ========================================================
 redumper (build: b744)
 
-arguments: dump --drive=/dev/sr0 --retries=20 --auto-detect --overwrite --image-path=/tmp/image --image-name=GAME_1
+arguments: dump --drive=/dev/sr0 --retries=20 --image-path=image --image-name=GAME_1
 warning: drive read offset not found in the database
 warning: drive not found in the database
 warning: using generic drive
 
 drive information
   path: /dev/sr0
-  inquiry: ACME - DVD-RW XY123 (revision level: 1.01, vendor specific: 090903 ....)
+  inquiry: ACME - DVD-RW XY123 (revision level: 1.00)
   configuration: GENERIC (read offset: +0, C2 shift: 0, pre-gap start: +0, read method: BE, sector order: DATA_C2_SUB)
 
 *** DUMP (time check: 0s)
@@ -390,9 +391,9 @@ warning: unscrambled sector read
 media errors:
   SCSI: 0 samples
   C2: 0 samples
-  Q: 316
+  Q: 120
 
-*** END (time check: 376s)
+*** END (time check: 300s)
 
 *** SPLIT (time check: 0s)
 
@@ -402,7 +403,7 @@ final TOC:
   track A {  data }
     index 01 { LBA: 200000, MSF: 44:28:50 }
 
-*** END (time check: 12s)
+*** END (time check: 10s)
 
 *** INFO (time check: 0s)
 
@@ -489,8 +490,8 @@ CD-ROM [GAME_1.bin]:
         assert!(p.size_ok() && !p.sha1_ok());
         assert_eq!(p.expected.as_ref().unwrap().sectors(), Some(200_000));
         assert_eq!(m.short(), "same size, 5 bad sectors");
-        assert!(m.reading[0].starts_with("The size is right, so it's likely the same version of the disc, but 5 sectors read wrong. Clean the disc"), "{:?}", m.reading);
-        assert!(m.reading[0].contains("didn't report the bad reads"));
+        assert!(m.reading[0].starts_with("The size is right, so it's likely the same version of the disc, but 5 sectors read wrong."), "{:?}", m.reading);
+        assert!(m.reading[0].contains("Re-read bad parts won't read them again"));
         assert!(m.reading[1].starts_with("40 sectors came back with the wrong address"));
         assert_eq!(
             m.reading[2],
@@ -528,7 +529,7 @@ CD-ROM [GAME_1.bin]:
         let dumped = [rom("R (Track 1).bin", 23520, "1111"), rom("R (Track 2).bin", 47040, "9999")];
         let m = explain("SLUS-00001", &cat.by_serial("SLUS-00001"), &dumped, None).unwrap();
         assert!(m.files[0].sha1_ok() && !m.files[1].sha1_ok());
-        assert!(m.reading[0].starts_with("The first track matches Redump's, so it's the same disc, but the music tracks don't."));
+        assert!(m.reading[0].starts_with("The first track matches Redump's, so it's likely the same disc, but the music tracks don't."));
         assert!(explain("SLUS-00002", &[], &dumped, None).is_none(), "nothing to compare with");
     }
 

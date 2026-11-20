@@ -542,7 +542,7 @@ pub fn candidate(g: &redump::Game, system: &str, score: f32, detail: String) -> 
 /// hashes), the serial's entries.
 pub fn lookup(cat: &redump::Catalogue, system: &str, serial: Option<&str>, sectors: Option<u64>, roms: &[redump::Rom]) -> Lookup {
     if let Some(g) = (!roms.is_empty()).then(|| cat.by_hashes(roms)).flatten() {
-        return Lookup { candidates: vec![candidate(g, system, BY_HASH, "found by Check".into())], status: NOT_NEEDED.into(), qualifier: String::new(), detail: CHECK_FOUND.into() };
+        return Lookup { candidates: vec![candidate(g, system, BY_HASH, "same checksums".into())], status: "Found the game".into(), qualifier: String::new(), detail: "by its checksums".into() };
     }
     let hashed = !roms.is_empty();
     let mut family: Vec<(bool, &redump::Game)> =
@@ -568,6 +568,18 @@ pub fn lookup(cat: &redump::Catalogue, system: &str, serial: Option<&str>, secto
 /// Redump's card when Check already named the game.
 pub const NOT_NEEDED: &str = "Not needed";
 pub const CHECK_FOUND: &str = "Check found the game";
+
+/// A lookup as Redump says it: when Check already named the game (its
+/// `name` is on the dump) and the checksums found that same entry, there
+/// was nothing to look up; its entry still goes on to Choose.
+pub fn after_check(c: &Context, mut l: Lookup) -> Lookup {
+    let named = c.get(Subject::Disc, "name");
+    if let Some(cand) = l.candidates.first_mut().filter(|x| x.score >= BY_HASH && named == Some(x.title.as_str())) {
+        cand.detail = "found by Check".into();
+        (l.status, l.detail) = (NOT_NEEDED.into(), CHECK_FOUND.into());
+    }
+    l
+}
 
 /// A system's catalogue, with its serials: a copy cached before games
 /// asked for them is fetched again.
@@ -646,7 +658,10 @@ impl Step for Redump {
                 game_catalogue(&data::redump_cache(&cx.work()?), slug).await
             };
             match cat {
-                Ok(cat) => offer(&cx, &mut dump, lookup(&cat, &system, serial.as_deref(), sectors, &roms)),
+                Ok(cat) => {
+                    let l = after_check(dump.context(), lookup(&cat, &system, serial.as_deref(), sectors, &roms));
+                    offer(&cx, &mut dump, l)
+                }
                 Err(e) => {
                     // Not reaching Redump isn't a bad dump: Choose asks.
                     cx.log(format!("the {system} catalogue: {e}"));
@@ -1115,7 +1130,12 @@ mod tests {
         // Check named it by its checksums: nothing to look up.
         let named = [rom("a (Track 1).bin", "7210064da9a542124d4e32d6202672cc6b5756d2"), rom("a (Track 2).bin", "28a06c34d53442f736fed283c086340d7c56321e")];
         let l = lookup(&cat, "PlayStation", Some("SLES-00860"), None, &named);
-        assert_eq!((l.status.as_str(), l.detail.as_str()), (NOT_NEEDED, CHECK_FOUND));
+        assert_eq!((l.status.as_str(), l.detail.as_str()), ("Found the game", "by its checksums"), "found here: Check didn't look in this list");
+        let mut c = Context::default();
+        c.add(Subject::Disc, "name", "Colony Wars (Europe) (Disc 1)", "Redump");
+        let l = after_check(&c, l);
+        assert_eq!((l.status.as_str(), l.detail.as_str(), l.candidates[0].detail.as_str()), (NOT_NEEDED, CHECK_FOUND, "found by Check"));
+        assert!(sure(&l.candidates), "its entry still settles Choose");
     }
 
     #[test]

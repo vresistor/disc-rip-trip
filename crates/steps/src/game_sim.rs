@@ -171,7 +171,7 @@ warning: drive read offset not found in the database
 warning: drive not found in the database
 warning: using generic drive
 drive information
-  inquiry: ACME - DVD-RW XY123 (revision level: 1.01)
+  inquiry: ACME - DVD-RW XY123 (revision level: 1.00)
   configuration: GENERIC (read offset: +0, C2 shift: 0, pre-gap start: +0, read method: BE, sector order: DATA_C2_SUB)
 *** DUMP (time check: 0s)
 disc TOC:
@@ -182,8 +182,8 @@ disc TOC:
 media errors:
   SCSI: 0 samples
   C2: 0 samples
-  Q: 316
-*** END (time check: 376s)
+  Q: 120
+*** END (time check: 300s)
 *** INFO (time check: 0s)
 CD-ROM [SLES_047.11.bin]:
   sectors count: 200000
@@ -375,7 +375,8 @@ impl Step for Redump {
             let c = dump.context();
             let roms: Vec<redump::Rom> = sim_roms(c).unwrap_or_default().into_iter().filter(|r| c.get(Subject::Disc, &format!("sha1 {}", r.name)).is_some()).collect();
             let cat = redump::parse(GAME_DAT.as_bytes())?;
-            game::offer(&cx, &mut dump, game::lookup(&cat, &system, serial.as_deref(), sectors, &roms));
+            let l = game::after_check(dump.context(), game::lookup(&cat, &system, serial.as_deref(), sectors, &roms));
+            game::offer(&cx, &mut dump, l);
             outlet.send(dump).await;
         }
         if !any {

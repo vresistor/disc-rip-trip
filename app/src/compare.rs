@@ -20,7 +20,7 @@ fn not_started(v: &StepView) -> bool {
 /// Check's header sentence: what it compares, and what came of it.
 pub fn check_say(v: &StepView) -> String {
     if not_started(v) {
-        return "Compares the copy's checksums with Redump's list of known-good copies. A match names the game.".into();
+        return "Compares the copy's checksums with Redump's list of known-good copies. A match names the disc.".into();
     }
     let m = mismatch(v);
     match (v.status.as_str(), &m) {
@@ -31,7 +31,9 @@ pub fn check_say(v: &StepView) -> String {
         ("Kept anyway", Some(_)) => "Kept, though it doesn't match Redump's copies.".into(),
         ("Matches Redump", _) => format!("Its checksums match Redump's copy of {}.", v.detail),
         ("Verified", _) => "It matches Redump's copy now, after re-reading the bad parts.".into(),
+        ("Not in Redump", d) if d.ends_with("not reached") => format!("No copy in the lists it could reach has these checksums. Couldn't reach: {}.", d.trim_end_matches(" not reached")),
         ("Not in Redump", _) => "No copy in Redump's list has these checksums.".into(),
+        ("Couldn't check", _) => "Couldn't reach Redump's list to compare with.".into(),
         _ => String::new(),
     }
 }
