@@ -77,4 +77,33 @@ mod tests {
         assert_eq!(seen.last(), Some(&1.0));
         assert!(hash_files(&[&f], |_| {}, || true).is_err(), "Stop stops it");
     }
+
+    /// The same answers as coreutils' `sha1sum`, `md5sum` and `cksum -a
+    /// crc32b` (the zlib CRC-32 Redump's datfiles list) on a file made
+    /// here. A tool that isn't there skips its own comparison only.
+    #[test]
+    fn the_hashes_are_coreutils_own() {
+        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/hash-coreutils");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("sectors.bin");
+        std::fs::write(&f, (0..2352 * 300u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect::<Vec<u8>>()).unwrap();
+        let r = hash_files(&[&f], |_| {}, || false).unwrap().remove(0);
+        let tool = |cmd: &str, args: &[&str]| std::process::Command::new(cmd).args(args).arg(&f).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        let mut compared = 0;
+        if let Some(out) = tool("sha1sum", &[]) {
+            assert_eq!(out.split_whitespace().next(), Some(r.sha1.as_str()));
+            compared += 1;
+        }
+        if let Some(out) = tool("md5sum", &[]) {
+            assert_eq!(out.split_whitespace().next(), Some(r.md5.as_str()));
+            compared += 1;
+        }
+        if let Some(out) = tool("cksum", &["-a", "crc32b"]) {
+            let n: u32 = out.split_whitespace().next().unwrap().parse().unwrap();
+            assert_eq!(format!("{n:08x}"), r.crc);
+        }
+        assert!(compared == 2 || std::env::var("CI").is_ok(), "sha1sum and md5sum are on every Linux this is built on");
+        assert_eq!(r.size, 2352 * 300);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

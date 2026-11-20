@@ -132,6 +132,12 @@ impl Read {
         self.redump_errors.unwrap_or(most).max(most)
     }
 
+    /// Sectors that fail any check, as many as the commonest kind: a
+    /// sector failing two counted once, as far as the counts can say.
+    pub fn wrong(&self) -> u64 {
+        self.sectors.iter().map(|s| s.count).max().unwrap_or(0)
+    }
+
     /// Whether the drive said anything went wrong.
     pub fn drive_reported(&self) -> bool {
         self.scsi + self.c2 > 0
@@ -258,6 +264,73 @@ pub struct Mismatch {
     pub read: Option<Read>,
     /// What it likely means, a sentence each.
     pub reading: Vec<String>,
+    /// Whether ripping again and combining can help: a CD image redumper
+    /// made, whose sectors have their own checks.
+    #[serde(default)]
+    pub can_combine: bool,
+    /// The rips combined so far, once it's been ripped again.
+    #[serde(default)]
+    pub combined: Option<Combination>,
+}
+
+/// One rip of the disc, as combining found it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RipRead {
+    /// Its number: 1 is the first.
+    pub n: usize,
+    /// Its sectors that fail their own check.
+    pub bad: u64,
+}
+
+/// What combining the rips so far came to.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Combination {
+    pub rips: Vec<RipRead>,
+    pub sectors: u64,
+    /// Sectors the rips didn't all agree on.
+    pub differing: u64,
+    /// Sectors taken from a rip other than the first.
+    pub taken: u64,
+    /// Sectors no rip read so that they pass their check.
+    pub no_good: u64,
+    /// Sectors where copies that each pass (or can't be checked) differ.
+    pub disagree: u64,
+    /// Sectors of the result that fail their check.
+    pub still_bad: u64,
+    /// The first few of those.
+    pub left: Vec<i64>,
+    /// Rips left out, and why.
+    pub left_out: Vec<String>,
+    /// Its checksums are Redump's.
+    pub verified: bool,
+}
+
+impl Combination {
+    pub fn of(c: &super::combine::Combined, verified: bool) -> Combination {
+        let t = &c.tally;
+        Combination {
+            rips: c.used.iter().zip(&t.bad_in).map(|(&n, &bad)| RipRead { n, bad }).collect(),
+            sectors: t.sectors,
+            differing: t.differing,
+            taken: t.taken,
+            no_good: t.no_good.len() as u64,
+            disagree: t.disagree.len() as u64,
+            still_bad: t.still_bad.len() as u64,
+            left: t.still_bad.iter().take(10).copied().collect(),
+            left_out: c.left_out.iter().map(|(n, why)| format!("Rip {n} was left out: {why}.")).collect(),
+            verified,
+        }
+    }
+
+    /// The item's note: *combined from 3 rips, 565 sectors taken from the
+    /// later rips*.
+    pub fn note(&self) -> String {
+        let taken = match self.taken {
+            0 => "nothing taken from the later rips".to_owned(),
+            n => format!("{} taken from the later rips", sectors(n)),
+        };
+        format!("combined from {} rips, {taken}", self.rips.len())
+    }
 }
 
 impl Mismatch {
@@ -274,9 +347,52 @@ impl Mismatch {
         self.same_count() && self.files.iter().all(Pair::size_ok)
     }
 
+    /// Whether Redump has a copy to compare with.
+    pub fn in_redump(&self) -> bool {
+        !self.entry.is_empty()
+    }
+
+    /// What it offers you, `(id, label)`: each only where it can help.
+    /// *Re-read bad parts* goes back over what the drive reported bad, so
+    /// it's no help when the drive reported nothing; ripping again and
+    /// combining needs the same version of the disc, and sectors with
+    /// checks of their own.
+    pub fn options(&self) -> Vec<(String, String)> {
+        let mut out = vec![];
+        let o = |id: &str, label: &str| (id.to_owned(), label.to_owned());
+        let refine = self.combined.is_none() && self.read.as_ref().is_none_or(Read::drive_reported);
+        if refine {
+            out.push(o("refine", "Re-read bad parts"));
+        }
+        if self.can_combine && (!self.in_redump() || self.same_size()) {
+            out.push(o("combine", if self.combined.is_some() { "Rip again and combine again" } else { "Rip again and combine" }));
+        }
+        out.push(o("keep", if self.combined.is_some() { "Keep the best combination (not verified)" } else { "Keep it anyway" }));
+        out.push(o("leave_out", "Skip this disc"));
+        out
+    }
+
+    /// Says whether combining can help and what it's come to, and works
+    /// out what it all means again.
+    pub fn with(mut self, can_combine: bool, combined: Option<Combination>) -> Mismatch {
+        self.can_combine = can_combine;
+        self.combined = combined;
+        self.reading = reading(&self);
+        self
+    }
+
     /// For the card, a few words: *same size, 15 bad sectors*.
     pub fn short(&self) -> String {
+        if let Some(c) = &self.combined {
+            return match c.still_bad {
+                0 => format!("combined from {} rips", c.rips.len()),
+                n => format!("combined from {} rips, {} still bad", c.rips.len(), sectors(n)),
+            };
+        }
         let bad = self.read.as_ref().map_or(0, Read::bad);
+        if !self.in_redump() {
+            return format!("not in Redump, {} bad", sectors(bad.max(self.read.as_ref().map_or(0, Read::wrong))));
+        }
         match (self.same_size(), bad) {
             (false, _) => "a different size from Redump's".into(),
             (true, 0) => "same size, different contents".into(),
@@ -308,9 +424,20 @@ pub fn explain(serial: &str, copies: &[&redump::Game], dumped: &[redump::Rom], l
         files,
         read: log.map(read_log),
         reading: vec![],
+        can_combine: false,
+        combined: None,
     };
     m.reading = reading(&m);
     Some(m)
+}
+
+/// A dump Redump has no copy of, whose own sectors say it was read wrong:
+/// nothing to set it beside, only what the read reported.
+pub fn unlisted(serial: &str, dumped: &[redump::Rom], log: &str) -> Mismatch {
+    let files = dumped.iter().filter(|r| r.is_data()).map(|r| Pair { expected: None, got: Some(File::of(r)) }).collect();
+    let mut m = Mismatch { serial: serial.to_owned(), files, read: Some(read_log(log)), ..Mismatch::default() };
+    m.reading = reading(&m);
+    m
 }
 
 fn sectors(n: u64) -> String {
@@ -325,7 +452,31 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
     let bad = read.map_or(0, Read::bad);
     let reported = read.is_some_and(Read::drive_reported);
     let tracks = |n: usize| format!("{n} track{}", if n == 1 { "" } else { "s" });
-    if !m.same_count() {
+    // What ripping again and combining does, for a misread the drive kept quiet about.
+    let combine = "Rip again and combine reads the whole disc again and keeps, for each sector, a copy that passes its own check. Misreads like these usually fall in different places each time.";
+    if let Some(c) = &m.combined {
+        let rips = c.rips.len();
+        out.push(match (c.verified, c.still_bad, m.in_redump()) {
+            (true, _, _) => format!("Combined from {rips} rips, it matches Redump's copy. {} came from the later rips.", cap(&sectors(c.taken))),
+            (false, 0, false) => format!("Combined from {rips} rips, every sector passes its own check. Redump has no copy to compare with, so it can't be called verified."),
+            (false, 0, true) if c.disagree > 0 => format!(
+                "Combined from {rips} rips, every sector passes its own check, but it still doesn't match Redump's copy. In {}, rips that each pass their check read differently, and the most common was taken. Another rip may settle them.",
+                sectors(c.disagree)
+            ),
+            (false, 0, true) => format!("Combined from {rips} rips, every sector passes its own check, but it still doesn't match Redump's copy. It may be a version of the disc Redump doesn't list."),
+            (false, n, _) => format!("Combined from {rips} rips, {} still {} no copy that passes its check. Another rip may read {} right; cleaning the disc first can help.", sectors(n), if n == 1 { "has" } else { "have" }, if n == 1 { "it" } else { "them" }),
+        });
+        out.extend(c.left_out.iter().cloned());
+    } else if !m.in_redump() {
+        let wrong = read.map_or(0, |r| r.bad().max(r.wrong()));
+        let first = format!("Redump has no copy of this disc to compare with, and {} of this copy fail their own check.", sectors(wrong));
+        out.push(match (reported, m.can_combine) {
+            (true, _) => format!("{first} The drive reported read errors it couldn't fix, so Re-read bad parts may help."),
+            (false, true) => format!("{first} The drive didn't report them as bad, so Re-read bad parts can't find them. {combine}"),
+            (false, false) => format!("{first} The drive didn't report them as bad. Clean the disc and rip it again, or try another drive."),
+        });
+        out.push("With nothing to compare with, a copy can only be kept, never called verified.".into());
+    } else if !m.same_count() {
         let (e, g) = (m.files.iter().filter(|p| p.expected.is_some()).count(), m.files.iter().filter(|p| p.got.is_some()).count());
         out.push(format!("Redump's copy has {} and this one has {}, so this is likely a different version of the disc from Redump's.", tracks(e), tracks(g)));
     } else if !m.same_size() {
@@ -334,8 +485,9 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
         out.push("The first track matches Redump's, so it's likely the same disc, but the music tracks don't. Music has no checksums of its own, so a drive can read it wrong without noticing. Clean the disc and rip it again, or try another drive.".into());
     } else if bad > 0 && !reported {
         // redumper re-reads only what the drive reported bad: these it won't.
+        let next = if m.can_combine { combine.to_owned() } else { "Clean the disc and rip it again, or try another drive.".to_owned() };
         out.push(format!(
-            "The size is right, so it's likely the same version of the disc, but {} read wrong. The drive didn't report them as bad, so Re-read bad parts won't read them again. Clean the disc and rip it again, or try another drive.",
+            "The size is right, so it's likely the same version of the disc, but {} read wrong. The drive didn't report them as bad, so Re-read bad parts can't find them. {next}",
             sectors(bad)
         ));
     } else if reported {
@@ -346,7 +498,7 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
         out.push("The size is right, but the contents differ. There's no rip log to say how the read went.".into());
     }
     if let Some(r) = read {
-        if let Some(a) = r.of(Kind::Address) {
+        if let Some(a) = r.of(Kind::Address).filter(|_| m.combined.is_none()) {
             out.push(format!("{} came back with the wrong address. A scratch can cause that, and so can a drive that loses its place while reading.", sectors(a.count)));
         }
         if r.generic {
@@ -356,6 +508,11 @@ pub fn reading(m: &Mismatch) -> Vec<String> {
         }
     }
     out
+}
+
+fn cap(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -491,7 +648,13 @@ CD-ROM [GAME_1.bin]:
         assert_eq!(p.expected.as_ref().unwrap().sectors(), Some(200_000));
         assert_eq!(m.short(), "same size, 5 bad sectors");
         assert!(m.reading[0].starts_with("The size is right, so it's likely the same version of the disc, but 5 sectors read wrong."), "{:?}", m.reading);
-        assert!(m.reading[0].contains("Re-read bad parts won't read them again"));
+        assert!(m.reading[0].contains("Re-read bad parts can't find them. Clean the disc"), "{:?}", m.reading);
+        let opts = |m: &Mismatch| m.options().into_iter().map(|o| o.0).collect::<Vec<_>>();
+        assert_eq!(opts(&m), ["keep", "leave_out"], "nothing the drive reported: re-reading can't help, and this can't be combined");
+        // A CD image redumper made: combining is offered, and said why.
+        let m = m.with(true, None);
+        assert!(m.reading[0].contains("Rip again and combine reads the whole disc again"), "{:?}", m.reading);
+        assert_eq!(opts(&m), ["combine", "keep", "leave_out"]);
         assert!(m.reading[1].starts_with("40 sectors came back with the wrong address"));
         assert_eq!(
             m.reading[2],

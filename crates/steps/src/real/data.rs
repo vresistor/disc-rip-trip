@@ -61,8 +61,11 @@ pub fn check_info() -> StepInfo {
         .gives(&["hashes", "name"])
         .from("compare with Redump's known-good copies")
         .param(ParamSpec::new("systems", "Compare with Redump's list for", ParamKind::Choice(redump::CHOICES)).default(redump::ALL).on_card("Look in").labels(redump::LABELS))
-        // For a game whose serial Redump knows but whose hash it doesn't.
+        // For a game whose serial Redump knows but whose hash it doesn't,
+        // or a dump whose own sectors say it was read wrong. Each dump it
+        // holds is offered only those that can help it.
         .retry("refine", "Re-read bad parts", "")
+        .retry("combine", "Rip again and combine", "")
         .retry("keep", "Keep it anyway", "")
         .retry("leave_out", "Skip this disc", "")
 }
@@ -248,6 +251,79 @@ impl Image {
         }
         Ok(Ok(image_note(&size, force, unreadable, refined, &problems)))
     }
+
+    /// One whole read of the disc into `t`: redumper's dump, a re-read of
+    /// whatever the drive reported bad, then the image made and checked.
+    /// Rip's read, and Check's when it rips again. The caller has the drive.
+    pub(crate) async fn read_disc(&self, cx: &Cx, item: &Item, t: &redumper::Target, opts: &redumper::Options, out: &mut String) -> Result<Outcome> {
+        if !self.phase(cx, item, t, redumper::dump_args(opts, t), out).await? {
+            bail!("{}", redumper::reason(out));
+        }
+        let refine = redumper::errors_left(out) > 0;
+        if refine {
+            self.phase(cx, item, t, redumper::refine_args(opts, t), out).await?;
+        }
+        self.settle(cx, item, t, out, false, refine).await
+    }
+}
+
+/// What Rip puts on the dump about how it read it, so a later step can
+/// read the disc again the same way: by redumper, with these retries, at
+/// this speed (none: the drive's best).
+pub const RIPPED_WITH: &str = "ripped with";
+pub const RIP_RETRIES: &str = "rip retries";
+pub const RIP_SPEED: &str = "rip speed";
+
+/// How Rip read the dump, to read it again the same way: the drive, the
+/// retries and speed it used, and the drive's read offset.
+pub fn rip_options(c: &Context) -> Result<redumper::Options> {
+    let get = |k| c.get(Subject::Disc, k);
+    Ok(redumper::Options {
+        drive: redumper::drive_access(&device(c)?)?,
+        retries: get(RIP_RETRIES).and_then(|v| v.parse().ok()).unwrap_or(20),
+        speed: get(RIP_SPEED).and_then(|v| v.parse().ok()),
+        read_offset: read_offset(c),
+    })
+}
+
+/// Whether ripping a dump again and combining the rips can help: a CD
+/// image redumper made, as a cue sheet and raw sectors, each of which has
+/// checks of its own. An ISO has none, and a DVD or Blu-ray drive reports
+/// what it can't read anyway.
+pub fn combinable(dump: &Item) -> bool {
+    dump.context().get(Subject::Disc, RIPPED_WITH) == Some("redumper") && dump.path.as_deref().is_some_and(|m| m.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")))
+}
+
+/// Reads the disc again in full into `dir`, the way Rip read it, and gives
+/// the new rip's cue sheet. Sectors it couldn't read are left filled in:
+/// the other rips may have them. Its working files go once its tracks are
+/// written, since only they are combined.
+pub async fn rip_again(cx: &Cx, dump: &Item, dir: PathBuf) -> Result<PathBuf> {
+    let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+    let t = redumper::Target { dir, name: main.file_stem().unwrap_or_default().to_string_lossy().into_owned() };
+    let opts = rip_options(dump.context())?;
+    let mut out = String::new();
+    {
+        let _drive = cx.lane(LaneKind::Drive).await;
+        let read = Image.read_disc(cx, dump, &t, &opts, &mut out).await;
+        let forced = match read {
+            Ok(Ok(note)) => {
+                cx.log(format!("rip again: {note}"));
+                Ok(())
+            }
+            Ok(Err(bad)) => {
+                cx.log(format!("rip again: {bad}; kept as it is, for the other rips to fill in"));
+                Image.settle(cx, dump, &t, &mut out, true, false).await.map(|_| ())
+            }
+            Err(e) => Err(e),
+        };
+        cx.drive_says(StepState::Idle, "Waiting", "");
+        forced?;
+    }
+    for ext in ["scram", "state", "subcode"] {
+        let _ = std::fs::remove_file(t.file(ext));
+    }
+    t.main().filter(|m| m.extension().is_some_and(|e| e == "cue")).ok_or_else(|| anyhow!("the new rip made no cue sheet"))
 }
 
 /// The drive's read offset, which Drive put on the disc when it knew it.
@@ -297,19 +373,20 @@ impl Step for Image {
         if let Some(o) = read_offset {
             cx.log(format!("the drive's read offset, {o:+}, given to redumper"));
         }
-        let item = Item::new(DUMP, ItemKind::Dump, label, None, None).knowing(&disc);
+        let mut item = Item::new(DUMP, ItemKind::Dump, label, None, None).knowing(&disc);
+        {
+            let c = item.context_mut();
+            c.add(Subject::Disc, RIPPED_WITH, "redumper", "Rip");
+            c.add(Subject::Disc, RIP_RETRIES, opts.retries.to_string(), "Rip");
+            if let Some(s) = opts.speed {
+                c.add(Subject::Disc, RIP_SPEED, s.to_string(), "Rip");
+            }
+        }
         cx.item(&item, ItemState::Busy, "reading");
         let mut out = String::new();
         let mut outcome = {
             let _drive = cx.lane(LaneKind::Drive).await;
-            if !self.phase(&cx, &item, &t, redumper::dump_args(&opts, &t), &mut out).await? {
-                bail!("{}", redumper::reason(&out));
-            }
-            let refine = redumper::errors_left(&out) > 0;
-            if refine {
-                self.phase(&cx, &item, &t, redumper::refine_args(&opts, &t), &mut out).await?;
-            }
-            let o = self.settle(&cx, &item, &t, &mut out, false, refine).await?;
+            let o = self.read_disc(&cx, &item, &t, &opts, &mut out).await?;
             cx.drive_says(StepState::Idle, "Waiting", "");
             o
         };
@@ -364,7 +441,16 @@ impl Step for Image {
 
 // ---- Check ------------------------------------------------------------------------------------
 
-pub struct Check;
+/// Check, with the rip it uses to read a held dump again.
+pub struct Check {
+    pub rip: super::game::RipFn,
+}
+
+impl Default for Check {
+    fn default() -> Self {
+        Check { rip: super::game::redumper_rip() }
+    }
+}
 
 /// The data files of a dump, the ones Redump catalogues: its tracks or its
 /// ISO, and its cue sheet. Not the log.
@@ -480,7 +566,12 @@ impl Step for Check {
             }
             cx.status(status, detail);
             // A game Redump has under its serial, but not with this hash: suspect, held for you.
-            let dump = if found.is_none() { super::game::hold_if_suspect(&cx, dump, &roms).await? } else { Some(dump) };
+            let dump = if found.is_none() {
+                let reread = super::game::Disc { rip: self.rip.clone() };
+                super::game::hold_if_suspect(&cx, dump, &roms, looked > 0 && failed.is_empty(), &reread).await?
+            } else {
+                Some(dump)
+            };
             if let Some(dump) = dump {
                 outlet.send(dump).await;
             }

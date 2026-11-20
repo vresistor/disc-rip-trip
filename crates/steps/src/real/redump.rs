@@ -140,6 +140,32 @@ impl Rom {
     }
 }
 
+/// Whether the files `dumped` (hashed from disk) are `entry`'s, on all
+/// four counts the datfile lists for each data file: size, CRC-32, MD5 and
+/// SHA-1, in the cue's order. Gives a line per file saying what was
+/// compared, or what differs.
+pub fn same_files(entry: &Game, dumped: &[Rom]) -> std::result::Result<Vec<String>, String> {
+    let theirs: Vec<&Rom> = entry.roms.iter().filter(|r| r.is_data()).collect();
+    let ours: Vec<&Rom> = dumped.iter().filter(|r| r.is_data()).collect();
+    if theirs.len() != ours.len() || theirs.is_empty() {
+        return Err(format!("{} has {} data files and this copy {}", entry.name, theirs.len(), ours.len()));
+    }
+    let mut lines = vec![];
+    for (t, o) in theirs.iter().zip(&ours) {
+        let eq = |a: &str, b: &str| !a.is_empty() && a.eq_ignore_ascii_case(b);
+        let checks = [("size", t.size == o.size), ("CRC-32", eq(&t.crc, &o.crc)), ("MD5", eq(&t.md5, &o.md5)), ("SHA-1", eq(&t.sha1, &o.sha1))];
+        let said = format!(
+            "{}: size {}, CRC-32 {}, MD5 {}, SHA-1 {} against Redump's {} \"{}\" (size {}, CRC-32 {}, MD5 {}, SHA-1 {})",
+            o.name, o.size, o.crc, o.md5, o.sha1, entry.name, t.name, t.size, t.crc, t.md5, t.sha1
+        );
+        match checks.iter().filter(|c| !c.1).map(|c| c.0).collect::<Vec<_>>() {
+            bad if bad.is_empty() => lines.push(format!("{said}: all four the same")),
+            bad => return Err(format!("{said}: {} differ", bad.join(", "))),
+        }
+    }
+    Ok(lines)
+}
+
 /// One catalogued disc.
 #[derive(Clone, Debug)]
 pub struct Game {

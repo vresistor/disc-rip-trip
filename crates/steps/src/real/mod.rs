@@ -4,6 +4,7 @@
 
 pub mod artwork;
 pub mod chd;
+pub mod combine;
 pub mod cue;
 pub mod cyanrip;
 pub mod data;
@@ -59,7 +60,7 @@ pub fn register(r: &mut Registry) {
     }
     r.add(data::DataDisc);
     r.add(data::Image);
-    r.add(data::Check);
+    r.add(data::Check::default());
     r.add(data::Chd);
     r.add(data::Keep);
     r.add(Place { kind: "folder", name: "Folder" });
@@ -1876,7 +1877,7 @@ mod tests {
 
     #[test]
     fn a_rip_counts_only_real_verifications() {
-        let item = |n: u32, state, note: &str, verified| drt_engine::ItemView { id: format!("track-{n}"), label: format!("{n}"), state, note: note.into(), verified };
+        let item = |n: u32, state, note: &str, verified| drt_engine::ItemView { id: format!("track-{n}"), label: format!("{n}"), state, note: note.into(), verified, options: vec![] };
         let items =
             [item(1, ItemState::Ok, "✓ 104", true), item(2, ItemState::Ok, "✓ 98", true), item(3, ItemState::Ok, "kept, unverified", false), item(4, ItemState::Ok, "✓ two reads agree", false)];
         assert_eq!(rip_outcome(&items), ("2/4 verified".into(), "2 not verified".into()));

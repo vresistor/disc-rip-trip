@@ -262,7 +262,7 @@ mod tests {
     use std::time::Duration;
 
     fn item(n: u32, state: ItemState, note: &str) -> ItemView {
-        ItemView { id: format!("track-{n}"), label: format!("Song {n}"), state, note: note.into(), verified: false }
+        ItemView { id: format!("track-{n}"), label: format!("Song {n}"), state, note: note.into(), verified: false, options: vec![] }
     }
 
     #[test]
@@ -304,7 +304,7 @@ mod tests {
         let t0 = Instant::now();
         // 332999 sectors of a CD: 4440 s at 1×.
         let len = |_: u32| seconds_at_1x("CD", 332_999);
-        let dump = |note: &str| vec![ItemView { id: "dump".into(), label: "ENCARTA98".into(), state: ItemState::Busy, note: note.into(), verified: false }];
+        let dump = |note: &str| vec![ItemView { id: "dump".into(), label: "ENCARTA98".into(), state: ItemState::Busy, note: note.into(), verified: false, options: vec![] }];
         let mut pace = Pace::default();
         pace.read(&dump("42%, sector 141500 of 332999"), "Reading", len, t0).unwrap();
         // 4 s on, 2400 sectors more: 600 a second, 8×.

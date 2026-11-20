@@ -42,6 +42,11 @@ pub struct ItemView {
     /// catalogue's hashes): only a step that verifies sets it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub verified: bool,
+    /// What it offers while it needs you, `(id, label)`, when that's not
+    /// the step's whole list of retries: some help only in some cases, and
+    /// some are named for what happened so far. Empty: the step's own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<(String, String)>,
 }
 
 /// One tile.
@@ -169,7 +174,7 @@ impl StepView {
         if let Some(i) = self.items.iter().position(|i| i.id == id) {
             return &mut self.items[i];
         }
-        self.items.push(ItemView { id: id.into(), label: label.into(), state: ItemState::Waiting, note: String::new(), verified: false });
+        self.items.push(ItemView { id: id.into(), label: label.into(), state: ItemState::Waiting, note: String::new(), verified: false, options: vec![] });
         self.items.last_mut().unwrap()
     }
 

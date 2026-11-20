@@ -350,3 +350,51 @@ the original. A file that fails a check is left as it was, and listed.
 
 Stop keeps what was already finished: tracks read, encoded and filed
 stay as they are.
+
+## Game and data discs
+
+The same rule for an image of a game or data disc: Check
+(`data.rs`), its hold (`game.rs`), and combining rips (`combine.rs`).
+
+- **Verified only on a Redump match.** A dump is called verified only
+  when its files match an entry in Redump's list. Nothing else counts:
+  not "every sector passes its own check", not a clean read, not rips
+  that agree. A disc Redump doesn't have can be kept, and is labelled
+  not verified.
+- **A drive can misread without reporting it.** On a real PlayStation
+  disc, three rips with redumper reported no C2 or SCSI errors, yet each
+  had about 200 sectors wrong: mostly a sector slipped by one (its
+  header giving its neighbour's address), and some failing their EDC
+  and ECC. The bad sectors were in different places each time.
+  *Re-read bad parts* (redumper's `refine`) only goes back to sectors
+  the drive reported, so it can't help with these, and isn't offered
+  when the drive reported nothing.
+- **Rip again and combine.** For a CD image redumper made, Check can rip
+  the whole disc again with Rip's settings, keeping every rip in the
+  run's working folder (`rip-1`, `rip-2`, …), and combine them sector by
+  sector. Where the rips differ, it keeps a copy whose header names the
+  right address and whose EDC (and ECC, for Mode 1 and form 1 sectors)
+  fits; among those, the most common one. It counts sectors that no rip
+  read so that they pass, and sectors where passing copies disagree.
+  Combining the three rips above gave Redump's checksums exactly.
+- **A sector is never repaired.** The combiner never works out or writes
+  an EDC, an ECC or a header. Some PlayStation discs carry sectors that
+  fail their checks on purpose, as copy protection, and Redump's copy
+  keeps them as pressed. So a sector every rip agrees on is kept byte
+  for byte however it fails, and where the rips differ and none passes,
+  the most common copy is kept as it was read.
+- **How a combination is verified.** Its files are written to disk,
+  then put in the place of the dump's own (the first rip stays in
+  `rip-1`), then hashed again from disk. They're verified only if every
+  data file's size, CRC-32, MD5 and SHA-1 equal Redump's entry; the log
+  names each file, its four values and the entry it was compared with.
+  The hashing is tested against coreutils' `sha1sum`, `md5sum` and
+  `cksum -a crc32b`. The CHD made after it is decompressed in full and
+  each track checked against those SHA-1s.
+- **No match.** A combination that doesn't match stays held, saying how
+  many sectors are still bad. It can be ripped and combined again, kept
+  as the best combination (not verified), or skipped.
+- **Only where it can work.** Combining is offered only for a CD image
+  (cue sheet and raw sectors) that redumper made. An ISO has no checks
+  of its own per sector, and a DVD or Blu-ray drive reports what it
+  can't read.

@@ -11,7 +11,7 @@
 //! revisions), so identity waits for the hash. Each step's `StepInfo` is
 //! here once and shared by the real and the simulated step.
 
-use super::mismatch::{self, Mismatch};
+use super::mismatch::{self, Combination, Mismatch};
 use super::playstation::{self, Sectors, Volume};
 use super::{data, media, redump};
 use crate::template;
@@ -345,33 +345,68 @@ pub fn is_suspect(cat: &redump::Catalogue, serial: &str, roms: &[redump::Rom]) -
     !roms.is_empty() && cat.by_hashes(roms).is_none() && !cat.by_serial(serial).is_empty()
 }
 
-/// A refine: re-reads the disc, keeps the new hashes on the dump, and gives
-/// Redump's name for it if it now matches.
-pub type Refine = for<'a> fn(&'a Cx, &'a mut drt_engine::Item) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>;
+/// What Check can do with a dump it holds, besides keeping or skipping it:
+/// the real disc, or a simulated one.
+#[async_trait]
+pub trait Reread: Send + Sync {
+    /// Re-reads what the drive reported bad, keeps the new hashes on the
+    /// dump, and gives Redump's name for it if it now matches.
+    async fn refine(&self, cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>>;
+    /// Whether ripping again and combining can help this dump.
+    fn can_combine(&self, dump: &drt_engine::Item) -> bool;
+    /// Rips the disc once more and combines every rip so far, sector by
+    /// sector. Gives what that came to and the combined copy's checksums,
+    /// under the dump's own file names. The dump's files stay as they are.
+    async fn combine(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<(Combination, Vec<redump::Rom>)>;
+    /// Puts the last combination in the place of the dump's own files, so
+    /// its cue sheet and everything made from it use it.
+    async fn adopt(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<()>;
+    /// The dump's own files hashed again, from disk, as they are now.
+    async fn rehash(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<Vec<redump::Rom>>;
+}
 
-/// Holds a suspect dump, Bad, until you say: Refine (re-read, and it goes
-/// on if it now matches), Keep it anyway, or Skip this disc (it isn't filed). Filing
-/// waits meanwhile. `explain` says why it doesn't match, for the card and
-/// the sidebar, again after each re-read. Gives the dump to send on, if any.
-pub async fn hold(cx: &Cx, mut dump: drt_engine::Item, serial: &str, refine: Refine, explain: impl Fn(&drt_engine::Item) -> Option<Mismatch>) -> Result<Option<drt_engine::Item>> {
-    let bad = format!("Doesn't match Redump's dumps of {serial}");
+/// Holds a dump, Bad, until you say: one of the dump's own options (see
+/// [`Mismatch::options`]: Re-read bad parts, Rip again and combine, Keep it
+/// anyway, Skip this disc). A re-read or a combination whose checksums are
+/// in `cat` goes on, verified; one that isn't stays held, saying what it
+/// came to, and Keep then keeps the best combination, not verified. Never
+/// verified without Redump's checksums. `explain` says why it's held, for
+/// the card and the sidebar, again after each try. Filing waits meanwhile.
+/// Gives the dump to send on, if any.
+pub async fn hold(
+    cx: &Cx,
+    mut dump: drt_engine::Item,
+    serial: &str,
+    reread: &dyn Reread,
+    cat: Option<&redump::Catalogue>,
+    explain: impl Fn(&drt_engine::Item) -> Option<Mismatch>,
+) -> Result<Option<drt_engine::Item>> {
+    let listed = cat.is_some_and(|c| !c.by_serial(serial).is_empty());
+    let bad = if listed { format!("Doesn't match Redump's dumps of {serial}") } else { "Not in Redump, and some sectors fail their own check".to_owned() };
     cx.log(&bad);
+    let mut combined: Option<Combination> = None;
+    let mut trouble: Option<String> = None;
     loop {
-        let why = explain(&dump);
+        let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), combined.clone()));
         if let Some(m) = &why {
-            cx.log(format!("compared with {}: {}", m.entry, m.short()));
+            cx.log(format!("compared with {}: {}", if m.in_redump() { m.entry.as_str() } else { "nothing in Redump" }, m.short()));
             for line in &m.reading {
                 cx.log(format!("  {line}"));
             }
         }
         cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
-        cx.status("Doesn't match Redump", why.as_ref().map_or_else(|| serial.to_owned(), Mismatch::short));
+        let head = if listed { "Doesn't match Redump" } else { "Not verified" };
+        cx.status(head, why.as_ref().map_or_else(|| serial.to_owned(), Mismatch::short));
         cx.state(StepState::Bad);
-        cx.item(&dump, ItemState::Bad, bad.clone());
+        // What it offers first, so it's there the moment it's marked bad.
+        let options = why.as_ref().map(Mismatch::options).unwrap_or_default();
+        cx.item_options(&dump, options.clone());
+        cx.item(&dump, ItemState::Bad, trouble.take().unwrap_or_else(|| bad.clone()));
         let req = loop {
             match cx.next_retry().await {
                 None => return Ok(None),
-                Some(r) if r.item == dump.id => break r,
+                // Only what it offered (or anything, when it offered the step's own).
+                Some(r) if r.item == dump.id && (options.is_empty() || options.iter().any(|o| o.0 == r.option)) => break r,
                 Some(_) => {}
             }
         };
@@ -382,44 +417,239 @@ pub async fn hold(cx: &Cx, mut dump: drt_engine::Item, serial: &str, refine: Ref
                 cx.status("Skipped", serial.to_owned());
                 return Ok(None);
             }
-            "keep" => {
-                cx.item(&dump, ItemState::Ok, format!("kept anyway; doesn't match Redump's copies of {serial}"));
-                cx.status("Kept anyway", "doesn't match Redump");
+            "keep" if combined.is_some() => {
+                reread.adopt(cx, &dump).await?;
+                let against = if listed { format!("; doesn't match Redump's copies of {serial}") } else { String::new() };
+                cx.item(&dump, ItemState::Ok, format!("kept the best combination, not verified{against}"));
+                cx.status("Kept, not verified", combined.as_ref().map(Combination::note).unwrap_or_default());
                 return Ok(Some(dump));
+            }
+            "keep" => {
+                let against = if listed { format!("; doesn't match Redump's copies of {serial}") } else { "; not verified".to_owned() };
+                cx.item(&dump, ItemState::Ok, format!("kept anyway{against}"));
+                cx.status("Kept anyway", if listed { "doesn't match Redump" } else { "not verified" });
+                return Ok(Some(dump));
+            }
+            "combine" => {
+                let n = combined.as_ref().map_or(1, |c| c.rips.len()) + 1;
+                cx.item(&dump, ItemState::Busy, format!("ripping again, rip {n}"));
+                cx.status(format!("Ripping again, rip {n}"), serial.to_owned());
+                let (mut c, roms) = match reread.combine(cx, &dump).await {
+                    Ok(done) => done,
+                    Err(e) if cx.stopped() => return Err(e),
+                    // The rips so far are kept; it can be tried again.
+                    Err(e) => {
+                        cx.log(format!("rip again: {e}"));
+                        trouble = Some(format!("Couldn't rip again: {e}"));
+                        continue;
+                    }
+                };
+                for r in &roms {
+                    dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
+                }
+                cx.log(format!("{}: {} sectors differed, {} with no good copy, {} where good copies disagree, {} still bad", c.note(), c.differing, c.no_good, c.disagree, c.still_bad));
+                combined = Some(c.clone());
+                let Some(entry) = cat.and_then(|cat| cat.by_hashes(&roms)) else { continue };
+                // Its SHA-1 is Redump's. Verified only once the dump's own
+                // files, the combination in their place, are hashed again
+                // from disk and match the entry on all four counts.
+                reread.adopt(cx, &dump).await?;
+                let now = reread.rehash(cx, &dump).await?;
+                for r in &now {
+                    dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
+                }
+                match redump::same_files(entry, &now) {
+                    Ok(lines) => {
+                        for l in lines {
+                            cx.log(format!("checked {l} (hashed from disk with the crc32fast, md-5 and sha1 crates)"));
+                        }
+                    }
+                    Err(why) => {
+                        cx.log(format!("not verified: {why}"));
+                        trouble = Some("The combination's SHA-1 is Redump's, but its other checksums aren't".into());
+                        continue;
+                    }
+                }
+                c.verified = true;
+                {
+                    let name = entry.name.clone();
+                    dump.context_mut().add(Subject::Disc, "name", name.clone(), "Redump");
+                    let why = explain(&dump).map(|m| m.with(true, Some(c.clone())));
+                    cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
+                    cx.verified(&dump, format!("Verified: {name}, {}", c.note()));
+                    cx.status("Verified", c.note());
+                    return Ok(Some(dump));
+                }
             }
             _ => {
                 cx.item(&dump, ItemState::Busy, "re-reading bad parts");
                 cx.status("Re-reading bad parts", serial.to_owned());
-                if let Some(name) = refine(cx, &mut dump).await? {
-                    cx.report(None);
-                    cx.item(&dump, ItemState::Ok, format!("Verified: {name}"));
-                    cx.status("Verified", "after re-reading bad parts");
-                    return Ok(Some(dump));
+                match reread.refine(cx, &mut dump).await {
+                    Ok(Some(name)) => {
+                        cx.report(None);
+                        cx.verified(&dump, format!("Verified: {name}"));
+                        cx.status("Verified", "after re-reading bad parts");
+                        return Ok(Some(dump));
+                    }
+                    Ok(None) => cx.log("refined; still doesn't match"),
+                    Err(e) if cx.stopped() => return Err(e),
+                    Err(e) => {
+                        cx.log(format!("re-read: {e}"));
+                        trouble = Some(format!("Couldn't re-read: {e}"));
+                    }
                 }
-                cx.log("refined; still doesn't match");
             }
         }
     }
 }
 
-/// Check's hold for a game: whether the dump is suspect, and if so, holds
-/// it. Gives the dump to send on, if any. A catalogue that can't be had
-/// isn't a reason to hold anything.
-pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Rom]) -> Result<Option<drt_engine::Item>> {
+/// Check's hold for a game or a data disc that doesn't match Redump: held
+/// when Redump has dumps of its serial and this is none of them, or, with
+/// every list reached and none having it, when its own sectors say it was
+/// read wrong. Gives the dump to send on, if any. A catalogue that can't
+/// be had isn't a reason to hold anything.
+pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Rom], reached_all: bool, reread: &dyn Reread) -> Result<Option<drt_engine::Item>> {
     let (system, serial, _) = known(dump.context());
-    let (Some(serial), Some(slug)) = (serial, system.as_deref().and_then(slug_of)) else { return Ok(Some(dump)) };
-    let Ok(cat) = game_catalogue(&data::redump_cache(&cx.work()?), slug).await else { return Ok(Some(dump)) };
-    if !is_suspect(&cat, &serial, roms) {
+    let Some(main) = dump.path.clone() else { return Ok(Some(dump)) };
+    let log = |main: &Path| std::fs::read_to_string(main.with_extension("log")).ok();
+    let cat = match system.as_deref().and_then(slug_of) {
+        Some(slug) => game_catalogue(&data::redump_cache(&cx.work()?), slug).await.ok(),
+        None => None,
+    };
+    let serial_s = serial.clone().unwrap_or_default();
+    if let (Some(cat), Some(serial)) = (&cat, &serial) {
+        if is_suspect(cat, serial, roms) {
+            // Redump's copies beside the dump's files as they are now (a
+            // re-read or a combination changes them), and what redumper's
+            // log says about the first read.
+            let explain = |d: &drt_engine::Item| {
+                let main = d.path.as_deref()?;
+                mismatch::explain(serial, &cat.by_serial(serial), &hashed(d.context(), main), log(main).as_deref())
+            };
+            return hold(cx, dump, serial, reread, Some(cat), explain).await;
+        }
+    }
+    // Nothing in Redump to compare with: held only when it can be helped,
+    // and its own sectors say it was read wrong.
+    let wrong = log(&main).map(|l| mismatch::read_log(&l)).is_some_and(|r| r.bad().max(r.wrong()) > 0);
+    if !(reached_all && wrong && reread.can_combine(&dump)) {
         return Ok(Some(dump));
     }
-    // Redump's copies beside the dump's files as they are now (a re-read
-    // changes them), and what redumper's log says about the read.
     let explain = |d: &drt_engine::Item| {
         let main = d.path.as_deref()?;
-        let log = std::fs::read_to_string(main.with_extension("log")).ok();
-        mismatch::explain(&serial, &cat.by_serial(&serial), &hashed(d.context(), main), log.as_deref())
+        Some(mismatch::unlisted(&serial_s, &hashed(d.context(), main), &log(main)?))
     };
-    hold(cx, dump, &serial, |cx, dump| Box::pin(refine(cx, dump)), explain).await
+    hold(cx, dump, &serial_s, reread, cat.as_deref(), explain).await
+}
+
+/// A rip of the whole disc into a folder, giving its cue sheet: redumper's
+/// in the app ([`data::rip_again`]), a stand-in in a test.
+pub type RipFn = std::sync::Arc<dyn Fn(Cx, drt_engine::Item, PathBuf) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PathBuf>> + Send>> + Send + Sync>;
+
+/// redumper's rip, as Rip reads.
+pub fn redumper_rip() -> RipFn {
+    std::sync::Arc::new(|cx, dump, dir| Box::pin(async move { data::rip_again(&cx, &dump, dir).await }))
+}
+
+/// The real disc: redumper's refine, and rips into the run's working
+/// folder (`rip-1` the first rip's files, `rip-2` on), combined into
+/// `combined`.
+pub struct Disc {
+    pub rip: RipFn,
+}
+
+impl Disc {
+    fn folders(cx: &Cx) -> Result<PathBuf> {
+        cx.work()
+    }
+}
+
+/// Links (or, failing that, copies) `files` into `dir`.
+fn keep_copy(files: &[PathBuf], dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for f in files {
+        let to = dir.join(f.file_name().unwrap_or_default());
+        if !to.exists() && std::fs::hard_link(f, &to).is_err() {
+            std::fs::copy(f, &to)?;
+        }
+    }
+    Ok(())
+}
+
+#[async_trait]
+impl Reread for Disc {
+    async fn refine(&self, cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>> {
+        refine(cx, dump).await
+    }
+
+    fn can_combine(&self, dump: &drt_engine::Item) -> bool {
+        data::combinable(dump)
+    }
+
+    async fn combine(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<(Combination, Vec<redump::Rom>)> {
+        use super::{combine, hash, redumper};
+        let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+        let work = Self::folders(cx)?;
+        // The first rip, as it was: linked, so it costs no room, and stays
+        // when the dump's own files are replaced.
+        keep_copy(&redumper::dump_files(&main), &work.join("rip-1"))?;
+        let mut rips: Vec<PathBuf> = (1..).map(|n| work.join(format!("rip-{n}")).join(main.file_name().unwrap_or_default())).take_while(|c| c.is_file()).collect();
+        let dir = work.join(format!("rip-{}", rips.len() + 1));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cue = (self.rip)(cx.clone(), dump.clone(), dir).await?;
+        rips.push(cue);
+        cx.item(dump, ItemState::Busy, format!("combining {} rips", rips.len()));
+        cx.status(format!("Combining {} rips", rips.len()), "");
+        let out = work.join("combined");
+        let (cx2, d) = (cx.clone(), dump.clone());
+        let done = tokio::task::spawn_blocking(move || -> Result<(combine::Combined, Vec<redump::Rom>)> {
+            let c = combine::combine(
+                &rips,
+                &out,
+                |p| {
+                    cx2.progress(Some(p));
+                    cx2.item(&d, ItemState::Busy, format!("combining {}%", (p * 100.0) as u32));
+                },
+                &|| cx2.stopped(),
+            )?;
+            let files = data::data_files(&c.cue);
+            let refs: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
+            let roms = hash::hash_files(&refs, |_| {}, || cx2.stopped())?;
+            Ok((c, roms))
+        })
+        .await??;
+        cx.progress(None);
+        Ok((Combination::of(&done.0, false), done.1))
+    }
+
+    async fn adopt(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<()> {
+        let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+        let from = Self::folders(cx)?.join("combined");
+        for f in data::image_files(&main) {
+            let name = f.file_name().unwrap_or_default();
+            let src = from.join(name);
+            // Already in place (kept after a check that didn't verify it).
+            if !src.is_file() {
+                continue;
+            }
+            if std::fs::rename(&src, &f).is_err() {
+                std::fs::copy(&src, &f)?;
+            }
+        }
+        cx.log(format!("the combined image is now {}", main.display()));
+        Ok(())
+    }
+
+    async fn rehash(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<Vec<redump::Rom>> {
+        let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+        let files = data::data_files(&main);
+        let cx2 = cx.clone();
+        tokio::task::spawn_blocking(move || {
+            let refs: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
+            super::hash::hash_files(&refs, |_| {}, || cx2.stopped())
+        })
+        .await?
+    }
 }
 
 /// redumper's refine on the dump, a fresh split and check of it, then its
@@ -430,7 +660,7 @@ async fn refine(cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>> 
     let dir = main.parent().ok_or_else(|| anyhow!("{} has no folder", main.display()))?.to_path_buf();
     let t = redumper::Target { dir, name: main.file_stem().unwrap_or_default().to_string_lossy().into_owned() };
     // At the offset the dump was read at: redumper places what it reads by it.
-    let opts = redumper::Options { drive: redumper::drive_access(&super::device(dump.context())?)?, retries: 20, speed: None, read_offset: data::read_offset(dump.context()) };
+    let opts = data::rip_options(dump.context())?;
     {
         let _drive = cx.lane(LaneKind::Drive).await;
         let mut out = String::new();

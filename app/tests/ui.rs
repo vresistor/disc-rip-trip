@@ -2690,7 +2690,9 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     h.get_by_label("15 sectors: fail their error correction");
     h.get_by_label("between 49% and 68% of the way through (ECC)");
     h.get_by_label("redumper doesn't know this drive, so it used general settings and a read offset of +0");
-    h.get_by_label_contains("15 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts won't read them again.");
+    h.get_by_label_contains("15 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts can't find them. Rip again and combine reads the whole disc again");
+    assert!(h.query_all_by_label_contains("Re-read bad parts, ").next().is_none(), "no help when the drive reported nothing");
+    assert!(h.query_all_by_label_contains("Rip again and combine, ").next().is_some());
     shot(&mut h, "step-check-mismatch");
     open_id(&mut h, "g_redump");
     h.get_by_label_contains("Waits for Check, which needs you to decide about the dump.");
@@ -2721,6 +2723,40 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     shot(&mut h, "step-redump-not-needed");
     open_id(&mut h, "g_check");
     h.get_by_label_contains("Its checksums match Redump's copy of Ape Escape (Europe).");
+}
+
+/// A misread the drive kept quiet about: Rip again and combine, twice, and
+/// Check's sidebar shows each rip and what combining came to; the second
+/// combination matches Redump, and the dump goes on verified.
+#[test]
+fn check_rips_again_and_combines_until_it_matches() {
+    let e = env();
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 1100.0), 1.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    until(&mut h, "Check to hold the dump", |a| a.m.snapshot(a.sel).steps["g_check"].items.first().is_some_and(|i| i.state == ItemState::Bad));
+    open_id(&mut h, "g_check");
+    h.get_all_by_label_contains("Rip again and combine, ").next().expect("on the dump's row").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "two rips combined", |a| a.m.snapshot(a.sel).steps["g_check"].detail.starts_with("combined from 2 rips"));
+    h.get_by_label_contains("Combined from 2 rips, this copy still doesn't match Redump's copy of SLES-04711.");
+    h.get_by_label("Rips");
+    h.get_by_label("Rip 2");
+    h.get_by_label("Combined: doesn't match Redump");
+    h.get_by_label("What the first rip reported");
+    h.get_by_label_contains("Combined from 2 rips, 4 sectors still have no copy that passes its check.");
+    assert!(h.query_all_by_label_contains("Keep the best combination (not verified), ").next().is_some());
+    shot(&mut h, "step-check-combined");
+    h.get_all_by_label_contains("Rip again and combine again, ").next().expect("again").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "the third rip to verify it", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Verified");
+    open_id(&mut h, "g_check");
+    h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now, combined from 3 rips.");
+    h.get_by_label("Combined: matches Redump");
+    shot(&mut h, "step-check-combined-verified");
 }
 
 #[test]

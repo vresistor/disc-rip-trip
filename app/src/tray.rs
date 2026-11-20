@@ -2208,9 +2208,16 @@ fn reads_differ(n: &str) -> String {
 /// The step's own retries on a row that needs you: each a button, then
 /// Keep it anyway and Skip as quiet words.
 fn retries(r: &mut Row, info: &StepInfo) {
-    let (settle, tries): (Vec<_>, Vec<_>) = info.retries.iter().partition(|o| matches!(o.id, "keep" | "leave_out"));
-    r.acts = tries.iter().map(|o| (o.label.to_owned(), o.id.to_owned(), false)).collect();
-    r.acts.extend(settle.iter().map(|o| (o.label.to_owned(), o.id.to_owned(), true)));
+    let all: Vec<(String, String)> = info.retries.iter().map(|o| (o.id.to_owned(), o.label.to_owned())).collect();
+    offered(r, &all);
+}
+
+/// What one item offers, `(id, label)`: each a button, then Keep and Skip
+/// as quiet words.
+fn offered(r: &mut Row, options: &[(String, String)]) {
+    let (settle, tries): (Vec<_>, Vec<_>) = options.iter().partition(|o| matches!(o.0.as_str(), "keep" | "leave_out"));
+    r.acts = tries.iter().map(|o| (o.1.clone(), o.0.clone(), false)).collect();
+    r.acts.extend(settle.iter().map(|o| (o.1.clone(), o.0.clone(), true)));
 }
 
 /// Any other step's item, in plain words: done (with its note), failed
@@ -2357,9 +2364,14 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
                 .map(|(k, it)| {
                     let (word, tone, note, why) = item_verdict(it.state, &it.note);
                     let mut r = Row { verdict: Some((word, tone, note)), attn: why.is_some(), why, item: Some(it.id.clone()), ..Row::new(Some(number(it, k)), it.label.clone()) };
-                    // What the step offers for one that failed, as Rip's.
+                    // What the step offers for one that failed, as Rip's:
+                    // the item's own choices, when it has them.
                     if r.attn {
-                        retries(&mut r, &info);
+                        if it.options.is_empty() {
+                            retries(&mut r, &info);
+                        } else {
+                            offered(&mut r, &it.options);
+                        }
                     }
                     // A picture it saved opens at full size.
                     if info.output == drt_engine::ItemKind::PictureFile && it.state == ItemState::Ok && picture_file(&v.record.files, &it.label).is_some() {

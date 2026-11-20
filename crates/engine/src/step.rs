@@ -443,6 +443,7 @@ impl Cx {
             row.state = ItemState::Ok;
             row.note = note;
             row.verified = true;
+            row.options.clear();
         });
     }
 
@@ -461,7 +462,18 @@ impl Cx {
             row.state = state;
             row.note = note;
             row.verified = false;
+            // What it offered was for while it needed you.
+            if state != ItemState::Bad {
+                row.options.clear();
+            }
         });
+    }
+
+    /// What an item that needs you offers, `(id, label)`, in place of the
+    /// step's whole list of retries. Set just before it's marked bad;
+    /// cleared when it's marked anything else.
+    pub fn item_options(&self, item: &Item, options: Vec<(String, String)>) {
+        self.view(|v| v.item_mut(&item.id, &item.label).options = options);
     }
 
     /// The value in effect for a parameter, wherever it lives.

@@ -5,7 +5,7 @@
 
 use crate::theme::{font, state_icon, tnum, Pal};
 use drt_engine::{StepState, StepView};
-use drt_steps::real::mismatch::{Mismatch, Read};
+use drt_steps::real::mismatch::{Combination, Mismatch, Read};
 use egui::{pos2, vec2, Align2, RichText, Sense, Stroke, Ui};
 
 /// The comparison Check keeps in its record, if it held this dump.
@@ -23,7 +23,16 @@ pub fn check_say(v: &StepView) -> String {
         return "Compares the copy's checksums with Redump's list of known-good copies. A match names the disc.".into();
     }
     let m = mismatch(v);
+    let rips = m.as_ref().and_then(|m| m.combined.as_ref()).map(|c| c.rips.len());
     match (v.status.as_str(), &m) {
+        ("Doesn't match Redump", Some(m)) if rips.is_some() => {
+            format!("Combined from {} rips, this copy still doesn't match Redump's copy of {}. Below, each rip and what combining them came to.", rips.unwrap_or(0), m.serial)
+        }
+        ("Not verified", Some(_)) if rips.is_some() => format!("Combined from {} rips. Redump has no copy of this disc to compare with, so it can't be called verified.", rips.unwrap_or(0)),
+        ("Not verified", Some(_)) => "Redump has no copy of this disc to compare with, and some of its sectors fail their own check. Below, what the read reported.".into(),
+        ("Kept, not verified", _) => "Kept the best combination of the rips. Nothing in Redump matches it, so it isn't verified.".into(),
+        ("Kept anyway", _) if v.detail == "not verified" => "Kept, though nothing in Redump could verify it.".into(),
+        ("Verified", Some(m)) if rips.is_some() => format!("It matches Redump's copy of {} now, combined from {} rips. Its size and all its checksums are Redump's.", m.entry, rips.unwrap_or(0)),
         ("Doesn't match Redump", Some(m)) => match m.copies() {
             1 => format!("Redump has one copy of {}, and this one doesn't match it. Below, the two side by side.", m.serial),
             n => format!("Redump has {n} copies of {}, and this one matches none of them. Below, it's set beside the closest.", m.serial),
@@ -149,8 +158,8 @@ fn fact(ui: &mut Ui, p: &Pal, what: &str, said: &str, ok: Option<bool>) {
     ui.add_space(6.0);
 }
 
-fn read(ui: &mut Ui, p: &Pal, r: &Read) {
-    heading(ui, p, "What the read reported");
+fn read(ui: &mut Ui, p: &Pal, r: &Read, first: bool) {
+    heading(ui, p, if first { "What the first rip reported" } else { "What the read reported" });
     if r.drive_reported() {
         fact(ui, p, "The drive reported read errors it couldn't fix", &format!("SCSI {}, C2 {} (in samples, 588 to a sector)", thousands(r.scsi), thousands(r.c2)), Some(false));
     } else {
@@ -173,9 +182,56 @@ fn read(ui: &mut Ui, p: &Pal, r: &Read) {
     }
 }
 
+/// 565 sectors, 1 sector.
+fn sectors(n: u64) -> String {
+    if n == 1 {
+        "1 sector".into()
+    } else {
+        format!("{} sectors", thousands(n))
+    }
+}
+
+/// Each rip, and what combining them came to.
+fn rips(ui: &mut Ui, p: &Pal, m: &Mismatch, c: &Combination) {
+    heading(ui, p, "Rips");
+    for r in &c.rips {
+        let said = if r.bad == 0 { "Every sector passes its own check".to_owned() } else { format!("{} fail their own check", sectors(r.bad)) };
+        fact(ui, p, &format!("Rip {}", r.n), &said, Some(r.bad == 0));
+    }
+    let what = match (c.verified, m.in_redump()) {
+        (true, _) => "Combined: matches Redump".to_owned(),
+        (false, true) => "Combined: doesn't match Redump".to_owned(),
+        (false, false) => "Combined: not verified".to_owned(),
+    };
+    let mut said = format!("{} differed between the rips, {} taken from the later rips", sectors(c.differing), sectors(c.taken));
+    match c.still_bad {
+        0 => said.push_str(", every sector passes its own check"),
+        n => {
+            let at = c.left.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(", ");
+            said.push_str(&format!(", {} still fail their check (sector {at}{})", sectors(n), if n as usize > c.left.len() { ", …" } else { "" }));
+        }
+    }
+    if c.disagree > 0 {
+        said.push_str(&format!("; in {}, rips that each pass read differently", sectors(c.disagree)));
+    }
+    // Only Redump's checksums verify; otherwise no mark either way.
+    fact(ui, p, &what, &said, if m.in_redump() { Some(c.verified) } else { None });
+}
+
 /// Check's comparison, under its rows.
 pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
     heading(ui, p, "Compared with Redump");
+    if !m.in_redump() {
+        ui.label(RichText::new("Redump has no copy of this disc").font(font(13.5, 600)).color(p.ink));
+        if let Some(c) = &m.combined {
+            rips(ui, p, m, c);
+        }
+        if let Some(r) = &m.read {
+            read(ui, p, r, m.combined.is_some());
+        }
+        meaning(ui, p, m);
+        return;
+    }
     ui.label(RichText::new(&m.entry).font(font(13.5, 600)).color(p.ink));
     if !m.others.is_empty() {
         ui.label(RichText::new(format!("Also under {}: {}", m.serial, m.others.join("; "))).font(font(12.5, 400)).color(p.muted));
@@ -201,9 +257,16 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
         row(ui, p, "SHA-1", &sum(&f.expected), &sum(&f.got), Some(f.sha1_ok()));
         ui.add_space(8.0);
     }
-    if let Some(r) = &m.read {
-        read(ui, p, r);
+    if let Some(c) = &m.combined {
+        rips(ui, p, m, c);
     }
+    if let Some(r) = &m.read {
+        read(ui, p, r, m.combined.is_some());
+    }
+    meaning(ui, p, m);
+}
+
+fn meaning(ui: &mut Ui, p: &Pal, m: &Mismatch) {
     if !m.reading.is_empty() {
         heading(ui, p, "What it likely means");
         for line in &m.reading {

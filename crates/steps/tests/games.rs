@@ -188,7 +188,11 @@ async fn a_dump_redump_disagrees_with_is_held_until_you_say() {
     assert_eq!(held.steps["g_check"].state, StepState::Bad);
     assert_eq!(held.steps["g_lib"].count(ItemState::Ok), 0);
     let check = drt_steps::real().info("check").unwrap();
-    assert_eq!(check.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Keep it anyway", "Skip this disc"]);
+    assert_eq!(check.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Rip again and combine", "Keep it anyway", "Skip this disc"]);
+    // No log to say the drive reported nothing: re-reading may help; no
+    // rip of sectors to combine.
+    let offered: Vec<&str> = item.options.iter().map(|o| o.1.as_str()).collect();
+    assert_eq!(offered, ["Re-read bad parts", "Keep it anyway", "Skip this disc"]);
     // Left out: not filed, and nothing asked about it.
     run.send(Command::Retry { step: "g_check".into(), item: item.id.clone(), option: "leave_out".into() }).await;
     let (s, asked) = drive(run, Answer::Skip).await;
@@ -251,6 +255,41 @@ async fn a_disc_skipped_at_check_leaves_redump_nothing_to_do() {
     run.send(Command::Retry { step: "g_check".into(), item: s.steps["g_check"].items[0].id.clone(), option: "leave_out".into() }).await;
     let (s, _) = drive(run, Answer::Skip).await;
     assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_redump"].detail.as_str()), ("Not needed", "nothing came from Check"));
+}
+
+/// A misread the drive kept quiet about: Check offers ripping again and
+/// combining, not re-reading. Two rips combined still don't match, and it
+/// says so; the third does, and the dump goes on verified.
+#[tokio::test]
+async fn ripping_again_and_combining_until_it_matches_redump() {
+    let e = engine(vec![LANTERN_KEEP_DAMAGED]);
+    let run = e.start(&recipes::games()).unwrap();
+    let s = until(&run, held).await;
+    let item = s.steps["g_check"].items[0].clone();
+    let labels = |i: &drt_engine::ItemView| i.options.iter().map(|o| o.1.clone()).collect::<Vec<_>>();
+    assert_eq!(labels(&item), ["Rip again and combine", "Keep it anyway", "Skip this disc"], "the drive reported nothing: Re-read bad parts can't help");
+    let m: Mismatch = serde_json::from_value(s.steps["g_check"].record.report.clone().unwrap()).unwrap();
+    assert!(m.reading[0].contains("Rip again and combine reads the whole disc again"), "{:?}", m.reading);
+    run.send(Command::Retry { step: "g_check".into(), item: item.id.clone(), option: "combine".into() }).await;
+    let s = until(&run, |s| held(s) && s.steps["g_check"].detail.starts_with("combined")).await;
+    let c = &s.steps["g_check"];
+    assert_eq!((c.status.as_str(), c.detail.as_str()), ("Doesn't match Redump", "combined from 2 rips, 4 sectors still bad"));
+    assert_eq!(labels(&c.items[0]), ["Rip again and combine again", "Keep the best combination (not verified)", "Skip this disc"]);
+    let m: Mismatch = serde_json::from_value(c.record.report.clone().unwrap()).unwrap();
+    let comb = m.combined.as_ref().unwrap();
+    assert_eq!((comb.rips.len(), comb.still_bad, comb.verified), (2, 4, false));
+    assert!(m.reading[0].starts_with("Combined from 2 rips, 4 sectors still have no copy that passes its check."), "{:?}", m.reading);
+    run.send(Command::Retry { step: "g_check".into(), item: item.id.clone(), option: "combine".into() }).await;
+    let (s, asked) = drive(run, Answer::Skip).await;
+    assert!(asked.is_empty(), "the hash decides: {asked:?}");
+    let c = &s.steps["g_check"];
+    assert_eq!(c.items[0].note, "Verified: Lantern Keep (Europe) (Disc 1), combined from 3 rips, 140 sectors taken from the later rips");
+    assert!(c.items[0].verified);
+    assert_eq!((c.status.as_str(), c.detail.as_str()), ("Verified", "combined from 3 rips, 140 sectors taken from the later rips"));
+    let m: Mismatch = serde_json::from_value(c.record.report.clone().expect("the rips stay in its record")).unwrap();
+    assert!(m.combined.unwrap().verified && m.files[0].sha1_ok());
+    assert_eq!((s.steps["g_redump"].status.as_str(), s.steps["g_choose"].detail.as_str()), ("Not needed", "verified"));
+    assert_eq!(s.steps["g_lib"].items[0].note, "~/Games/PlayStation/Lantern Keep (Europe)");
 }
 
 /// A serial Redump has nothing for says nothing about the dump.

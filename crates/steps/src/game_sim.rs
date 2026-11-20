@@ -6,6 +6,7 @@
 //! turn, so a two-disc game is two runs on one engine, as at the drive.
 
 use crate::real::game::{self, Identity};
+use crate::real::mismatch::{Combination, RipRead};
 use crate::real::{data, media, redump};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -330,20 +331,13 @@ pub async fn check(cx: &Cx, dump: &Item, outlet: &Outlet) -> Result<bool> {
     let cat = redump::parse(GAME_DAT.as_bytes())?;
     let dump = if found.is_none() && game::is_suspect(&cat, &serial, &roms) {
         let log = dump.context().get(Subject::Disc, LOG).map(str::to_owned);
-        let explain = |_: &Item| crate::real::mismatch::explain(&serial, &cat.by_serial(&serial), &roms, log.as_deref());
-        game::hold(
-            cx,
-            dump,
-            &serial,
-            |cx, _| {
-                Box::pin(async move {
-                    cx.sleep(2000).await?;
-                    Ok(None)
-                })
-            },
-            explain,
-        )
-        .await?
+        // The dump's files as they are now: a combination changes them.
+        let explain = |d: &Item| {
+            let now: Vec<redump::Rom> = roms.iter().map(|r| redump::Rom { sha1: d.context().get(Subject::Disc, &format!("sha1 {}", r.name)).unwrap_or(&r.sha1).to_owned(), ..r.clone() }).collect();
+            crate::real::mismatch::explain(&serial, &cat.by_serial(&serial), &now, log.as_deref())
+        };
+        let reread = Reread { rips: Mutex::new(1), log: log.is_some(), roms: roms.clone(), last: Mutex::default() };
+        game::hold(cx, dump, &serial, &reread, Some(&cat), explain).await?
     } else {
         Some(dump)
     };
@@ -351,6 +345,80 @@ pub async fn check(cx: &Cx, dump: &Item, outlet: &Outlet) -> Result<bool> {
         outlet.send(d).await;
     }
     Ok(true)
+}
+
+/// A simulated disc read again: a re-read changes nothing; each rip again
+/// is combined with those before, and the third puts every sector right,
+/// so the combination is Redump's copy.
+struct Reread {
+    rips: Mutex<usize>,
+    /// Only a read with a log (a CD image redumper made) can be combined.
+    log: bool,
+    roms: Vec<redump::Rom>,
+    /// What the last combination came to.
+    last: Mutex<Vec<redump::Rom>>,
+}
+
+/// Each simulated rip's sectors that fail their check.
+const RIP_BAD: [u64; 4] = [140, 152, 131, 145];
+
+#[async_trait]
+impl game::Reread for Reread {
+    async fn refine(&self, cx: &Cx, _: &mut Item) -> Result<Option<String>> {
+        cx.sleep(2000).await?;
+        Ok(None)
+    }
+
+    fn can_combine(&self, _: &Item) -> bool {
+        self.log
+    }
+
+    async fn combine(&self, cx: &Cx, dump: &Item) -> Result<(Combination, Vec<redump::Rom>)> {
+        let n = {
+            let mut r = self.rips.lock().unwrap();
+            *r += 1;
+            *r
+        };
+        cx.item(dump, ItemState::Busy, format!("ripping again, rip {n}"));
+        cx.sleep(1500).await?;
+        cx.item(dump, ItemState::Busy, format!("combining {n} rips"));
+        cx.sleep(500).await?;
+        let right = n >= 3;
+        let c = Combination {
+            rips: (1..=n).map(|k| RipRead { n: k, bad: RIP_BAD[(k - 1) % RIP_BAD.len()] }).collect(),
+            sectors: 200_000,
+            differing: if right { 262 } else { 248 },
+            taken: if right { 140 } else { 131 },
+            no_good: if right { 0 } else { 4 },
+            disagree: 0,
+            still_bad: if right { 0 } else { 4 },
+            left: if right { vec![] } else { vec![98_000, 99_000, 120_000, 136_000] },
+            left_out: vec![],
+            verified: false,
+        };
+        let cat = redump::parse(GAME_DAT.as_bytes())?;
+        let theirs = cat.by_serial(dump.context().get(Subject::Disc, "serial").unwrap_or("")).first().map(|g| g.roms.clone()).unwrap_or_default();
+        // The data track becomes Redump's once it's right; till then, another wrong copy.
+        let roms: Vec<redump::Rom> = self
+            .roms
+            .iter()
+            .map(|r| match theirs.iter().find(|t| t.is_data() && r.is_data()) {
+                Some(t) if right => redump::Rom { name: r.name.clone(), ..t.clone() },
+                _ if r.is_data() => redump::Rom { sha1: format!("{:08x}{}", 0x5eed_0000u32 + n as u32, &r.sha1[8..]), ..r.clone() },
+                _ => r.clone(),
+            })
+            .collect();
+        *self.last.lock().unwrap() = roms.clone();
+        Ok((c, roms))
+    }
+
+    async fn adopt(&self, _: &Cx, _: &Item) -> Result<()> {
+        Ok(())
+    }
+
+    async fn rehash(&self, _: &Cx, _: &Item) -> Result<Vec<redump::Rom>> {
+        Ok(self.last.lock().unwrap().clone())
+    }
 }
 
 // ---- Redump -------------------------------------------------------------------------------------
@@ -373,7 +441,8 @@ impl Step for Redump {
             cx.sleep(300).await?;
             // Hashed when Check has been: the hashes it recorded.
             let c = dump.context();
-            let roms: Vec<redump::Rom> = sim_roms(c).unwrap_or_default().into_iter().filter(|r| c.get(Subject::Disc, &format!("sha1 {}", r.name)).is_some()).collect();
+            let roms: Vec<redump::Rom> =
+                sim_roms(c).unwrap_or_default().into_iter().filter_map(|r| Some(redump::Rom { sha1: c.get(Subject::Disc, &format!("sha1 {}", r.name))?.to_owned(), ..r })).collect();
             let cat = redump::parse(GAME_DAT.as_bytes())?;
             let l = game::after_check(dump.context(), game::lookup(&cat, &system, serial.as_deref(), sectors, &roms));
             game::offer(&cx, &mut dump, l);
