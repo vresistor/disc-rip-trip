@@ -185,14 +185,20 @@ pub struct SideWire {
 
 /// How big a + is, at 100%: its radius. Seams, strip ends and joins all
 /// share it.
-pub const PLUS_R: f32 = 16.0;
+pub const PLUS_R: f32 = 18.0;
 /// A path button's radius, beside a +.
-pub const SIDE_R: f32 = 11.0;
+pub const SIDE_R: f32 = 13.0;
 
 /// Where a step's button for `side` goes: on its card's right edge, just
 /// above (if it fails) or below (if it needs you) the + there.
+/// Where a step's path leaves its card: the middle of its foot, a little
+/// left for fails and right for needs you.
+pub fn foot_x(r: Rect, side: Side) -> f32 {
+    r.x + r.w / 2.0 + if side == Side::Fails { -10.0 } else { 10.0 }
+}
+
 pub fn side_button(r: Rect, side: Side) -> (f32, f32) {
-    let d = PLUS_R + 5.0 + SIDE_R;
+    let d = PLUS_R + 12.0 + SIDE_R;
     match side {
         Side::Fails => (r.right(), r.mid_y() - d),
         Side::NeedsYou => (r.right(), r.mid_y() + d),
@@ -356,15 +362,17 @@ fn add_sides(l: &mut Layout, root: &Node, m: Metrics, loops: &[String]) {
     }
 }
 
-/// A path's line from its button down its card, out by its foot and on
-/// down to `lane`: straight; else into the gap below the card, along to
-/// the nearest clear way down past `around`, and down that.
+/// A path's line from the middle of its card's foot (the face nearest
+/// what it leads to; fails a little left of the middle, needs you a little
+/// right, so the two don't share a line) on down to `lane`: straight; else
+/// into the gap below the card, along to the nearest clear way down past
+/// `around`, and down that.
 fn way_down(r: Rect, side: Side, around: &[TilePlace], lane: f32, m: Metrics) -> Vec<(f32, f32)> {
     // Is the way down at `x`, from `y0` to `y1`, clear?
     let blocked = |x: f32, y0: f32, y1: f32| around.iter().any(|t| t.rect.x < x && x < t.rect.right() && t.rect.y < y1 && t.rect.y + t.rect.h > y0);
     let across = |x0: f32, x1: f32, y: f32| around.iter().any(|t| t.rect.x < x0.max(x1) && x0.min(x1) < t.rect.right() && t.rect.y < y && y < t.rect.y + t.rect.h);
-    let (sx, foot) = (side_x(r, side), r.y + r.h);
-    let mut pts = vec![(sx, side_button(r, side).1), (sx, foot)];
+    let (sx, foot) = (foot_x(r, side), r.y + r.h);
+    let mut pts = vec![(sx, foot)];
     if blocked(sx, foot, lane) {
         let mid = foot + m.vgap / 2.0;
         let off = if side == Side::Fails { 12.0 } else { 24.0 };
@@ -734,10 +742,9 @@ mod tests {
                 let from = l.tile(&w.from_step).unwrap().rect;
                 assert!(into.y > from.y + from.h, "{} sits below {}", w.to_step, w.from_step);
                 assert_eq!(*w.path.last().unwrap(), (into.x + into.w / 2.0, into.y), "into the top of {}", w.to_step);
-                // Leaves by its button on its own card's right edge, down
-                // that edge and out by its foot, and crosses no other card.
-                assert_eq!(w.path[0], (side_x(from, w.side), side_button(from, w.side).1));
-                assert_eq!(w.path[1], (side_x(from, w.side), from.y + from.h));
+                // Leaves from the middle of its own card's foot, and
+                // crosses no other card.
+                assert_eq!(w.path[0], (foot_x(from, w.side), from.y + from.h));
                 let others = Layout { tiles: l.tiles.iter().filter(|t| t.id != w.to_step).cloned().collect(), ..Layout::default() };
                 assert_eq!(crosses(&others, &w.path, &w.from_step), None, "{}: {} → {} {:?} {:?}", r.name, w.from_step, w.to_step, w.path, l.tiles.iter().map(|t| (&t.id, t.rect)).collect::<Vec<_>>());
             }

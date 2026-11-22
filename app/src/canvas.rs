@@ -427,7 +427,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
                 (p.raised, col, mix(col, 0.55, p.line))
             };
             painter.circle(c, SIDE_R * z, fill, Stroke::new(2.0 * z, line));
-            painter.extend(side_icon(*side, c, 12.0 * z, fg));
+            painter.extend(side_icon(*side, c, 14.0 * z, fg));
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -507,7 +507,7 @@ fn plus(painter: &egui::Painter, c: Pos2, z: f32, p: &Pal, resp: &egui::Response
         painter.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     painter.circle(c, PLUS_R * z, fill, Stroke::new(2.0 * z, line));
-    let (len, th) = (14.0 * z, 3.2 * z);
+    let (len, th) = (16.0 * z, 3.6 * z);
     let bar = |w: f32, h: f32| Shape::Rect(RectShape::filled(Rect::from_center_size(c, vec2(w, h)), CornerRadius::same((th / 2.0).round().min(255.0) as u8), fg));
     painter.extend([bar(len, th), bar(th, len)]);
     resp.clicked()
