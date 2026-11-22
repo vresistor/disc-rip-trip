@@ -95,6 +95,8 @@ pub struct App {
     /// Follow: the canvas keeps the step where something last happened in
     /// view. Remembered; a drag or a zoom by hand turns it off.
     pub follow: bool,
+    /// The view of a disc's map: drawn to scale, or every sector. Remembered.
+    pub map_view: crate::sectormap::MapView,
     /// The step that last began, finished or began to ask, and when.
     follow_last: Option<(String, f64)>,
     /// When Follow last moved the camera.
@@ -195,6 +197,7 @@ impl App {
 
     pub fn new(m: Model, dark: bool) -> App {
         let follow = m.store.load_follow().unwrap_or(false);
+        let map_view = m.store.load_map_view().and_then(|v| crate::sectormap::MapView::parse(&v)).unwrap_or_default();
         App {
             m,
             side_last: None,
@@ -229,6 +232,7 @@ impl App {
             cue_seen: HashMap::new(),
             cues: HashMap::new(),
             follow,
+            map_view,
             follow_last: None,
             follow_moved: f64::NEG_INFINITY,
             dead_pluses: None,
@@ -341,6 +345,14 @@ impl App {
         self.follow_moved = f64::NEG_INFINITY;
         if let Err(e) = self.m.store.save_follow(on) {
             eprintln!("couldn't save Follow: {e:#}");
+        }
+    }
+
+    /// Picks the view of a disc's map, and remembers it.
+    pub fn set_map_view(&mut self, v: crate::sectormap::MapView) {
+        self.map_view = v;
+        if let Err(e) = self.m.store.save_map_view(v.as_str()) {
+            eprintln!("couldn't save the map's view: {e:#}");
         }
     }
 

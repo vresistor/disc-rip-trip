@@ -7,6 +7,7 @@ pub mod canvas;
 pub mod card;
 pub mod chrome;
 pub mod compare;
+pub mod discview;
 pub mod links;
 pub mod model;
 pub mod motion;

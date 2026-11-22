@@ -1,11 +1,9 @@
 //! The map of a disc's sectors in a sidebar: a legend with counts and
-//! where the bad sectors are, then blocks in rows, each the worst of its
-//! sectors, with how far from the centre each row lies beside it. Draws any
-//! [`SectorMap`], wherever it came from (Rip's read, Check and fix).
-//!
-//! Rows and blocks, never a drawing of the disc: only the distance from
-//! the centre can be worked out, not where round it a sector lies (see
-//! [`drt_steps::map`]).
+//! where the bad sectors are, then one of two views of it. Disc, for a CD:
+//! a drawing to scale, in rings ([`crate::discview`]). Sectors: blocks in
+//! rows, each the worst of its sectors, with how far from the centre each
+//! row lies beside it. Draws any [`SectorMap`], wherever it came from
+//! (Rip's read, Check and fix).
 
 use crate::theme::{font, mix, tnum, Pal};
 use drt_steps::map::{cm, turn_line, where_line, Mark, SectorMap, KINDS};
@@ -101,31 +99,79 @@ pub fn counts_line(c: &[u64; KINDS]) -> String {
     ORDER.iter().filter(|m| c[**m as usize] > 0).map(|m| format!("{} {}", thousands(c[*m as usize]), word(*m))).collect::<Vec<_>>().join(" · ")
 }
 
+/// Which view of the map: the disc drawn to scale, or every sector in rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MapView {
+    #[default]
+    Disc,
+    Sectors,
+}
+
+impl MapView {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MapView::Disc => "disc",
+            MapView::Sectors => "sectors",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<MapView> {
+        [MapView::Disc, MapView::Sectors].into_iter().find(|v| v.as_str() == s)
+    }
+}
+
 /// What hovering block `b` says: its sectors, how far out, and what's in it.
 pub fn hover_text(m: &SectorMap, b: usize) -> String {
     let (a, z) = m.range(b);
+    range_text(m, a, z, &m.counts(b))
+}
+
+/// Sectors `a` to `z`: which, how far from the centre, and how many of
+/// each kind (`c`).
+pub fn range_text(m: &SectorMap, a: u64, z: u64, c: &[u32; KINDS]) -> String {
     let mut lines = vec![if a == z { format!("Sector {}", thousands(a)) } else { format!("Sectors {}–{}", thousands(a), thousands(z)) }];
     if let Some(g) = m.geometry() {
         let (ra, rz) = (cm(g.radius(a as f64)), cm(g.radius(z as f64 + 1.0)));
         lines.push(if ra == rz { format!("About {ra} from the centre") } else { format!("About {}–{rz} from the centre", ra.trim_end_matches(" cm")) });
     }
-    let c = m.counts(b);
     lines.push(counts_line(&c.map(|x| x as u64)));
     lines.join("\n")
 }
 
-/// Draws the map: the blocks, the distances beside them, the legend, and
-/// where the bad sectors are.
-pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
+/// Draws the map: the legend and where the bad sectors are, once; then,
+/// for a CD, a switch between the disc and its sectors, and the one
+/// chosen (`view`). Anything else has only its sectors, since how far out
+/// they lie isn't known. Gives the view picked, when one is.
+pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64, view: MapView) -> Option<MapView> {
     if m.is_empty() {
-        return;
+        return None;
     }
-    // What it comes to first, then the blocks.
+    let mut picked = None;
+    let disc = m.geometry().is_some();
+    if disc {
+        let views = [MapView::Disc, MapView::Sectors];
+        let at = views.iter().position(|v| *v == view);
+        if let Some(k) = crate::widgets::segmented(ui, p, "Map", &["Disc", "Sectors"], at, true) {
+            picked = Some(views[k]);
+        }
+        ui.add_space(8.0);
+    }
+    // What it comes to first, then the drawing.
     ui.scope(|ui| legend(ui, p, m));
     for line in [where_line(m), turn_line(m)].into_iter().flatten() {
         ui.add(egui::Label::new(RichText::new(line).font(font(13.0, 400)).color(p.muted)).wrap());
     }
     ui.add_space(8.0);
+    if disc && picked.unwrap_or(view) == MapView::Disc {
+        crate::discview::show(ui, p, m, t);
+    } else {
+        grid(ui, p, m, t);
+    }
+    picked
+}
+
+/// Every sector: the blocks in rows, the distances beside them.
+fn grid(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
     let geo = m.geometry();
     let w = ui.available_width();
     let room = w - if geo.is_some() { SCALE_W } else { 0.0 };

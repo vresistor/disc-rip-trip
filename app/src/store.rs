@@ -138,6 +138,17 @@ impl Store {
         Ok(())
     }
 
+    /// Which view of a disc's map: "disc" or "sectors".
+    pub fn load_map_view(&self) -> Option<String> {
+        std::fs::read_to_string(self.dir.join("map-view")).ok().map(|s| s.trim().to_owned())
+    }
+
+    pub fn save_map_view(&self, v: &str) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join("map-view"), v)?;
+        Ok(())
+    }
+
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         if self.settings_unreadable.is_some() {
             return Ok(());

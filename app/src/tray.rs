@@ -275,7 +275,9 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     if v.step == "check" {
         if let Some(m) = v.record.map.clone().and_then(|j| serde_json::from_value::<drt_steps::map::SectorMap>(j).ok()).filter(|m| !m.is_empty()) {
             heading(ui, p, if m.checks_only { "Sectors checked, from the centre out" } else { "Every sector, from the centre out" });
-            crate::sectormap::show(ui, p, &m, t);
+            if let Some(v) = crate::sectormap::show(ui, p, &m, t, app.map_view) {
+                app.set_map_view(v);
+            }
         }
     }
     // A choice: the one chosen, and why; the others below it.
@@ -3247,7 +3249,9 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     if let Some(m) = sectors_map {
         ui.add_space(8.0);
         heading(ui, p, "Every sector, from the centre out");
-        crate::sectormap::show(ui, p, m, t);
+        if let Some(v) = crate::sectormap::show(ui, p, m, t, app.map_view) {
+            app.set_map_view(v);
+        }
     }
     clicked
 }

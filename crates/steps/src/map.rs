@@ -13,8 +13,9 @@
 //! disc a sector lies (its angle) can't be known well enough to draw: it
 //! depends on the exact speed and track pitch the disc was pressed with,
 //! and an error of a fraction of a percent in either adds up over tens of
-//! thousands of turns to anywhere at all. So the map is drawn as rows of
-//! blocks, never as a disc.
+//! thousands of turns to anywhere at all. So a drawing of the disc shows
+//! only rings ([`SectorMap::rings`]), each the worst of its sectors all the
+//! way round, never a spot at an angle.
 
 use serde::{Deserialize, Serialize};
 
@@ -161,7 +162,7 @@ fn each(runs: &[Run]) -> impl Iterator<Item = u64> + '_ {
 }
 
 /// The worst mark of a block's counts; not read only when nothing in it is.
-fn worst(c: &[u32; KINDS]) -> Mark {
+pub fn worst(c: &[u32; KINDS]) -> Mark {
     Mark::ALL.iter().rev().copied().find(|m| *m != Mark::NotRead && c[*m as usize] > 0).unwrap_or(Mark::NotRead)
 }
 
@@ -588,18 +589,24 @@ fn periodic(place: &[&Run], g: &Geometry) -> Option<(f64, f64)> {
     ok.then(|| (g.radius(mid), turn))
 }
 
+/// How far from the centre (metres) each single spot is that errors come
+/// back to once per turn ([`once_per_turn`]), counting every error as it
+/// was read, whether a re-read put it right or not. None but on a CD.
+pub fn spots(m: &SectorMap) -> Vec<f64> {
+    let Some(g) = m.geometry() else { return vec![] };
+    let mut all: Vec<Run> = m.runs.iter().chain(&m.recovered).copied().collect();
+    all.sort_by_key(|r| r.from);
+    once_per_turn(&runs_of(all.iter().flat_map(|r| r.from..=r.to)), &g).into_iter().map(|(r, _)| r).collect()
+}
+
 /// What the map says of bad sectors that come once per turn, when they
 /// do: *Errors repeat once per turn: a single spot about 4.4 cm out, not a
 /// whole ring.* Nothing otherwise.
 pub fn turn_line(m: &SectorMap) -> Option<String> {
-    let g = m.geometry()?;
-    // Every error as it was read, whether a re-read put it right or not.
-    let mut all: Vec<Run> = m.runs.iter().chain(&m.recovered).copied().collect();
-    all.sort_by_key(|r| r.from);
-    let spots = once_per_turn(&runs_of(all.iter().flat_map(|r| r.from..=r.to)), &g);
+    m.geometry()?;
     let mut at: Vec<String> = vec![];
-    for (r, _) in &spots {
-        let c = cm(*r);
+    for r in spots(m) {
+        let c = cm(r);
         if !at.contains(&c) {
             at.push(c);
         }
@@ -615,6 +622,61 @@ pub fn turn_line(m: &SectorMap) -> Option<String> {
             let list = format!("{} and {}", many[..many.len() - 1].join(", "), many[many.len() - 1]);
             Some(format!("{what} repeat once per turn: single spots about {list} out, not whole rings."))
         }
+    }
+}
+
+// ---- rings ---------------------------------------------------------------------------------
+
+/// One ring of a drawing of the disc: blocks `first` to `last` (both in),
+/// `inner` to `outer` metres from the centre, the worst of their sectors,
+/// how many of each, and whether errors come back to a single spot
+/// somewhere on it ([`spots`]). A ring is the whole way round: where on it
+/// a sector lies isn't known.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ring {
+    pub first: usize,
+    pub last: usize,
+    pub inner: f64,
+    pub outer: f64,
+    pub mark: Mark,
+    pub counts: [u32; KINDS],
+    pub spot: bool,
+}
+
+impl SectorMap {
+    /// The disc as rings about `width` metres wide from its first sector
+    /// out, each of whole blocks (a block goes to the ring its first sector
+    /// is in), so every sector is in one ring. None but on a CD.
+    pub fn rings(&self, width: f64) -> Vec<Ring> {
+        let Some(g) = self.geometry() else { return vec![] };
+        let width = width.max(1e-6);
+        let spots = spots(self);
+        let mut out: Vec<Ring> = vec![];
+        let mut band = u64::MAX;
+        for b in 0..self.blocks() {
+            let (a, z) = self.range(b);
+            let (inner, outer) = (g.radius(a as f64), g.radius(z as f64 + 1.0));
+            let k = ((inner - g.r0) / width).floor() as u64;
+            let c = self.counts(b);
+            match out.last_mut() {
+                Some(r) if k == band => {
+                    r.last = b;
+                    r.outer = outer;
+                    for (x, y) in r.counts.iter_mut().zip(c) {
+                        *x += y;
+                    }
+                }
+                _ => {
+                    band = k;
+                    out.push(Ring { first: b, last: b, inner, outer, mark: Mark::NotRead, counts: c, spot: false });
+                }
+            }
+        }
+        for r in &mut out {
+            r.mark = worst(&r.counts);
+            r.spot = spots.iter().any(|s| (r.inner..r.outer).contains(s));
+        }
+        out
     }
 }
 
@@ -796,5 +858,61 @@ mod tests {
         let m = SectorMap { sectors: 300_000, cd: true, runs: [spot(20_000, 10.0, 3, &[]), spot(147_107, 16.3, 3, &[])].concat(), ..Default::default() };
         let l = where_line(&m).unwrap();
         assert!(l.starts_with("Bad sectors about 2.") && l.contains(" and 4.4 cm") && l.ends_with(" from the centre"), "{l}");
+    }
+
+    #[test]
+    fn a_ring_lies_where_its_sectors_do() {
+        let g = Geometry::CD;
+        let m = sectors(333_000, &[]).map(None, true);
+        let rings = m.rings(0.00025);
+        // From the first sector to the last, with nothing between them.
+        assert!((rings[0].inner - 0.025).abs() < 1e-9);
+        assert!((rings.last().unwrap().outer - g.radius(333_000.0)).abs() < 1e-9);
+        assert!(rings.windows(2).all(|w| w[0].outer == w[1].inner && w[0].last + 1 == w[1].first));
+        // A quarter of a millimetre each, give or take a block (the last
+        // ring may be short).
+        for r in &rings[..rings.len() - 1] {
+            assert!((0.00019..0.00031).contains(&(r.outer - r.inner)), "{r:?}");
+        }
+        // Sector 148,500 is about 4.4 cm out; 201,200 about 4.9 cm.
+        for (lba, want) in [(148_500u64, "4.4 cm"), (201_200, "4.9 cm"), (0, "2.5 cm")] {
+            let b = (lba / m.per_block) as usize;
+            let r = rings.iter().find(|r| (r.first..=r.last).contains(&b)).unwrap();
+            assert_eq!(cm((r.inner + r.outer) / 2.0), want);
+        }
+        // Not a CD: no rings, since how far out isn't known.
+        assert!(sectors(2_000_000, &[]).map(None, false).rings(0.00025).is_empty());
+    }
+
+    #[test]
+    fn a_ring_is_the_worst_of_its_sectors() {
+        let mut s = sectors(333_000, &[(148_500, Mark::C2), (148_501, Mark::Unreadable), (201_200, Mark::Recovered), (201_201, Mark::Repaired), (250_000, Mark::Repaired)]);
+        for k in 300_000..333_000 {
+            s.set(k, Mark::NotRead);
+        }
+        let m = s.map(Some(300_000), true);
+        let rings = m.rings(0.00025);
+        let at = |lba: u64| rings.iter().find(|r| (r.first..=r.last).contains(&((lba / m.per_block) as usize))).unwrap();
+        // Repaired by error correction is worse than read right again.
+        assert_eq!((at(148_500).mark, at(201_200).mark, at(250_000).mark, at(10_000).mark, at(332_000).mark), (Mark::Unreadable, Mark::Repaired, Mark::Repaired, Mark::Good, Mark::NotRead));
+        assert_eq!(at(201_200).counts[Mark::Recovered as usize], 1);
+        let c = at(148_500).counts;
+        assert_eq!((c[Mark::C2 as usize], c[Mark::Unreadable as usize]), (1, 1));
+        // Only the rings with them in are anything but good or not read.
+        assert_eq!(rings.iter().filter(|r| !matches!(r.mark, Mark::Good | Mark::NotRead)).count(), 3);
+        // Partly read: good, not not read.
+        assert_eq!(at(299_999).mark, Mark::Good);
+        // Every sector in one ring.
+        for k in Mark::ALL {
+            assert_eq!(rings.iter().map(|r| r.counts[k as usize] as u64).sum::<u64>(), m.total(k));
+        }
+        // A spot met once per turn: on its ring, and only there.
+        let runs = spot(147_107, 16.3, 40, &[3, 9, 10, 20]);
+        let m = SectorMap { runs, ..m };
+        let all = m.rings(0.00025);
+        let spotted: Vec<&Ring> = all.iter().filter(|r| r.spot).collect();
+        assert_eq!(spotted.len(), 1);
+        assert_eq!(cm(spots(&m)[0]), "4.4 cm");
+        assert!((spotted[0].inner..spotted[0].outer).contains(&spots(&m)[0]));
     }
 }

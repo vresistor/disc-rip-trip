@@ -4266,6 +4266,9 @@ enum At {
     /// Read with ~200 errors spread from 10% to 70%, re-read, and 25
     /// sectors found wrong between 47% and 68%: a disc like Koudelka's.
     Wrong,
+    /// As [`At::Wrong`], its read errors coming back once per turn at two
+    /// single spots about 4.4 and 4.9 cm out, as Koudelka's do.
+    Spots,
 }
 
 /// Where [`slips`] puts its `n` places with errors, spread from `from` to
@@ -4313,6 +4316,33 @@ fn held_map(n: u64, from: f64, to: f64, upto: u64, reread: bool, left: usize) ->
         }
     }
     s.map((upto < CD_SECTORS).then_some(upto), true)
+}
+
+/// A Rip's map of a disc like Koudelka's: the places [`slips`] logged, and
+/// two spots met once per turn (2% off the nominal turn), about 4.4 and
+/// 4.9 cm out; all re-read and put right, three by error correction.
+fn spots_map() -> drt_steps::map::SectorMap {
+    use drt_steps::map::{Geometry, Mark, Sectors};
+    let mut s = Sectors::new(CD_SECTORS);
+    for k in 0..CD_SECTORS {
+        s.set(k, Mark::Good);
+    }
+    for at in slip_places(200, 0.10, 0.70) {
+        s.set(at, Mark::Recovered);
+    }
+    for start in [148_500u64, 201_200] {
+        let turn = Geometry::CD.per_turn(start as f64) * 1.02;
+        for k in (0..30).filter(|k| k % 7 != 3) {
+            let at = start + (k as f64 * turn).round() as u64;
+            s.set(at, Mark::Recovered);
+            s.set(at + 1, Mark::Recovered);
+        }
+    }
+    // Three that Check and fix's error correction put right, 5.3 cm out.
+    for at in [245_000, 245_001, 245_400] {
+        s.set(at, Mark::Repaired);
+    }
+    s.map(None, true)
 }
 
 /// redumper's first read of a CD as Image logs it, its progress lines fed
@@ -4411,9 +4441,10 @@ impl HeldRip {
                 cx.status("682 MB", "");
                 outlet.send(item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))))).await;
             }
-            At::Wrong => {
+            At::Wrong | At::Spots => {
                 let (scsi, c2) = slips(cx, 200, 0.10, 0.70, CD_SECTORS);
-                cx.map(serde_json::to_value(held_map(200, 0.10, 0.70, CD_SECTORS, true, 0)).ok());
+                let map = if self.at == At::Spots { spots_map() } else { held_map(200, 0.10, 0.70, CD_SECTORS, true, 0) };
+                cx.map(serde_json::to_value(map).ok());
                 for l in [
                     "media errors:".to_owned(),
                     format!("SCSI: {scsi} samples"),
@@ -4507,7 +4538,7 @@ impl HeldRip {
             }
         }
         match self.at {
-            At::Done | At::Clean | At::Wrong => cx.status(video::titles_word(items.len()), ""),
+            At::Done | At::Clean | At::Wrong | At::Spots => cx.status(video::titles_word(items.len()), ""),
             At::Reading => {
                 let it = &items[busy];
                 cx.status(format!("{busy} of {}", video::titles_word(items.len())), it.label.clone());
@@ -4542,7 +4573,7 @@ impl drt_engine::Step for HeldRip {
         }
         self.held.store(true, std::sync::atomic::Ordering::SeqCst);
         // Done ends; the others stay where they are.
-        if !matches!(self.at, At::Done | At::Clean | At::Wrong) {
+        if !matches!(self.at, At::Done | At::Clean | At::Wrong | At::Spots) {
             cx.cancelled().await;
         }
         Ok(())
@@ -4579,7 +4610,7 @@ fn held_rip<'a>(e: &Env, kind: &str, at: At, size: egui::Vec2) -> (Harness<'a, W
         h.run_steps(2);
     }
     until(&mut h, &format!("{kind} held"), |_| ready.load(std::sync::atomic::Ordering::SeqCst));
-    if matches!(at, At::Done | At::Clean | At::Wrong) {
+    if matches!(at, At::Done | At::Clean | At::Wrong | At::Spots) {
         until(&mut h, "Rip to finish", |a| a.m.snapshot(a.sel).steps[id].state == StepState::Ok);
     }
     h.run_steps(3);
@@ -4676,17 +4707,32 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                     h.get_by_label("Read again, S03E02 Proshai, Livushka");
                     h.get_by_label("Skip this video, S03E02 Proshai, Livushka");
                 }
-                (_, At::Clean | At::Wrong) => unreachable!(),
+                (_, At::Clean | At::Wrong | At::Spots) => unreachable!(),
             }
             shot(&mut h, &format!("rip-{kind}-{word}{tag}"));
+            // The same, every sector in rows.
+            if kind == "game" && at == At::Reading {
+                click(&mut h, "Map: Sectors");
+                h.get_by_label_contains("Map of the disc: 144,060 good");
+                shot(&mut h, &format!("rip-{kind}-{word}-sectors{tag}"));
+            }
         }
     }
     // A game read cleanly, and one like Koudelka's: errors as it read,
     // and sectors found wrong.
-    for (at, word) in [(At::Clean, "clean"), (At::Wrong, "wrong")] {
+    for (at, word) in [(At::Clean, "clean"), (At::Wrong, "wrong"), (At::Spots, "spots")] {
         let e = env();
         let (mut h, _) = held_rip(&e, "game", at, size);
-        if at == At::Clean {
+        // Drawn as a disc first, a switch to every sector above it.
+        assert_eq!(app(&h).map_view, drt_app::sectormap::MapView::Disc);
+        h.get_by_label("Map: Disc");
+        if at == At::Spots {
+            h.get_by_label("Read errors, put right or not, repeat once per turn: single spots about 4.4 cm and 4.9 cm out, not whole rings.");
+            // Each spot's ring dashed, and what that means.
+            h.get_by_label("a single spot somewhere on this ring");
+            let map = h.get_by_label_contains("Map of the disc: ").accesskit_node().label().unwrap();
+            assert!(map.contains(" recovered on a re-read · 3 repaired by error correction · 25 came back wrong"), "{map}");
+        } else if at == At::Clean {
             h.get_by_label("The disc, 682 MB read");
             h.get_by_label("Read cleanly");
             assert!(h.query_by_label_contains("bad sector").is_none() && h.query_by_label_contains("read errors").is_none());
@@ -4701,6 +4747,11 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
             assert!(h.query_by_label_contains("25 bad sectors").is_none(), "the count is in the headline once");
         }
         shot(&mut h, &format!("rip-game-{word}{tag}"));
+        if at != At::Wrong {
+            click(&mut h, "Map: Sectors");
+            assert!(h.query_by_label("a single spot somewhere on this ring").is_none(), "only on the disc");
+            shot(&mut h, &format!("rip-game-{word}-sectors{tag}"));
+        }
     }
     // One title: the emptiest list.
     let e = env();
@@ -4708,6 +4759,36 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
     h.get_by_label("The disc, 1/1 read");
     h.get_by_label("Read");
     shot(&mut h, &format!("rip-film-done{tag}"));
+}
+
+/// The map's view picked stays picked, the next time too.
+#[test]
+fn the_map_s_view_is_remembered() {
+    use drt_app::sectormap::MapView;
+    let e = env();
+    let (mut h, _) = held_rip(&e, "game", At::Clean, egui::vec2(1280.0, 720.0));
+    assert_eq!(app(&h).map_view, MapView::Disc);
+    click(&mut h, "Map: Sectors");
+    assert_eq!(app(&h).map_view, MapView::Sectors);
+    drop(h);
+    let h = window(&e, None, true, 0.0);
+    assert_eq!(app(&h).map_view, MapView::Sectors);
+}
+
+/// A map with no distances (not a CD) has only its sectors: no switch.
+#[test]
+fn a_map_without_distances_has_no_disc_view() {
+    use drt_steps::map::{Mark, Sectors};
+    let mut s = Sectors::new(2_000_000);
+    for k in 0..2_000_000 {
+        s.set(k, Mark::Good);
+    }
+    let m = s.map(None, false);
+    let h = Harness::builder().with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts())).build_ui(move |ui| {
+        drt_app::sectormap::show(ui, &drt_app::theme::Pal::light(), &m, 0.0, drt_app::sectormap::MapView::Disc);
+    });
+    h.get_by_label("Map of the disc: 2,000,000 good");
+    assert!(h.query_by_label("Map: Disc").is_none());
 }
 
 /// A data disc with sectors it couldn't read, settled each way from the
