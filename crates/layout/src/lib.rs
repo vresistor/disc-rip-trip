@@ -362,6 +362,21 @@ fn add_sides(l: &mut Layout, root: &Node, m: Metrics, loops: &[String]) {
     }
 }
 
+/// Drops the corners that aren't: a point in line with its neighbours.
+fn straighten(pts: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(pts.len());
+    for p in pts {
+        if out.len() >= 2 {
+            let (a, b) = (out[out.len() - 2], out[out.len() - 1]);
+            if (a.0 == b.0 && b.0 == p.0) || (a.1 == b.1 && b.1 == p.1) {
+                out.pop();
+            }
+        }
+        out.push(p);
+    }
+    out
+}
+
 /// A path's line from the middle of its card's foot (the face nearest
 /// what it leads to; fails a little left of the middle, needs you a little
 /// right, so the two don't share a line) on down to `lane`: straight; else
@@ -400,9 +415,13 @@ fn place_side(l: &mut Layout, (r, from, side, sub): (Rect, &str, Side, Layout), 
     let into = l.tiles[first].clone();
     let mut pts = way_down(r, side, around, lane, m);
     let last = pts.last().unwrap().0;
-    let cx = into.rect.x + into.rect.w / 2.0;
+    // Straight down into it when it's right below; else into its middle.
+    let inside = into.rect.x + 24.0 <= last && last <= into.rect.right() - 24.0;
+    let cx = if inside { last } else { into.rect.x + into.rect.w / 2.0 };
     pts.extend([(last, lane), (cx, lane), (cx, into.rect.y)]);
     pts.dedup();
+    // Points along one straight line add nothing.
+    pts = straighten(pts);
     l.side_wires.push(SideWire { from_step: from.to_owned(), to_step: into.id.clone(), side, path: pts });
     l.width = l.width.max(x + sub.width + m.gap);
     l.height = l.height.max(row + sub.height);
@@ -678,6 +697,12 @@ mod tests {
             let l = layout_with_loops(&shaped(rip), Metrics::default(), |id| id == "nx");
             let r = l.tile("r").unwrap().rect;
             assert!(!l.side_wires.is_empty());
+            // One path, its card right below: a straight line down.
+            if l.side_wires.len() == 1 {
+                let w = &l.side_wires[0];
+                assert_eq!(w.path.len(), 2, "straight: {:?}", w.path);
+                assert_eq!(w.path[0].0, w.path[1].0, "straight down: {:?}", w.path);
+            }
             for w in &l.side_wires {
                 let into = l.tile(&w.to_step).unwrap().rect;
                 assert!(into.y - (r.y + r.h) < 128.0, "{} just under Rip: {:?}", w.to_step, into);
@@ -741,7 +766,10 @@ mod tests {
                 let into = l.tile(&w.to_step).unwrap().rect;
                 let from = l.tile(&w.from_step).unwrap().rect;
                 assert!(into.y > from.y + from.h, "{} sits below {}", w.to_step, w.from_step);
-                assert_eq!(*w.path.last().unwrap(), (into.x + into.w / 2.0, into.y), "into the top of {}", w.to_step);
+                let end = *w.path.last().unwrap();
+                assert!(end.1 == into.y && into.x < end.0 && end.0 < into.right(), "into the top of {}", w.to_step);
+                // Straight when nothing's in the way: no needless corners.
+                assert!(w.path.windows(3).all(|t| !((t[0].0 == t[1].0 && t[1].0 == t[2].0) || (t[0].1 == t[1].1 && t[1].1 == t[2].1))), "{:?}", w.path);
                 // Leaves from the middle of its own card's foot, and
                 // crosses no other card.
                 assert_eq!(w.path[0], (foot_x(from, w.side), from.y + from.h));
