@@ -2888,7 +2888,8 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     let e = env();
     let mut reg = simulated(None);
     reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
-    let mut h = window_on(&e, reg, true, 1.0, egui::vec2(1280.0, 1100.0), 1.0);
+    // Twice as slow as real time: a slow machine still sees each stage.
+    let mut h = window_on(&e, reg, true, 2.0, egui::vec2(1280.0, 1100.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
     open_id(&mut h, "g_check");
@@ -2898,15 +2899,18 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     h.run_steps(2);
     click(&mut h, "Start");
     until(&mut h, "Check to re-read the bad sectors", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Re-reading 140 bad sectors");
+    // The sidebar first, while it's at it, then the card.
+    open_id(&mut h, "g_check");
+    h.get_by_label_contains("Re-reading 140 bad sectors: each is read again from the disc, on its own");
+    shot(&mut h, "step-check-fixing");
+    app_mut(&mut h).close_tray();
     let i = app(&h).sel;
     app_mut(&mut h).set_view(i, (0.9, egui::vec2(-560.0, 40.0)));
     h.run_steps(3);
     h.get_by_label_contains("Check and fix, Re-reading 140 bad sectors");
     shot(&mut h, "games-check-fixing");
-    open_id(&mut h, "g_check");
-    h.get_by_label_contains("Re-reading 140 bad sectors: each is read again from the disc, on its own");
-    shot(&mut h, "step-check-fixing");
     until(&mut h, "the second rip", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Rip 2 of 4");
+    open_id(&mut h, "g_check");
     h.run_steps(3);
     h.get_by_label_contains("Rip 2 of 4: the whole disc is read again");
     h.get_by_label("Bad sectors read again");
