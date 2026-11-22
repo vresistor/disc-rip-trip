@@ -455,6 +455,12 @@ impl Cx {
         self.view(|v| v.progress = p);
     }
 
+    /// What it's doing just now, for the window ([`StepView::now`]);
+    /// `None` once it's done with it.
+    pub fn now(&self, now: Option<serde_json::Value>) {
+        self.view(|v| v.now = now);
+    }
+
     pub fn item(&self, item: &Item, state: ItemState, note: impl Into<String>) {
         let note = note.into();
         self.view(|v| {

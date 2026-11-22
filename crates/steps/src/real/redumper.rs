@@ -128,6 +128,11 @@ pub struct Progress {
     pub errors: u64,
     /// Each counter by its name, singular: `SCSI`, `C2`, `EDC`, `Q`.
     pub counts: Vec<(String, u64)>,
+    /// The sector it's at and the disc's sectors, when the line has them.
+    pub at: Option<(u64, u64)>,
+    /// A re-read's try on the sector it's at: `retry: 19`. `None` on the
+    /// first read of it, and on every line of a first read of the disc.
+    pub retry: Option<u32>,
 }
 
 /// Reads a progress line. The formats (`cd/cd_dump.ixx`, `dvd/dvd_dump.ixx`):
@@ -136,7 +141,14 @@ pub struct Progress {
 /// ⠋ [ 42%] LBA:  12345/317787, errors: { SCSIs: 0, C2s: 0, Q: 0 }
 /// ⠴ [ 7%] LBA: 1234567/2298496, errors: { SCSI: 0, EDC: 0 }
 /// ⠹ [ 55%] splitting
+/// ⠋ [ 54%] LBA: 147223/269159, errors: { SCSIs: 455112, C2s: 10553, Q: 2241 }, retry: 19, data:  97%
 /// ```
+///
+/// The last is `refine`'s: one line for each read of each sector still
+/// bad (and none for the good ones, which it passes over), the first read
+/// of a sector without `retry:`. Its counters start at what's still bad,
+/// in samples for a CD (588 to a sector), and go down as sectors come
+/// back.
 ///
 /// Read through a terminal, so the line may carry escape codes: the
 /// percentage is found from its `%]` back to the `[` before it, rather than
@@ -158,7 +170,13 @@ pub fn parse_progress(line: &str) -> Option<Progress> {
         }
         None => rest.to_owned(),
     };
-    Some(Progress { fraction: (percent / 100.0).clamp(0.0, 1.0), detail, errors, counts })
+    let at = rest.strip_prefix("LBA:").and_then(|lba| {
+        let (a, b) = lba.split_once('/')?;
+        let of: String = b.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+        Some((a.trim().parse().ok()?, of.parse().ok()?))
+    });
+    let retry = line.find("retry:").and_then(|k| line[k + 6..].trim_start().chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok());
+    Some(Progress { fraction: (percent / 100.0).clamp(0.0, 1.0), detail, errors, counts, at, retry })
 }
 
 /// The counters in a progress line's braces, each `name: count`; taking
@@ -401,6 +419,35 @@ pub fn split_needs_force(output: &str) -> bool {
     output.contains("data errors detected")
 }
 
+/// The sectors one `errors detected, track: 1, sectors: {SKIP: 774, C2:
+/// 120}, samples: {…}` line counts: those the drive couldn't read at all,
+/// and those it read with C2 errors. A sector may be in both (some of its
+/// samples read, with errors), so the two aren't added up.
+pub fn split_errors(line: &str) -> Option<(u64, u64)> {
+    let t = line.trim();
+    if !t.starts_with("errors detected, track:") {
+        return None;
+    }
+    let start = t.find("sectors: {")? + "sectors: {".len();
+    let end = t[start..].find('}')? + start;
+    let get = |k: &str| t[start..end].split(',').find_map(|e| e.trim().strip_prefix(k)?.trim().parse::<u64>().ok()).unwrap_or(0);
+    Some((get("SKIP:"), get("C2:")))
+}
+
+/// What Rip says when it couldn't read some sectors, after how many.
+pub const UNREADABLE_ADVICE: &str =
+    "Clean the disc and choose Re-read bad parts, or try another drive. Or choose Make the image anyway: the sectors it can't read are left blank, so Check and fix can try them again.";
+
+/// The failure in a line: *Couldn't read 774 sectors, and 120 more came
+/// back with errors*.
+pub fn unreadable_line(unread: u64, c2: u64) -> String {
+    let s = |n: u64| if n == 1 { "" } else { "s" };
+    match c2 {
+        0 => format!("Couldn't read {} sector{}", thousands(unread), s(unread)),
+        c => format!("Couldn't read {} sector{}, and {} more came back with errors", thousands(unread), s(unread), thousands(c)),
+    }
+}
+
 /// Sectors one `errors detected, track: 2, sectors: {SKIP: 1, C2: 0},
 /// samples: {…}` line says were filled in rather than read. The samples
 /// figure is the same thing in other units.
@@ -527,11 +574,323 @@ impl ErrorTrail {
 
 /// The sector and the disc's sectors in a progress line: `LBA: 12345/317787`.
 fn lba_of(line: &str) -> Option<(u64, u64)> {
-    parse_progress(line)?;
-    let rest = &line[line.find("LBA:")? + 4..];
-    let (at, rest) = rest.split_once('/')?;
-    let of: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    Some((at.trim().parse().ok()?, of.parse().ok()?))
+    parse_progress(line)?.at
+}
+
+// ---- following a read as it goes ---------------------------------------------------------------
+
+/// Samples to a CD sector, which is how redumper counts a CD's errors.
+pub const SAMPLES: u64 = 588;
+
+/// The first sector redumper's `.state` file has: the lead-in's.
+const STATE_START: i64 = -45_150;
+
+/// The sectors of a CD dump still bad, from redumper's `.state` file: one
+/// byte a sample, 0 a sample it couldn't read, 1 one with a C2 error (b744,
+/// `common.ixx`). A sector is bad with most of its samples unread, or any
+/// with a C2 error; counted from the file's start, which may sit a few
+/// samples off the sector's own (the drive's offset), so each stretch of
+/// bad sectors is counted to within one. Only the disc's own sectors: none
+/// before the first, where a drive that can't read the lead-in leaves the
+/// file empty.
+pub fn bad_sectors(state: &Path) -> std::io::Result<Vec<u64>> {
+    use std::io::Read;
+    let mut f = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(state)?);
+    let mut sector = vec![0u8; SAMPLES as usize];
+    let mut out = vec![];
+    let mut lba = STATE_START;
+    loop {
+        match f.read_exact(&mut sector) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
+        }
+        if lba >= 0 {
+            let unread = sector.iter().filter(|&&b| b == 0).count() as u64;
+            if unread * 2 > SAMPLES || sector.contains(&1) {
+                out.push(lba as u64);
+            }
+        }
+        lba += 1;
+    }
+    Ok(out)
+}
+
+/// What Rip is doing just now, while redumper reads or re-reads: for the
+/// card and the sidebar ([`drt_engine::StepView::now`]).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Live {
+    /// Re-reading what was bad (`refine`), not reading the disc through.
+    pub rereading: bool,
+    /// The sector it's at, and the disc's sectors.
+    pub at: u64,
+    pub of: u64,
+    /// Which try on that sector (0 its first read this pass), of how many
+    /// re-reads each gets.
+    pub retry: u32,
+    pub retries: u32,
+    /// Bad sectors gone through this pass, of how many there were; and how
+    /// many of those came back. The total isn't known for a DVD.
+    pub done: u64,
+    pub total: Option<u64>,
+    pub recovered: u64,
+    /// The time left, once the pace says anything.
+    pub left_secs: Option<u64>,
+    /// The read is crawling: the drive meets errors and hardly moves.
+    pub crawling: bool,
+    /// Bad sectors gone through, every try spent, since the last that came
+    /// back (or since the re-read began).
+    #[serde(default)]
+    pub since_back: u64,
+    /// The re-read is no use: [`GIVE_UP_AFTER`] bad sectors in a row had
+    /// every try and none came back. It's stopped.
+    #[serde(default)]
+    pub given_up: bool,
+    /// The last sector that came back, and on which try: kept in the log,
+    /// so how many tries are worth it can be seen.
+    #[serde(default)]
+    pub last_back: Option<(u64, u32)>,
+}
+
+/// A re-read stops by itself after this many bad sectors in a row have
+/// had every try with none coming back. A sector that comes back at all
+/// tends to on its first few tries, so fifty that don't is a drive that
+/// can't read this patch, and the rest would take hours to the same end.
+/// Fifty is about 3% of a disc with 1,500 bad sectors, a few minutes at 20
+/// tries each; one that comes back starts the count again, so a re-read
+/// that's getting somewhere goes on.
+pub const GIVE_UP_AFTER: u64 = 50;
+
+/// What Rip adds to redumper's output when it stopped a re-read itself.
+pub const GAVE_UP: &str = "drt: re-read stopped, nothing coming back";
+
+/// Whether the last re-read in a run's output was stopped as no use.
+pub fn gave_up(output: &str) -> bool {
+    let last = output.rfind("*** REFINE").unwrap_or(0);
+    output[last..].contains(GAVE_UP)
+}
+
+/// What Rip says when it stopped a re-read that was getting nowhere.
+pub fn given_up_line() -> String {
+    format!("Stopped: the drive couldn't recover any of the last {GIVE_UP_AFTER} bad sectors. Cleaning the disc or another drive may help.")
+}
+
+/// What a card says once a read is crawling.
+pub const CRAWLING_CARD: &str = "The drive can't read parts of this disc";
+
+/// What the sidebar says once a read is crawling.
+pub const CRAWLING: &str = "This disc has areas the drive can't read. Cleaning it, or another drive, may help.";
+
+impl Live {
+    /// How far through a re-read is, by the bad sectors gone through (and
+    /// the tries on the one it's at); through a read, by the sectors.
+    pub fn fraction(&self) -> f32 {
+        match self.total.filter(|t| *t > 0 && self.rereading) {
+            Some(t) => ((self.done as f32 + self.retry as f32 / (self.retries + 1) as f32) / t as f32).clamp(0.0, 1.0),
+            None => self.position(),
+        }
+    }
+
+    /// How far through the disc it is.
+    pub fn position(&self) -> f32 {
+        if self.of == 0 {
+            0.0
+        } else {
+            (self.at as f32 / self.of as f32).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Where it is, in a few words: *sector 147,223 (54%), try 19 of 20*.
+    pub fn place(&self) -> String {
+        let mut s = format!("sector {} ({}%)", thousands(self.at), (self.position() * 100.0) as u32);
+        if self.rereading && self.retry > 0 {
+            s.push_str(&format!(", try {} of {}", self.retry, self.retries));
+        }
+        s
+    }
+
+    /// What came back so far: *2 recovered so far*.
+    pub fn recovered_text(&self) -> String {
+        format!("{} recovered so far", thousands(self.recovered))
+    }
+
+    /// The card's line: *Re-reading bad parts: sector 147,223 (54%), try
+    /// 19 of 20 · 2 recovered so far*.
+    pub fn line(&self) -> String {
+        let mut s = format!("Re-reading bad parts: {} · {}", self.place(), self.recovered_text());
+        if let Some(l) = self.left_secs {
+            s.push_str(&format!(" · {}", left_words(l)));
+        }
+        s
+    }
+
+    /// The card's line, its parts least needed first, since a card short
+    /// of room drops them from the front: *Re-reading bad parts: sector
+    /// 147,223 (54%) · 2 recovered so far · try 19 of 20*; crawling, what
+    /// the drive can't do last.
+    pub fn card(&self) -> String {
+        let mut parts = vec![format!("Re-reading bad parts: sector {} ({}%)", thousands(self.at), (self.position() * 100.0) as u32), self.recovered_text()];
+        if self.retry > 0 {
+            parts.push(format!("try {} of {}", self.retry, self.retries));
+        }
+        if self.crawling {
+            parts.push(CRAWLING_CARD.into());
+        }
+        parts.join(" · ")
+    }
+
+    /// The item's note: how far through the re-read, for the strip and
+    /// the ring. *re-reading 4%, 31 of 774 bad sectors*.
+    pub fn note(&self) -> String {
+        let pc = (self.fraction() * 100.0) as u32;
+        match self.total {
+            Some(t) => format!("re-reading {pc}%, {} of {} bad sectors", thousands(self.done), thousands(t)),
+            None => format!("re-reading {pc}%, {}", self.place()),
+        }
+    }
+}
+
+/// A time left, roughly, for a pass that may take hours: *about 40 min
+/// left*, *about 3 h 20 min left*.
+pub fn left_words(secs: u64) -> String {
+    let min = secs.div_ceil(60);
+    match min {
+        0..=1 => "about a minute left".into(),
+        2..=59 => format!("about {min} min left"),
+        600.. => format!("about {} h left", (min + 30) / 60),
+        _ => match min.div_ceil(10) * 10 {
+            m if m % 60 == 0 => format!("about {} h left", m / 60),
+            m => format!("about {} h {} min left", m / 60, m % 60),
+        },
+    }
+}
+
+/// A number with its thousands apart: 147,223.
+pub fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (k, c) in s.chars().enumerate() {
+        if k > 0 && (s.len() - k).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// How long a crawl has to last before it's said: three minutes.
+pub const CRAWL_SECS: f64 = 180.0;
+/// A read crawls below this share of a 1× read (a CD's 75 sectors a
+/// second): 5%, a twentieth of the slowest speed a drive reads at.
+pub const CRAWL_SHARE: f64 = 0.05;
+/// A re-read crawls once this many bad sectors have been gone through and
+/// fewer than one in [`CRAWL_ONE_IN`] came back.
+pub const CRAWL_TRIED: u64 = 10;
+pub const CRAWL_ONE_IN: u64 = 10;
+
+/// Follows a pass of redumper's from its progress lines, as [`Live`]: where
+/// it is, which try, what's come back, the time left, and whether it's
+/// crawling.
+///
+/// A read (`dump`) crawls when for three minutes it has gone less than 5%
+/// as far as a 1× read would, and the drive's errors rose meanwhile: a
+/// sound disc read at the slowest speed still moves twenty times faster,
+/// so this is the drive stuck on what it can't read. A re-read (`refine`)
+/// is slow by nature, sector by sector with many tries each, so what
+/// counts there is what comes back: after three minutes and ten bad
+/// sectors, fewer than one in ten has.
+///
+/// A sector of a re-read came back when redumper left it before its last
+/// try: it leaves a sector early only once it reads whole (`cd_dump.ixx`).
+/// One that comes back on its very last try isn't counted: the pass's own
+/// figures at its end say.
+#[derive(Clone, Debug, Default)]
+pub struct Watch {
+    live: Live,
+    /// The bad sectors to re-read, sorted, when known.
+    bad: Vec<u64>,
+    /// When the first line came, and the lines of the last few minutes:
+    /// when, which sector, and the errors so far.
+    started: Option<f64>,
+    window: std::collections::VecDeque<(f64, u64, u64)>,
+    /// A 1× read, in sectors a second.
+    one_x: f64,
+}
+
+impl Watch {
+    /// A read of the disc through, at `one_x` sectors a second for 1×.
+    pub fn read(one_x: f64) -> Watch {
+        Watch { one_x, ..Default::default() }
+    }
+
+    /// A re-read of `bad` (sorted; empty when not known) with `retries`
+    /// re-reads of each.
+    pub fn reread(retries: u32, bad: Vec<u64>) -> Watch {
+        Watch { live: Live { rereading: true, retries, ..Default::default() }, bad, ..Default::default() }
+    }
+
+    pub fn live(&self) -> &Live {
+        &self.live
+    }
+
+    /// Takes one progress line, `now` seconds into the pass. Gives true the
+    /// once it starts crawling.
+    pub fn line(&mut self, p: &Progress, now: f64) -> bool {
+        let Some((at, of)) = p.at else { return false };
+        let errors: u64 = p.counts.iter().filter(|c| c.0 != "Q").map(|c| c.1).sum();
+        let started = *self.started.get_or_insert(now);
+        let l = &mut self.live;
+        if l.rereading {
+            if l.of == 0 && !self.bad.is_empty() {
+                l.total = Some(self.bad.partition_point(|&b| b < of) as u64);
+            }
+            // On to another sector: the one before is gone through, and
+            // came back if it was left before its last try.
+            if l.of > 0 && at != l.at {
+                l.done += 1;
+                if l.retry < l.retries {
+                    l.recovered += 1;
+                    l.since_back = 0;
+                    l.last_back = Some((l.at, l.retry));
+                } else {
+                    l.since_back += 1;
+                    l.given_up |= l.since_back >= GIVE_UP_AFTER;
+                }
+            }
+            l.retry = p.retry.unwrap_or(0);
+            if let Some(t) = &mut l.total {
+                *t = (*t).max(l.done + 1);
+            }
+        }
+        l.at = at;
+        l.of = of;
+        let secs = now - started;
+        if l.rereading {
+            l.left_secs = match l.total {
+                Some(t) if l.done >= 5 && secs >= 60.0 => Some(((t - l.done) as f64 * secs / l.done as f64) as u64),
+                _ => None,
+            };
+        }
+        if l.crawling {
+            return false;
+        }
+        let crawling = if l.rereading {
+            secs >= CRAWL_SECS && l.done >= CRAWL_TRIED && l.recovered * CRAWL_ONE_IN < l.done
+        } else {
+            // A line a second at most is enough to judge by.
+            if self.window.back().is_none_or(|w| now - w.0 >= 1.0) {
+                self.window.push_back((now, at, errors));
+            }
+            while self.window.len() > 2 && now - self.window[1].0 >= CRAWL_SECS {
+                self.window.pop_front();
+            }
+            let first = self.window.front().copied().unwrap_or((now, at, errors));
+            let span = now - first.0;
+            span >= CRAWL_SECS && ((at.saturating_sub(first.1)) as f64) < CRAWL_SHARE * self.one_x * span && errors > first.2
+        };
+        l.crawling = crawling;
+        crawling
+    }
 }
 
 /// A stretch of sectors, and how much went wrong in it.
@@ -776,6 +1135,163 @@ mod tests {
         assert_eq!(parse_progress("⠹ [ 55%] splitting").unwrap().detail, "splitting");
     }
 
+    /// A line from a real re-read of a damaged PlayStation disc (b744).
+    const REFINE_LINE: &str = "[ 54%] LBA: 147223/269159, errors: { SCSIs: 455112, C2s: 10553, Q: 2241 }, retry: 19";
+
+    #[test]
+    fn a_re_read_s_line_says_where_and_which_try() {
+        let p = parse_progress(REFINE_LINE).unwrap();
+        assert_eq!((p.at, p.retry), (Some((147_223, 269_159)), Some(19)));
+        assert_eq!(p.counts[0], ("SCSI".to_owned(), 455_112));
+        assert_eq!(p.counts[0].1 / SAMPLES, 774, "samples, 588 to a sector");
+        // From the terminal, with its spinner and escape codes, and the
+        // share of the sector read so far after the try.
+        let p = parse_progress(&format!("\x1b[2K\x1b[1G⠙ {REFINE_LINE}, data:  97%")).unwrap();
+        assert_eq!((p.at, p.retry, (p.fraction * 100.0).round()), (Some((147_223, 269_159)), Some(19), 54.0));
+        // The first read of a sector has no try, nor has a read of the disc.
+        let p = parse_progress("⠋ [ 54%] LBA: 147223/269159, errors: { SCSIs: 455112, C2s: 10553, Q: 2241 }").unwrap();
+        assert_eq!(p.retry, None);
+        assert_eq!(parse_progress(CD_LINE).unwrap().retry, None);
+    }
+
+    fn at(lba: u64, retry: u32, scsi: u64) -> Progress {
+        let r = if retry > 0 { format!(", retry: {retry}") } else { String::new() };
+        parse_progress(&format!("[ 54%] LBA: {lba}/269159, errors: {{ SCSIs: {scsi}, C2s: 0, Q: 0 }}{r}")).unwrap()
+    }
+
+    #[test]
+    fn a_re_read_counts_bad_sectors_gone_through_and_back() {
+        // 774 bad sectors, re-read 20 times each.
+        let bad: Vec<u64> = (147_200..147_200 + 774).collect();
+        let mut w = Watch::reread(20, bad);
+        let mut t = 0.0;
+        let mut feed = |w: &mut Watch, lba, tries: u32, scsi| {
+            for r in 0..=tries {
+                w.line(&at(lba, r, scsi), t);
+                t += 0.1;
+            }
+        };
+        // The first never comes back; the second does on its third try.
+        feed(&mut w, 147_200, 20, 455_112);
+        feed(&mut w, 147_201, 2, 455_112);
+        w.line(&at(147_223, 19, 454_524), t);
+        let l = w.live();
+        assert_eq!((l.done, l.total, l.recovered, l.retry), (2, Some(774), 1, 19));
+        assert_eq!(l.line(), "Re-reading bad parts: sector 147,223 (54%), try 19 of 20 · 1 recovered so far");
+        assert_eq!(l.card(), "Re-reading bad parts: sector 147,223 (54%) · 1 recovered so far · try 19 of 20");
+        assert_eq!(l.note(), "re-reading 0%, 2 of 774 bad sectors");
+        assert!((l.fraction() - (2.0 + 19.0 / 21.0) / 774.0).abs() < 1e-6);
+        assert!((l.position() - 0.547).abs() < 1e-3, "the place on the disc is the line's own");
+        // Not known (a DVD): where it is, not how far through.
+        let mut w = Watch::reread(20, vec![]);
+        w.line(&at(147_223, 3, 1), 0.0);
+        assert_eq!((w.live().total, w.live().note()), (None, "re-reading 54%, sector 147,223 (54%), try 3 of 20".to_owned()));
+    }
+
+    #[test]
+    fn a_re_read_that_brings_nothing_back_is_crawling_and_says_so_once() {
+        // Koudelka's: some 66 sectors in three minutes, 2 back.
+        let mut w = Watch::reread(20, (0..774).map(|k| 147_000 + k * 3).collect());
+        let mut said = 0;
+        for k in 0..70u64 {
+            let lba = 147_000 + k * 3;
+            let last = if k % 33 == 5 { 4 } else { 20 };
+            for r in 0..=last {
+                said += w.line(&at(lba, r, 455_112), (k * 21 + r as u64) as f64 * 0.13) as u32;
+            }
+        }
+        assert!(w.live().crawling && said == 1, "{:?}", w.live());
+        assert_eq!(w.live().recovered, 2);
+        // 69 in 191 s: the other 705 in about half an hour.
+        assert_eq!(w.live().left_secs.map(left_words).as_deref(), Some("about 33 min left"));
+        // One where most come back isn't.
+        let mut w = Watch::reread(20, (0..100).collect());
+        for k in 0..60u64 {
+            w.line(&at(k, 0, 0), k as f64 * 10.0);
+        }
+        assert!(!w.live().crawling);
+    }
+
+    #[test]
+    fn a_re_read_that_brings_none_of_fifty_back_gives_up() {
+        // Koudelka's, after 40 minutes: some 570 sectors, none back.
+        let mut w = Watch::reread(20, (147_157..147_157 + 774).collect());
+        let mut gave_up_at = None;
+        for k in 0..60u64 {
+            for r in 0..=20 {
+                w.line(&at(147_157 + k, r, 455_112), (k * 21 + r as u64) as f64);
+            }
+            if w.live().given_up && gave_up_at.is_none() {
+                gave_up_at = Some(k);
+            }
+        }
+        // The 50th is known to have had every try once the 51st begins.
+        assert_eq!(gave_up_at, Some(50));
+        assert!(gave_up(&format!("*** REFINE\n{GAVE_UP}\n")) && !gave_up(&format!("*** REFINE\n{GAVE_UP}\n*** REFINE\n")));
+        assert_eq!(given_up_line(), "Stopped: the drive couldn't recover any of the last 50 bad sectors. Cleaning the disc or another drive may help.");
+        // One that comes back now and then starts the count again.
+        let mut w = Watch::reread(20, (0..774).collect());
+        for k in 0..200u64 {
+            let last = if k % 40 == 39 { 3 } else { 20 };
+            for r in 0..=last {
+                w.line(&at(k, r, 1), 0.0);
+            }
+        }
+        assert!(!w.live().given_up && w.live().recovered == 4, "{:?}", w.live());
+    }
+
+    #[test]
+    fn a_read_crawls_when_it_hardly_moves_and_errors_rise() {
+        let line = |lba: u64, scsi: u64| parse_progress(&progress_line(lba, 269_159, true, scsi, 0)).unwrap();
+        // A sound disc at 1×: 75 sectors a second, no errors.
+        let mut w = Watch::read(75.0);
+        for s in 0..400u64 {
+            assert!(!w.line(&line(s * 75, 0), s as f64));
+        }
+        // Stuck: a sector every 30 seconds, each an error.
+        let mut w = Watch::read(75.0);
+        let mut said = vec![];
+        for k in 0..20u64 {
+            said.push(w.line(&line(100_000 + k, k * SAMPLES), k as f64 * 30.0));
+        }
+        assert_eq!(said.iter().filter(|s| **s).count(), 1);
+        assert!(said[..6].iter().all(|s| !s), "not before three minutes");
+        // Slow without errors (a drive spinning up, say) isn't crawling.
+        let mut w = Watch::read(75.0);
+        for k in 0..20u64 {
+            w.line(&line(100_000 + k, 0), k as f64 * 30.0);
+        }
+        assert!(!w.live().crawling);
+    }
+
+    #[test]
+    fn bad_sectors_from_the_state_file() {
+        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/state-file");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The lead-in unread (zeros), then 10 sectors: 3 and 4 unread a
+        // few samples off, 7 with one C2 sample; the rest good (4).
+        let mut b = vec![0u8; 45_150 * 588];
+        let mut disc = vec![4u8; 10 * 588];
+        disc[3 * 588 + 6..5 * 588 + 6].fill(0);
+        disc[7 * 588 + 100] = 1;
+        b.extend(disc);
+        std::fs::write(dir.join("D.state"), b).unwrap();
+        assert_eq!(bad_sectors(&dir.join("D.state")).unwrap(), [3, 4, 7]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hours_are_said_roughly() {
+        assert_eq!(left_words(30), "about a minute left");
+        assert_eq!(left_words(40 * 60), "about 40 min left");
+        assert_eq!(left_words(3 * 3600 + 20 * 60), "about 3 h 20 min left");
+        assert_eq!(left_words(5 * 3600 + 60), "about 5 h 10 min left");
+        assert_eq!(left_words(3600 + 56 * 60), "about 2 h left");
+        assert_eq!(left_words(3600 + 49 * 60), "about 1 h 50 min left");
+        assert_eq!(left_words(11 * 3600), "about 11 h left");
+        assert_eq!(thousands(147_223), "147,223");
+    }
+
     #[test]
     fn escape_codes_from_the_terminal_dont_hide_the_percentage() {
         let p = parse_progress("\x1b[2K\x1b[1G⠋ [100%] LBA: 317787/317787, errors: { SCSIs: 0, C2s: 0, Q: 0 }").unwrap();
@@ -857,6 +1373,16 @@ error: data errors detected, unable to continue
         assert_eq!(errors_text(&p[0].errors), "", "Q is the subchannel's");
         assert_eq!((p[1].skipped, &p[1].error), (0, &None));
         assert_eq!(p[2].wrong, [("invalid sync", 0), ("MSF", 170), ("ECC", 15), ("EDC", 12)]);
+    }
+
+    #[test]
+    fn a_split_that_stops_says_which_sectors_it_couldn_t_read() {
+        // Koudelka (Europe) (Disc 4), on a drive that couldn't read it.
+        let line = "errors detected, track: 1, sectors: {SKIP: 774, C2: 120}, samples: {SKIP: 455112, C2: 10553}";
+        assert_eq!(split_errors(line), Some((774, 120)));
+        assert_eq!(split_errors("checking tracks"), None);
+        assert_eq!(unreadable_line(774, 120), "Couldn't read 774 sectors, and 120 more came back with errors");
+        assert_eq!(unreadable_line(1, 0), "Couldn't read 1 sector");
     }
 
     #[test]

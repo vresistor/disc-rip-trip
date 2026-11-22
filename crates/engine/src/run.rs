@@ -210,6 +210,7 @@ impl Engine {
                     qualifier: String::new(),
                     detail: String::new(),
                     progress: None,
+                    now: None,
                     items: vec![],
                     total: None,
                     preds,

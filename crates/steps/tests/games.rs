@@ -107,7 +107,7 @@ fn the_simulated_game_steps_are_the_real_ones() {
     }
     let rip = real.info("game-rip").unwrap();
     assert_eq!(rip.name, "Rip");
-    assert_eq!(rip.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Keep it anyway"]);
+    assert_eq!(rip.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Make the image anyway"]);
     assert_eq!(rip.params.iter().map(|p| p.key).collect::<Vec<_>>(), ["retries", "speed"], "Image's settings, so its code reads them");
 }
 
@@ -329,6 +329,7 @@ async fn a_serial_redump_doesnt_know_is_only_a_question() {
         roms: &[("SLES_999.99.bin", "1111000000000000000000000000000000000000")],
         sizes: &[],
         log: "",
+        unreadable: 0,
     };
     let e = engine(vec![UNCATALOGUED]);
     let (s, asked) = drive(e.start(&recipes::games()).unwrap(), Answer::Skip).await;

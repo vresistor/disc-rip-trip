@@ -68,6 +68,11 @@ pub struct StepView {
     /// What it's on right now, or the one most useful fact about the result.
     pub detail: String,
     pub progress: Option<f32>,
+    /// What it's doing just now, in its own shape, for its card and its
+    /// sidebar: Rip's re-read of bad sectors, sector by sector. Only the
+    /// window reads it; no step does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now: Option<serde_json::Value>,
     pub items: Vec<ItemView>,
     /// How many items it expects in all, once it knows (the disc's tracks),
     /// so the ones still to come can be shown waiting.

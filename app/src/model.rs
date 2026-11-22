@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
+pub use drt_steps::real::redumper::CRAWLING_CARD;
+
 /// A Rip's pace is kept by recipe, run and step.
 type PaceKey = (usize, u64, String);
 
@@ -681,6 +683,15 @@ impl Model {
                 "rip-video" => part(n, "bytes").zip(one_x).map(|(b, x)| b / x),
                 _ => part(n, "length"),
             };
+            // What redumper is on just now: a re-read says where and how
+            // it's going itself (its pace isn't the disc's), and a crawl
+            // says so.
+            let live = v.now.clone().and_then(|n| serde_json::from_value::<drt_steps::real::redumper::Live>(n).ok()).filter(|_| dump && busy.is_some());
+            if let Some(l) = live.filter(|l| l.crawling || l.rereading) {
+                paces.remove(&key);
+                v.detail = if l.rereading { l.card() } else { CRAWLING_CARD.to_owned() };
+                continue;
+            }
             if busy.is_some() && reads {
                 let (pace, last) = paces.entry(key).or_default();
                 *last = pace.read(&v.items, &v.detail, length, std::time::Instant::now());

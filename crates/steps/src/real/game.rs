@@ -308,7 +308,7 @@ impl Step for GameDisc {
 
 // ---- Rip --------------------------------------------------------------------------------------
 
-/// redumper's full dump, with Re-read bad parts and Keep it anyway: Image's code, run
+/// redumper's full dump, with Re-read bad parts and Make the image anyway: Image's code, run
 /// under this step's own settings.
 pub struct Rip;
 

@@ -2753,7 +2753,8 @@ fn ring_headline(ui: &mut Ui, p: &Pal, text: &str) {
 /// the strip's colours, the outcome in its middle (`big` over `word`);
 /// beside it, what `beside` draws: what's happening now, or once done, the
 /// proof.
-fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], ticks: Option<&[Tick]>, big: String, word: String, beside: impl FnOnce(&mut Ui, bool)) {
+#[allow(clippy::too_many_arguments)]
+fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], ticks: Option<&[Tick]>, here: Option<Here>, big: String, word: String, beside: impl FnOnce(&mut Ui, bool)) {
     let wide = ui.available_width() >= 560.0;
     let size = if wide { 144.0 } else { 120.0 };
     let total: f32 = arcs.iter().map(|a| a.share).sum::<f32>().max(f32::EPSILON);
@@ -2811,6 +2812,24 @@ fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], ticks: Option<&[Tick]>, big: St
                 pt.line_segment([c + dir * from, c + dir * (from + 2.0 + 3.0 * strength)], Stroke::new(2.0, col));
             }
         }
+        // Where the drive is on the disc, as a dot on the ring: it breathes
+        // while the drive works, and grows for a moment each new try, so a
+        // quiet drive doesn't look stopped. Still, without motion.
+        if let Some(h) = here {
+            let a = top + h.at.clamp(0.0, 1.0) * std::f32::consts::TAU;
+            let at = c + vec2(a.cos(), a.sin()) * rad;
+            let (grow, glow) = if crate::motion::on() {
+                let since = (ui.input(|i| i.time) - h.since).max(0.0) as f32;
+                let fresh = (1.0 - since / 0.6).max(0.0);
+                crate::app::tick(ui.ctx());
+                (fresh * 3.0, 0.35 + 0.25 * (h.t as f32 * 3.0).sin().abs())
+            } else {
+                (0.0, 0.45)
+            };
+            pt.circle_filled(at, thick / 2.0 + 5.0 + grow, p.busy.gamma_multiply(glow));
+            pt.circle_filled(at, thick / 2.0 + 1.0, p.busy);
+            pt.circle_filled(at, 2.5, p.raised);
+        }
         let g = pt.layout_no_wrap(big.clone(), crate::theme::tnum(if wide { 22.0 } else { 20.0 }, 600), p.ink);
         let gw = pt.layout(word.clone(), font(11.5, 500), p.muted, rad * 1.4);
         let hh = g.size().y + gw.size().y;
@@ -2823,6 +2842,15 @@ fn ring_head(ui: &mut Ui, p: &Pal, arcs: &[Arc], ticks: Option<&[Tick]>, big: St
         });
     });
     ui.add_space(16.0);
+}
+
+/// Where the drive is on a ring's disc (0 to 1), now (`t`), and when its
+/// latest try began, for the mark that shows it working.
+#[derive(Clone, Copy, Debug)]
+struct Here {
+    at: f32,
+    t: f64,
+    since: f64,
 }
 
 /// A mark on a ring: from and to as shares of the disc (0 to 1), how
@@ -2900,7 +2928,7 @@ fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &Step
     } else {
         (format!("{verified}/{counted}"), "verified".to_owned())
     };
-    ring_head(ui, p, &arcs, None, big, word, |ui, _| {
+    ring_head(ui, p, &arcs, None, None, big, word, |ui, _| {
         if let Some(k) = busy {
             let it = &v.items[k];
             let n = number(it, k);
@@ -3014,8 +3042,25 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
         _ => crate::card::Cell::Done,
     };
     let size = (!v.status.is_empty() && v.status != "Skipped").then(|| v.status.clone());
+    // What redumper is doing just now: where, which try, what's come back.
+    let now_live: Option<drt_steps::real::redumper::Live> = v.now.clone().and_then(|n| serde_json::from_value(n).ok()).filter(|_| busy);
+    let rereading = now_live.as_ref().filter(|l| l.rereading && l.of > 0);
+    // A re-read's own progress, not the disc's: in a bad patch it moves a
+    // sector a minute, and the disc's share would sit still for hours.
+    let pct = rereading.map(|l| l.fraction()).or(pct);
+    let here = now_live.as_ref().filter(|l| l.of > 0).map(|l| {
+        // When the latest try began: the sector or the try changing.
+        let key = egui::Id::NULL.with(("drive-here", id));
+        let now = ui.input(|i| i.time);
+        let mark = (l.at, l.retry);
+        let (seen, since) = ui.ctx().data(|d| d.get_temp::<((u64, u32), f64)>(key)).unwrap_or((mark, now));
+        let since = if seen == mark { since } else { now };
+        ui.ctx().data_mut(|d| d.insert_temp(key, (mark, since)));
+        Here { at: l.position(), t, since }
+    });
     let (big, small) = match it.state {
         ItemState::Skipped => ("Skipped".to_owned(), String::new()),
+        ItemState::Busy if rereading.is_some() => (pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())), "re-read".to_owned()),
         ItemState::Busy => (pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())), word),
         ItemState::Bad => (it.note.split_whitespace().next().filter(|w| w.chars().all(|c| c.is_ascii_digit())).unwrap_or("!").to_owned(), word),
         _ => (size.clone().unwrap_or_else(|| cap(&word)), word),
@@ -3033,13 +3078,31 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     let where_line = map_line(&map, sectors, busy);
     let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
     let shown = big.clone();
-    ring_head(ui, p, &arcs, Some(&ticks), big, small, |ui, _| {
-        if busy {
+    let mut stop = false;
+    ring_head(ui, p, &arcs, Some(&ticks), here, big, small, |ui, _| {
+        if let Some(l) = rereading {
+            // The re-read: how far through the bad sectors, the time left
+            // if the pace says; where on the disc and which try; what's
+            // come back.
+            let pass = passes.len().max(1);
+            now_reading(ui, p, &format!("Pass {pass} · Re-reading bad parts"), &it.label, pct, l.left_secs.map(drt_steps::real::redumper::left_words), t);
+            let gone = match l.total {
+                Some(n) => format!("{} of {} bad sectors gone through · {}", thousands(l.done), thousands(n), l.recovered_text()),
+                None => cap(&l.recovered_text()),
+            };
+            ring_note(ui, p, &gone);
+            let mut place = format!("Sector {} of {} ({}% through the disc)", thousands(l.at), thousands(l.of), (l.position() * 100.0) as u32);
+            if l.retry > 0 {
+                place.push_str(&format!(" · try {} of {}", l.retry, l.retries));
+            }
+            ring_note(ui, p, &place);
+        } else if busy {
             // The pass, the disc, how far, then the time left and speed.
-            let doing = if v.detail.is_empty() { "Reading".to_owned() } else { v.detail.split(" · ").next().unwrap_or("").to_owned() };
+            let crawling = now_live.as_ref().is_some_and(|l| l.crawling);
+            let doing = if v.detail.is_empty() || crawling { "Reading".to_owned() } else { v.detail.split(" · ").next().unwrap_or("").to_owned() };
             let times = app.m.reading(i, id).map(|r| r.times());
             let pass = passes.len().max(1);
-            now_reading(ui, p, &format!("Pass {pass} · {doing}"), &it.label, pct, times, t);
+            now_reading(ui, p, &format!("Pass {pass} · {doing}"), &it.label, pct, times.filter(|_| !now_live.as_ref().is_some_and(|l| l.crawling)), t);
             if let Some((at, of)) = crate::pace::sectors(&it.note) {
                 ring_note(ui, p, &format!("Sector {} of {}", thousands(at), thousands(of)));
             }
@@ -3065,11 +3128,32 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             if let Some(l) = &where_line {
                 ring_note(ui, p, l);
             }
+            if it.state == ItemState::Bad && drt_steps::real::data::failure_detail(&it.note) != cap(&it.note) {
+                ring_note(ui, p, &v.detail);
+                ui.add_space(4.0);
+                ring_note(ui, p, drt_steps::real::redumper::UNREADABLE_ADVICE);
+            }
             if !drive.is_empty() {
                 ring_note(ui, p, &drive);
             }
         }
+        // Crawling: said once, with Stop beside it.
+        if now_live.as_ref().is_some_and(|l| l.crawling) {
+            ui.add_space(10.0);
+            ui.add(egui::Label::new(RichText::new(drt_steps::real::redumper::CRAWLING).font(font(14.0, 500)).color(p.warn)).wrap());
+            ui.add_space(6.0);
+            if crate::widgets::Btn::new("stop", "Stop").fg(p.bad).show(ui, p).clicked() {
+                stop = true;
+            }
+        }
     });
+    if stop {
+        if app.m.shows_newest(i) {
+            app.m.stop(i);
+        } else {
+            app.m.send(i, drt_engine::Command::Stop);
+        }
+    }
     // The passes as rows, the image's own first when it needs you.
     let mut list: Vec<Row> = vec![];
     if it.state == ItemState::Bad {
@@ -3105,7 +3189,19 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             r.dest = Some((counts.clone(), if ps.kind == PassKind::Reread && !now { " left".into() } else { String::new() }));
         }
         r.verdict = Some(if now {
-            (if ps.kind.reads() && counts.is_empty() { "No errors so far".into() } else { cap(&v.detail.split(" · ").next().unwrap_or("").to_lowercase()) }, Tone::Busy, String::new())
+            (
+                if ps.kind.reads() && counts.is_empty() {
+                    "No errors so far".into()
+                } else if rereading.is_some() {
+                    "Re-reading".into()
+                } else if now_live.is_some() {
+                    "Reading".into()
+                } else {
+                    cap(&v.detail.split(" · ").next().unwrap_or("").to_lowercase())
+                },
+                Tone::Busy,
+                String::new(),
+            )
         } else {
             match ps.kind {
                 PassKind::Read if counts.is_empty() => ("No errors".into(), Tone::Ok, String::new()),
@@ -3241,7 +3337,7 @@ fn video_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     let counted = v.items.iter().filter(|i| i.state != ItemState::Skipped).count();
     let needs = v.count(ItemState::Bad);
     let (big, word) = (format!("{read}/{counted}"), "read".to_owned());
-    ring_head(ui, p, &arcs, None, big, word, |ui, _| {
+    ring_head(ui, p, &arcs, None, None, big, word, |ui, _| {
         if let Some(k) = busy {
             let it = &v.items[k];
             let at = v.items.iter().take(k + 1).filter(|i| i.state != ItemState::Skipped).count();

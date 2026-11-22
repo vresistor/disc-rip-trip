@@ -95,6 +95,9 @@ pub struct Disc {
     pub sizes: &'static [u64],
     /// redumper's log of the read, when there's something to say.
     pub log: &'static str,
+    /// Sectors the drive can't read: its read crawls over them, and so does
+    /// re-reading them, which brings few back.
+    pub unreadable: u64,
 }
 
 pub const APE_ESCAPE: Disc = Disc {
@@ -106,6 +109,7 @@ pub const APE_ESCAPE: Disc = Disc {
     roms: &[("SCES_015.64.cue", "0000000000000000000000000000000000000000"), ("SCES_015.64.bin", "abe619ea253b6af1ceee54d31499f0db2919915d")],
     sizes: &[],
     log: "",
+    unreadable: 0,
 };
 
 pub const COLONY_WARS_1: Disc = Disc {
@@ -121,6 +125,7 @@ pub const COLONY_WARS_1: Disc = Disc {
     ],
     sizes: &[],
     log: "",
+    unreadable: 0,
 };
 
 pub const COLONY_WARS_2: Disc = Disc {
@@ -136,6 +141,7 @@ pub const COLONY_WARS_2: Disc = Disc {
     ],
     sizes: &[],
     log: "",
+    unreadable: 0,
 };
 
 /// A Tomb Raider whose hash Redump doesn't have: its serial names two
@@ -149,6 +155,7 @@ pub const TOMB_RAIDER_UNKNOWN: Disc = Disc {
     roms: &[("SLUS_001.52.cue", "0000000000000000000000000000000000000000"), ("SLUS_001.52.bin", "1234000000000000000000000000000000000000")],
     sizes: &[],
     log: "",
+    unreadable: 0,
 };
 
 /// A made-up game read badly by a drive redumper doesn't know: the same
@@ -162,6 +169,20 @@ pub const LANTERN_KEEP_DAMAGED: Disc = Disc {
     roms: &[("SLES_047.11.cue", "0000000000000000000000000000000000000000"), ("SLES_047.11.bin", "9b07a5e100000000000000000000000000000000")],
     sizes: &[90, 470_400_000],
     log: LANTERN_KEEP_LOG,
+    unreadable: 0,
+};
+
+/// A made-up game's second disc, scratched past reading in one place.
+pub const LANTERN_KEEP_SCRATCHED: Disc = Disc {
+    label: "SLES_147.11",
+    serial: "SLES-14711",
+    region: "Europe",
+    sectors: 269_159,
+    bytes: 551_237_632,
+    roms: &[("SLES_147.11.cue", "0000000000000000000000000000000000000000"), ("SLES_147.11.bin", "9b07a5e200000000000000000000000000000000")],
+    sizes: &[],
+    log: "",
+    unreadable: 774,
 };
 
 /// Its log, in the shape redumper (b744) writes one: trimmed, made up.
@@ -200,6 +221,8 @@ CD-ROM [SLES_047.11.bin]:
 const ROMS: &str = "sim roms";
 /// redumper's log of the simulated read.
 const LOG: &str = "sim log";
+/// The sectors the simulated drive can't read.
+const UNREADABLE: &str = "sim unreadable";
 
 // ---- Game disc ----------------------------------------------------------------------------------
 
@@ -249,6 +272,9 @@ impl Step for GameDisc {
             if !d.log.is_empty() {
                 item.context_mut().add(Subject::Disc, LOG, d.log, "the disc");
             }
+            if d.unreadable > 0 {
+                item.context_mut().add(Subject::Disc, UNREADABLE, d.unreadable.to_string(), "the disc");
+            }
             cx.outcome(status, system, detail);
             item.label = d.label.into();
             outlet.send(item).await;
@@ -285,7 +311,12 @@ impl Step for Rip {
         let item = Item::new(data::DUMP, ItemKind::Dump, disc.label.clone(), None, None).knowing(&disc);
         // Read as the real one reads: Image's passes, its notes.
         let bytes: u64 = disc.context().get(Subject::Disc, "bytes").and_then(|b| b.parse().ok()).unwrap_or(0);
-        if crate::sim::dump(&cx, &item, bytes / 2048, false).await?.is_none() {
+        let sectors: u64 = disc.context().get(Subject::Disc, "sectors").and_then(|b| b.parse().ok()).unwrap_or(bytes / 2048);
+        if let Some(n) = disc.context().get(Subject::Disc, UNREADABLE).and_then(|n| n.parse().ok()) {
+            if crate::sim::unreadable_dump(&cx, &item, sectors, n).await?.is_none() {
+                return Ok(());
+            }
+        } else if crate::sim::dump(&cx, &item, bytes / 2048, false).await?.is_none() {
             return Ok(());
         }
         outlet.send(item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))))).await;

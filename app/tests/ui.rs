@@ -2764,6 +2764,48 @@ fn check_rips_again_and_combines_until_it_matches() {
     shot(&mut h, "step-check-combined-verified");
 }
 
+/// A disc the drive can't read in places: the read crawling, the re-read
+/// going through the bad sectors, then how many it couldn't read.
+#[test]
+fn a_scratched_disc_says_how_its_read_and_re_read_go() {
+    let e = env();
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
+    let mut h = window_on(&e, reg, true, 1.0, egui::vec2(1280.0, 900.0), 1.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(2);
+    let live = |a: &App| a.m.snapshot(a.sel).steps["g_rip"].now.clone().and_then(|n| serde_json::from_value::<drt_steps::real::redumper::Live>(n).ok());
+    click(&mut h, "Start");
+    // The read crawls over the scratch: said on the card and in the
+    // sidebar, with Stop.
+    until(&mut h, "the read to crawl", |a| live(a).is_some_and(|l| l.crawling && !l.rereading));
+    open_id(&mut h, "g_rip");
+    h.get_by_label(drt_steps::real::redumper::CRAWLING);
+    assert!(h.get_all_by_label_contains("The drive can't read parts of this disc").next().is_some(), "on the card");
+    shot(&mut h, "games-rip-crawling");
+    // The re-read: how far through the bad sectors, where, which try,
+    // what's come back.
+    until(&mut h, "the re-read to be some way in", |a| live(a).is_some_and(|l| l.rereading && l.done >= 30 && l.retry >= 19));
+    h.run_steps(3);
+    let l = live(app(&h)).unwrap();
+    assert_eq!((l.total, l.recovered, l.retries), (Some(774), 2, 20));
+    h.get_by_label_contains("of 774 bad sectors gone through · 2 recovered so far");
+    h.get_by_label_contains("through the disc) · try 19 of 20");
+    let card = {
+        let a = app(&h);
+        a.m.snapshot(a.sel).steps["g_rip"].detail.clone()
+    };
+    assert!(card.starts_with("Re-reading bad parts: sector 148,") && card.ends_with("2 recovered so far · try 19 of 20 · The drive can't read parts of this disc"), "{card}");
+    h.get_by_label(drt_steps::real::redumper::CRAWLING);
+    shot(&mut h, "games-rip-rereading");
+    // It couldn't: how many, and what to try.
+    until(&mut h, "Rip to need you", |a| a.m.snapshot(a.sel).steps["g_rip"].items.first().is_some_and(|i| i.state == ItemState::Bad));
+    h.run_steps(3);
+    assert!(h.get_all_by_label_contains("Couldn't read 771 sectors").count() >= 2, "on the card and in the sidebar");
+    h.get_by_label(drt_steps::real::redumper::UNREADABLE_ADVICE);
+    shot(&mut h, "games-rip-unreadable");
+}
+
 /// By itself, as Check is set at first: the card and the sidebar say it's
 /// re-reading the bad sectors, then which rip it's on, then that it's
 /// verified and how.
@@ -4415,7 +4457,7 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                     assert!(row_says(&h, &["Re-read bad parts", "SCSI 1764 left", "Some left"]));
                     assert!(row_says(&h, &["Write the tracks", "3 skipped"]));
                     h.get_by_label(&format!("Re-read bad parts, {label}"));
-                    h.get_by_label(&format!("Keep it anyway, {label}"));
+                    h.get_by_label(&format!("Make the image anyway, {label}"));
                     // A game's disc can't be left out; a data disc's can.
                     assert_eq!(h.query_by_label(&format!("Skip this disc, {label}")).is_some(), kind == "data");
                 }
@@ -4474,7 +4516,7 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
 /// image's row: re-read, kept, skipped.
 #[test]
 fn an_image_that_needs_you_is_settled_from_its_row() {
-    for (option, word) in [("Re-read bad parts", "reread"), ("Keep it anyway", "kept"), ("Skip this disc", "skipped")] {
+    for (option, word) in [("Re-read bad parts", "reread"), ("Make the image anyway", "kept"), ("Skip this disc", "skipped")] {
         let e = env();
         let mut h = window_on(&e, simulated(Some(1)), true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
         h.get_by_label_contains("Data discs,").click();

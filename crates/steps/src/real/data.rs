@@ -38,12 +38,19 @@ pub fn data_disc_info() -> StepInfo {
 /// Bad sectors: the dump re-reads each up to *Retries* times, then a
 /// refine pass goes back over whatever is still bad, always, since a
 /// clean image is the job. If any remain after that, the dump needs you:
-/// *Re-read bad parts* again, *Keep it anyway* or *Skip this disc*.
+/// *Re-read bad parts* again, *Make the image anyway* or *Skip this disc*.
 pub fn image_info() -> StepInfo {
     StepInfo::new("image", "Rip", Group::Read, ItemKind::DataDisc, ItemKind::Dump)
         .gives(&["read"])
         .from("copy the whole disc to an image")
-        .param(ParamSpec::new("retries", "Retries on a bad spot", ParamKind::Range { min: 0, max: 50 }).default(20).on_card("Retries"))
+        // Only re-reading uses them: redumper reads the disc through once
+        // without retrying, then goes back over what was bad.
+        .param(
+            ParamSpec::new("retries", "Re-reads of each bad sector", ParamKind::Range { min: 0, max: 50 })
+                .default(20)
+                .on_card("Retries")
+                .help("Going back over bad sectors stops by itself once 50 in a row haven't come back."),
+        )
         .param(ParamSpec::new("speed", "Read speed", ParamKind::Choice(SPEEDS)).default(SPEEDS[0]))
         .summary(|g| {
             let retries = g("retries").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -52,7 +59,9 @@ pub fn image_info() -> StepInfo {
             format!("{retries} retries{speed}")
         })
         .retry("refine", "Re-read bad parts", "")
-        .retry("keep", "Keep it anyway", "")
+        // redumper's `split --force-split`: the image made, the sectors it
+        // couldn't read filled in (0x55), for Check and fix to read again.
+        .retry("keep", "Make the image anyway", "")
         .retry("leave_out", "Skip this disc", "")
 }
 
@@ -208,11 +217,25 @@ impl Image {
     /// and keeping its findings in the log.
     pub(crate) async fn phase(&self, cx: &Cx, item: &Item, t: &redumper::Target, args: Vec<String>, out: &mut String) -> Result<bool> {
         cx.log(format!("redumper {}", args.join(" ")));
+        let mut watch = watch_for(item, t, &args).await;
         // Opening the tray stops it.
         let hold = cx.drive_read();
         // Where the drive reports errors, for the map of the disc.
         let mut trail = redumper::ErrorTrail::new();
-        let (text, ok) = redumper::run(&args, t, hold.stop(), |line| {
+        let began = std::time::Instant::now();
+        // A re-read getting nowhere is stopped by itself, as the tray stops it.
+        let give_up = std::sync::Arc::new(tokio::sync::Notify::new());
+        let mut gave_up = false;
+        let stop = {
+            let (hold, give_up) = (&hold, give_up.clone());
+            async move {
+                tokio::select! {
+                    _ = hold.stop() => {}
+                    _ = give_up.notified() => {}
+                }
+            }
+        };
+        let ran = redumper::run(&args, t, stop, |line| {
             if let Some(l) = trail.line(line) {
                 cx.log(l);
             }
@@ -221,17 +244,34 @@ impl Image {
                 cx.drive_says(StepState::Busy, p, "");
             }
             if let Some(p) = redumper::parse_progress(line) {
-                cx.progress(Some(p.fraction));
-                cx.item(item, ItemState::Busy, redumper::progress_note(&p));
+                if let Some(w) = watch.as_mut() {
+                    follow(cx, item, w, &p, began.elapsed().as_secs_f64());
+                    if w.live().given_up && !gave_up {
+                        gave_up = true;
+                        give_up.notify_one();
+                    }
+                } else {
+                    cx.progress(Some(p.fraction));
+                    cx.item(item, ItemState::Busy, redumper::progress_note(&p));
+                }
             }
             if redumper::worth_logging(line) {
                 cx.log(line.trim());
             }
         })
-        .await?;
+        .await;
         if let Some(l) = trail.finish() {
             cx.log(l);
         }
+        cx.now(None);
+        let (text, ok) = match ran {
+            Err(_) if gave_up && !cx.stopped() && !hold.tray_opened() => {
+                let l = watch.as_ref().map(|w| w.live().clone()).unwrap_or_default();
+                cx.log(format!("re-read stopped: none of the last {} bad sectors came back ({} of {} so far)", l.since_back, l.recovered, l.done));
+                (format!("{}\n", redumper::GAVE_UP), false)
+            }
+            r => r?,
+        };
         out.push_str(&text);
         Ok(ok)
     }
@@ -246,9 +286,15 @@ impl Image {
             let ok = self.phase(cx, item, t, redumper::split_args(t, force), &mut split).await?;
             out.push_str(&split);
             let skipped: u64 = split.lines().filter_map(redumper::parse_skipped).sum();
+            // The ones it couldn't read at all, which stop it; those read
+            // with errors are said beside them.
+            let (unread, c2) = split.lines().filter_map(redumper::split_errors).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
             match (ok, t.main()) {
                 (true, Some(_)) => skipped,
-                _ if redumper::split_needs_force(&split) => return Ok(Err(plural(skipped.max(1), "unreadable sector"))),
+                _ if redumper::split_needs_force(&split) => {
+                    cx.log(format!("{}: {}", redumper::unreadable_line(unread.max(1), c2), redumper::UNREADABLE_ADVICE));
+                    return Ok(Err(plural(unread.max(1), "unreadable sector")));
+                }
                 _ => bail!("{}", redumper::reason(&split)),
             }
         } else {
@@ -289,6 +335,55 @@ impl Image {
         }
         self.settle(cx, item, t, out, false, refine).await
     }
+}
+
+/// What follows a pass of redumper's as it goes ([`redumper::Watch`]): a
+/// read of the disc, or a re-read of what's bad, which on a CD knows the
+/// bad sectors from redumper's own record of them. None for a pass that
+/// doesn't read the drive.
+pub(crate) async fn watch_for(item: &Item, t: &redumper::Target, args: &[String]) -> Option<redumper::Watch> {
+    let one_x = match item.context().get(Subject::Disc, "media").unwrap_or("CD") {
+        "DVD" | "HD DVD" => 676.0,
+        "Blu-ray" => 2195.0,
+        _ => 75.0,
+    };
+    match args.first().map(String::as_str) {
+        Some("dump") => Some(redumper::Watch::read(one_x)),
+        Some("refine") => {
+            let retries = args.iter().find_map(|a| a.strip_prefix("--retries=")?.parse().ok()).unwrap_or(0);
+            let state = t.file("state");
+            let bad = if t.is_cd() { tokio::task::spawn_blocking(move || redumper::bad_sectors(&state).unwrap_or_default()).await.unwrap_or_default() } else { vec![] };
+            Some(redumper::Watch::reread(retries, bad))
+        }
+        _ => None,
+    }
+}
+
+/// One progress line of a pass being followed: the tile's progress, the
+/// item's note and what the window shows of it ([`redumper::Live`]); and,
+/// the once it starts crawling, a line in the log saying so.
+pub(crate) fn follow(cx: &Cx, item: &Item, w: &mut redumper::Watch, p: &redumper::Progress, secs: f64) {
+    let back = w.live().recovered;
+    let crawls = w.line(p, secs);
+    if w.live().recovered > back {
+        if let Some((lba, r)) = w.live().last_back {
+            cx.log(format!("sector {lba} came back on try {r}"));
+        }
+    }
+    if crawls {
+        let l = w.live();
+        let how = if l.rereading { format!("{} of {} bad sectors back after {} min", l.recovered, l.done, (secs / 60.0) as u64) } else { format!("errors and hardly moving, at sector {}", l.at) };
+        cx.log(format!("crawling: {how}"));
+    }
+    let l = w.live();
+    if l.rereading {
+        cx.progress(Some(l.fraction()));
+        cx.item(item, ItemState::Busy, l.note());
+    } else {
+        cx.progress(Some(p.fraction));
+        cx.item(item, ItemState::Busy, redumper::progress_note(p));
+    }
+    cx.now(serde_json::to_value(l).ok());
 }
 
 /// What Rip puts on the dump about how it read it, so a later step can
@@ -353,6 +448,15 @@ pub async fn rip_again(cx: &Cx, dump: &Item, dir: PathBuf) -> Result<PathBuf> {
 /// The drive's read offset, which Drive put on the disc when it knew it.
 pub fn read_offset(c: &Context) -> Option<i64> {
     c.get(Subject::Disc, "offset").and_then(|v| v.parse().ok())
+}
+
+/// The card's line when Rip couldn't make the image: *Couldn't read 774
+/// sectors*.
+pub fn failure_detail(bad: &str) -> String {
+    match bad.strip_suffix(" unreadable sectors").or_else(|| bad.strip_suffix(" unreadable sector")).and_then(|n| n.parse::<u64>().ok()) {
+        Some(n) => redumper::unreadable_line(n, 0),
+        None => cap(bad),
+    }
 }
 
 fn plural(n: u64, what: &str) -> String {
@@ -429,7 +533,8 @@ impl Step for Image {
                     cx.log(format!("image: {bad}"));
                     cx.item(&item, ItemState::Bad, bad.clone());
                     cx.state(StepState::Bad);
-                    cx.status("", cap(&bad));
+                    let detail = if redumper::gave_up(&out) { redumper::given_up_line() } else { failure_detail(&bad) };
+                    cx.status("", detail);
                 }
             }
             let req = loop {

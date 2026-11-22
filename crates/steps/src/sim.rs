@@ -833,6 +833,119 @@ impl Step for Image {
     }
 }
 
+/// A CD's dump where the drive can't read `unreadable` sectors, bunched
+/// at 55%: the read crawls over them (each a SCSI error, half a minute
+/// apiece by the drive's clock), the re-read goes over each twenty times
+/// and brings few back, and the tracks can't be written. Followed as the
+/// real one is ([`data::follow`]), by the drive's clock rather than this
+/// one's, so a crawl shows in seconds. Then it waits on you as the real
+/// one does. Gives the note it ended on, or `None` if skipped.
+pub(crate) async fn unreadable_dump(cx: &Cx, item: &Item, sectors: u64, unreadable: u64) -> Result<Option<String>> {
+    use crate::real::redumper::{self, Watch};
+    let from = sectors * 55 / 100;
+    cx.item(item, ItemState::Busy, "reading");
+    let _drive = cx.lane(LaneKind::Drive).await;
+    cx.log(format!("redumper dump --drive=/dev/sr0 --retries=20 --image-name={}", item.label));
+    let heading = |h: &str| {
+        cx.log(format!("*** {h} (time check: 0s)"));
+        if let Some(p) = redumper::phase(&format!("*** {h}")) {
+            cx.status("", p);
+            cx.drive_says(StepState::Busy, p, "");
+        }
+    };
+    let mut trail = redumper::ErrorTrail::new();
+    trail.line("*** DUMP");
+    heading("DUMP");
+    let mut w = Watch::read(75.0);
+    let (mut secs, mut scsi) = (0.0, 0u64);
+    let line = |cx: &Cx, trail: &mut redumper::ErrorTrail, w: &mut Watch, l: String, secs: f64| {
+        if let Some(t) = trail.line(&l) {
+            cx.log(t);
+        }
+        cx.raw(&l);
+        if let Some(p) = redumper::parse_progress(&l) {
+            data::follow(cx, item, w, &p, secs);
+        }
+    };
+    // Up to the scratch at 8×, then a sector at a time, then on.
+    for k in 0..=10u64 {
+        secs = (from * k / 10) as f64 / 600.0;
+        line(cx, &mut trail, &mut w, redumper::progress_line(from * k / 10, sectors, true, 0, 0), secs);
+        cx.sleep(100).await?;
+    }
+    for k in 0..12u64 {
+        scsi += redumper::SAMPLES * unreadable / 12;
+        secs += 30.0;
+        line(cx, &mut trail, &mut w, redumper::progress_line(from + k * unreadable / 12, sectors, true, scsi, 0), secs);
+        // A sector the drive takes a while over, once it's crawling.
+        cx.sleep(if k == 8 { 4000 } else { 120 }).await?;
+    }
+    for k in 0..=5u64 {
+        let at = from + unreadable + (sectors - from - unreadable) * k / 5;
+        line(cx, &mut trail, &mut w, redumper::progress_line(at, sectors, true, scsi, 0), secs + k as f64 * 60.0);
+        cx.sleep(100).await?;
+    }
+    if let Some(t) = trail.finish() {
+        cx.log(t);
+    }
+    cx.now(None);
+    cx.log("media errors:");
+    cx.log(format!("SCSI: {scsi} samples"));
+    cx.log("C2: 0 samples");
+    // The re-read: twenty tries at each, a few back, for some 40 sectors
+    // before it's let go.
+    heading("REFINE");
+    let bad: Vec<u64> = (from..from + unreadable).collect();
+    let mut w = Watch::reread(20, bad);
+    let (mut secs, mut back_n) = (0.0, 0u64);
+    for k in 0..40u64 {
+        let back = k % 17 == 3;
+        let tries = if back { 4 } else { 20 };
+        for r in 0..=tries {
+            let retry = if r > 0 { format!(", retry: {r}") } else { String::new() };
+            let l = format!("⠋ [{:3}%] LBA: {:6}/{sectors}, errors: {{ SCSIs: {scsi}, C2s: 0, Q: 0 }}{retry}", (from + k) * 100 / sectors, from + k);
+            line(cx, &mut trail, &mut w, l, secs);
+            secs += 0.45;
+            cx.sleep(if k == 30 && r == 19 { 4000 } else { 12 }).await?;
+        }
+        if back {
+            scsi -= redumper::SAMPLES;
+            back_n += 1;
+        }
+    }
+    cx.now(None);
+    cx.log("correction statistics:");
+    cx.log(format!("SCSI: {} samples", redumper::SAMPLES * back_n));
+    cx.log("*** SPLIT (time check: 0s)");
+    let left = unreadable - back_n;
+    cx.log(format!("errors detected, track: 1, sectors: {{SKIP: {left}, C2: 0}}, samples: {{SKIP: {}, C2: 0}}", left * redumper::SAMPLES));
+    cx.log("error: data errors detected, unable to continue");
+    cx.drive_says(StepState::Idle, "Waiting", "");
+    cx.progress(None);
+    let bad = format!("{left} unreadable sectors");
+    cx.log(format!("image: {bad}"));
+    cx.item(item, ItemState::Bad, bad.clone());
+    cx.state(StepState::Bad);
+    cx.status("", data::failure_detail(&bad));
+    loop {
+        match cx.next_retry().await {
+            None => return Ok(None),
+            Some(r) if r.item == item.id && r.option == "leave_out" => {
+                cx.item(item, ItemState::Skipped, "skipped");
+                cx.status("Skipped", "");
+                return Ok(None);
+            }
+            Some(r) if r.item == item.id && r.option == "keep" => {
+                let note = data::image_note("527 MB", true, left, false, &[]);
+                cx.item(item, ItemState::Ok, note.clone());
+                cx.status("527 MB", "");
+                return Ok(Some(note));
+            }
+            Some(_) => {}
+        }
+    }
+}
+
 /// A CD's dump as the real Image makes and reports one: redumper's passes
 /// in the log under their headings, each progress line in the step's
 /// output, the note and the phase from them. With `bad`, the first read
@@ -895,7 +1008,7 @@ pub(crate) async fn dump(cx: &Cx, item: &Item, sectors: u64, bad: bool) -> Resul
         cx.log("image: 3 unreadable sectors");
         cx.item(item, ItemState::Bad, "3 unreadable sectors");
         cx.state(StepState::Bad);
-        cx.status("", "3 unreadable sectors");
+        cx.status("", data::failure_detail("3 unreadable sectors"));
         let req = loop {
             match cx.next_retry().await {
                 None => return Ok(None),
