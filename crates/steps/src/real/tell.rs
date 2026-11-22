@@ -327,20 +327,40 @@ pub fn moments(before: &drt_engine::Snapshot, now: &drt_engine::Snapshot) -> Vec
         if v.step == "tell" {
             continue;
         }
-        let was = before.steps.get(id);
-        let mut any = false;
+        // When it stops: still working on the others, it hasn't yet.
+        let waits = |state: StepState| matches!(state, StepState::Bad | StepState::Needs);
+        if !waits(v.state) || before.steps.get(id).is_some_and(|w| waits(w.state)) {
+            continue;
+        }
+        let bad: Vec<&drt_engine::ItemView> = v.items.iter().filter(|i| i.state == ItemState::Bad).collect();
         // The tray opened by hand: whoever opened it is there.
-        for it in v.items.iter().filter(|i| i.state == ItemState::Bad && i.note != super::TRAY_OPENED) {
-            any = true;
-            let was_bad = was.and_then(|w| w.items.iter().find(|i| i.id == it.id)).is_some_and(|i| i.state == ItemState::Bad);
-            if !was_bad {
-                out.push(Moment { step: v.name.clone(), item: Some(it.id.clone()), line: why(&v.name, &it.label, &it.note, v.items.len() > 1) });
+        if !bad.is_empty() && bad.iter().all(|i| i.note == super::TRAY_OPENED) {
+            continue;
+        }
+        let line = match bad.as_slice() {
+            [one] => why(&v.name, &one.label, &one.note, v.items.len() > 1),
+            [] if v.state == StepState::Needs => {
+                if now.question.as_ref().is_some_and(|(s, _)| s == id) {
+                    continue;
+                }
+                let what = [v.status.as_str(), v.detail.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(": ");
+                if what.is_empty() {
+                    format!("{} needs you", v.name)
+                } else {
+                    format!("{} needs you: {what}", v.name)
+                }
             }
-        }
-        if !any && v.state == StepState::Bad && was.is_none_or(|w| w.state != StepState::Bad) {
-            let why = if v.detail.is_empty() { v.status.clone() } else { v.detail.clone() };
-            out.push(Moment { step: v.name.clone(), item: None, line: if why.is_empty() { format!("{} failed", v.name) } else { format!("{} failed: {why}", v.name) } });
-        }
+            [] => {
+                let why = if v.detail.is_empty() { v.status.clone() } else { v.detail.clone() };
+                if why.is_empty() {
+                    format!("{} failed", v.name)
+                } else {
+                    format!("{} failed: {why}", v.name)
+                }
+            }
+            several => format!("{} needs you: {}", v.name, several.iter().map(|i| i.label.as_str()).collect::<Vec<_>>().join(", ")),
+        };
+        out.push(Moment { step: v.name.clone(), item: bad.first().map(|i| i.id.clone()), line });
     }
     out
 }
@@ -717,9 +737,17 @@ mod tests {
         let mut stopped = stuck.clone();
         stopped.stopped = true;
         assert!(moments(&reading, &stopped).is_empty());
-        // A track among several says which.
+        // A track among several says which, once Rip stops; while it
+        // still reads the others, nothing yet.
+        let busy = snap(vec![("rip", view("Rip", StepState::Busy, vec![item("t1", ItemState::Ok, "✓ 12"), item("t3", ItemState::Bad, "no match"), item("t4", ItemState::Busy, "")]))]);
+        assert!(moments(&snap(vec![]), &busy).is_empty());
         let tracks = snap(vec![("rip", view("Rip", StepState::Bad, vec![item("t1", ItemState::Ok, "✓ 12"), item("t3", ItemState::Bad, "no match")]))]);
-        assert_eq!(moments(&snap(vec![]), &tracks)[0].line, "Rip needs you: T3, no match");
+        assert_eq!(moments(&busy, &tracks)[0].line, "Rip needs you: T3, no match");
+        let two = snap(vec![("rip", view("Rip", StepState::Bad, vec![item("t3", ItemState::Bad, "no match"), item("t5", ItemState::Bad, "no match")]))]);
+        assert_eq!(moments(&busy, &two).iter().map(|m| m.line.as_str()).collect::<Vec<_>>(), ["Rip needs you: T3, T5"]);
+        // The tray opened by hand says nothing.
+        let opened = snap(vec![("rip", view("Rip", StepState::Bad, vec![item("t3", ItemState::Bad, crate::real::TRAY_OPENED)]))]);
+        assert!(moments(&busy, &opened).is_empty());
         assert!(should_tell(AS_SOON, &Outcome { tracks: 1, verified: 1, ..Default::default() }), "and after every disc");
     }
 

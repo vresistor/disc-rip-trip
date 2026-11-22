@@ -290,6 +290,8 @@ impl Image {
             // with errors are said beside them.
             let (unread, c2) = split.lines().filter_map(redumper::split_errors).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
             match (ok, t.main()) {
+                // Forced: those it couldn't read are left blank.
+                (true, Some(_)) if unread > 0 || c2 > 0 => unread,
                 (true, Some(_)) => skipped,
                 _ if redumper::split_needs_force(&split) && !split.contains(redumper::UNEXPECTED) => {
                     cx.log(format!("{}: {}", redumper::unreadable_line(unread.max(1), c2), redumper::UNREADABLE_ADVICE));
@@ -455,6 +457,8 @@ pub async fn rip_again(cx: &Cx, dump: &Item, dir: PathBuf) -> Result<PathBuf> {
                 cx.log(format!("rip again: {note}"));
                 Ok(())
             }
+            // Stopped part way: there's no whole read to keep.
+            Ok(Err(bad)) if bad.starts_with(redumper::UNEXPECTED) => Err(anyhow!("{bad}")),
             Ok(Err(bad)) => {
                 cx.log(format!("rip again: {bad}; kept as it is, for the other rips to fill in"));
                 Image.settle(cx, dump, &t, &mut out, true, false).await.map(|_| ())

@@ -363,7 +363,8 @@ pub fn passes<'a>(log: impl IntoIterator<Item = &'a str>) -> Vec<Pass> {
             (Block::Corrected, Some((name, n))) if !name.contains(' ') => pass.corrected.push((name, n)),
             _ => {
                 block = Block::None;
-                if let Some(n) = parse_skipped(t) {
+                // Those it couldn't read at all, as Rip counts them.
+                if let Some((n, _)) = split_errors(t) {
                     pass.skipped += n;
                 } else if let Some(e) = t.strip_prefix("error:") {
                     pass.error = Some(e.trim().to_owned());
@@ -842,6 +843,10 @@ pub struct Watch {
     live: Live,
     /// The bad sectors to re-read, sorted, when known.
     bad: Vec<u64>,
+    /// The errors (SCSI and C2, in samples) when it came to the sector
+    /// it's on, and on the line before this one.
+    at_start: u64,
+    last_errors: u64,
     /// When the first line came, and the lines of the last few minutes:
     /// when, which sector, and the errors so far.
     started: Option<f64>,
@@ -881,15 +886,24 @@ impl Watch {
             // came back if it was left before its last try.
             if l.of > 0 && at != l.at {
                 l.done += 1;
-                if l.retry < l.retries {
+                // Came back: left before its last try, and the counters
+                // fell while it was on it. One left at once with nothing
+                // falling was already read (redumper looks at it from two
+                // offsets) and is neither.
+                let fell = errors < self.at_start;
+                if l.retry < l.retries && fell {
                     l.recovered += 1;
                     l.since_back = 0;
                     l.last_back = Some((l.at, l.retry));
-                } else {
+                } else if l.retry >= l.retries {
                     l.since_back += 1;
                     l.given_up |= l.since_back >= GIVE_UP_AFTER;
                 }
             }
+            if l.of == 0 || at != l.at {
+                self.at_start = errors;
+            }
+            self.last_errors = errors;
             l.retry = p.retry.unwrap_or(0);
             if let Some(t) = &mut l.total {
                 *t = (*t).max(l.done + 1);
@@ -1204,7 +1218,8 @@ mod tests {
                 t += 0.1;
             }
         };
-        // The first never comes back; the second does on its third try.
+        // The first never comes back; the second does on its third try,
+        // and the counters fall by its 588 samples.
         feed(&mut w, 147_200, 20, 455_112);
         feed(&mut w, 147_201, 2, 455_112);
         w.line(&at(147_223, 19, 454_524), t);
@@ -1226,11 +1241,15 @@ mod tests {
         // Koudelka's: some 66 sectors in three minutes, 2 back.
         let mut w = Watch::reread(20, (0..774).map(|k| 147_000 + k * 3).collect());
         let mut said = 0;
+        let mut scsi = 455_112;
         for k in 0..70u64 {
             let lba = 147_000 + k * 3;
             let last = if k % 33 == 5 { 4 } else { 20 };
             for r in 0..=last {
-                said += w.line(&at(lba, r, 455_112), (k * 21 + r as u64) as f64 * 0.13) as u32;
+                said += w.line(&at(lba, r, scsi), (k * 21 + r as u64) as f64 * 0.13) as u32;
+            }
+            if last == 4 {
+                scsi -= SAMPLES;
             }
         }
         assert!(w.live().crawling && said == 1, "{:?}", w.live());
@@ -1240,9 +1259,9 @@ mod tests {
         // One where most come back isn't.
         let mut w = Watch::reread(20, (0..100).collect());
         for k in 0..60u64 {
-            w.line(&at(k, 0, 0), k as f64 * 10.0);
+            w.line(&at(k, 0, (100 - k) * SAMPLES), k as f64 * 10.0);
         }
-        assert!(!w.live().crawling);
+        assert!(!w.live().crawling && w.live().recovered == 59, "{:?}", w.live());
     }
 
     #[test]
@@ -1264,13 +1283,29 @@ mod tests {
         assert_eq!(given_up_line(), "Stopped: the drive couldn't recover any of the last 50 bad sectors. Cleaning the disc or another drive may help.");
         // One that comes back now and then starts the count again.
         let mut w = Watch::reread(20, (0..774).collect());
+        let mut scsi = 100_000;
         for k in 0..200u64 {
             let last = if k % 40 == 39 { 3 } else { 20 };
             for r in 0..=last {
-                w.line(&at(k, r, 1), 0.0);
+                w.line(&at(k, r, scsi), 0.0);
+            }
+            if last == 3 {
+                scsi -= SAMPLES;
             }
         }
         assert!(!w.live().given_up && w.live().recovered == 4, "{:?}", w.live());
+        // Sectors left at once with the counters flat (good from where
+        // redumper reads them) are neither back nor a reason to give up;
+        // nor do they hide fifty that had every try.
+        let mut w = Watch::reread(20, (0..774).collect());
+        for k in 0..120u64 {
+            let last = if k % 2 == 0 { 0 } else { 20 };
+            for r in 0..=last {
+                w.line(&at(k, r, 455_112), 0.0);
+            }
+        }
+        assert_eq!(w.live().recovered, 0);
+        assert!(w.live().given_up, "{:?}", w.live());
     }
 
     #[test]

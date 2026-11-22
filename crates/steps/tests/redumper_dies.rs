@@ -55,12 +55,30 @@ dump)
   ;;
 refine)
   echo "*** REFINE (time check: 0s)"
+  if [ "$mode" = nothing ]; then
+    # Every try at sector after sector, nothing coming back, on and on.
+    lba=5000
+    while :; do
+      r=0
+      while [ $r -le 20 ]; do
+        echo "[ 50%] LBA: $lba/10000, errors: { SCSIs: 455112, C2s: 0, Q: 0 }, retry: $r"
+        r=$((r + 1))
+      done
+      lba=$((lba + 1))
+      [ $lba -gt 5060 ] && sleep 30
+    done
+  fi
   echo "[ 50%] LBA:   5000/10000, errors: { SCSIs: 588, C2s: 0, Q: 0 }, retry: 3"
   kill -INT $$
   sleep 5
   ;;
 split)
   echo "*** SPLIT (time check: 0s)"
+  if [ "$mode" = nothing ]; then
+    echo "errors detected, track: 1, sectors: {SKIP: 774, C2: 120}, samples: {SKIP: 455112, C2: 10553}"
+    echo "error: data errors detected, unable to continue"
+    exit 1
+  fi
   kill -KILL $$
   ;;
 esac
@@ -138,6 +156,15 @@ async fn a_redumper_killed_mid_stage_holds_rip_with_what_happened() {
     retry(&run, "keep").await;
     until(&run, "Make the image anyway", |s| s.steps["rip"].items[0].state == ItemState::Busy).await;
     until(&run, "Rip to hold after the tracks", |s| held(s, "redumper stopped unexpectedly: killed by signal 9 (SIGKILL)")).await;
+    retry(&run, "leave_out").await;
+    until(&run, "the run to end", |s| s.finished).await;
+
+    // A re-read where none of fifty sectors comes back: stopped by Rip
+    // itself, and held saying so, with how many it couldn't read.
+    let run = start(&b, "nothing");
+    let s = until(&run, "Rip to give up", |s| s.steps["rip"].state == StepState::Bad && s.steps["rip"].detail == drt_steps::real::redumper::given_up_line()).await;
+    assert_eq!(s.steps["rip"].items[0].note, "774 unreadable sectors");
+    assert!(s.steps["rip"].record.log.iter().any(|l| l.line.starts_with("re-read stopped: none of the last 50")), "{:?}", s.steps["rip"].record.log);
     retry(&run, "leave_out").await;
     until(&run, "the run to end", |s| s.finished).await;
     std::fs::remove_dir_all(b).unwrap();
