@@ -3001,6 +3001,8 @@ pub fn dump_verdict(state: ItemState, note: &str) -> (String, String, Tone) {
         ItemState::Ok if n.starts_with('✓') => ("Read cleanly".into(), "read".into(), Tone::Ok),
         // Not clean: kept with sectors blank, or sectors that came back
         // wrong. Never a tick.
+        // Made by itself with sectors it couldn't read, for Check and fix.
+        ItemState::Ok if n.starts_with("made the image with") => (cap(n), "made".into(), Tone::Warn),
         ItemState::Ok if n.starts_with("kept anyway") => {
             let why = n.trim_start_matches("kept anyway").trim_start_matches(", ");
             (if why.is_empty() || why.ends_with(" MB") || why.ends_with(" GB") { "Kept anyway".into() } else { format!("Kept with {why}") }, "kept".into(), Tone::Warn)
@@ -4478,6 +4480,14 @@ mod tests {
         assert_eq!(rip_verdict(ItemState::Bad, "").0, "Couldn't be read");
         assert_eq!(rip_verdict(ItemState::Bad, "something new").3.unwrap(), "Something new", "unknown notes shown as they are");
         assert_eq!(rip_verdict(ItemState::Busy, "re-reading 40%").0, "Re-reading 40%");
+    }
+
+    /// An image Rip made by itself with sectors it couldn't read says so,
+    /// and that Check and fix will try them; never a tick.
+    #[test]
+    fn an_image_made_anyway_says_check_and_fix_will_try() {
+        let (head, _, tone) = dump_verdict(ItemState::Ok, &drt_steps::real::data::made_anyway_note(21));
+        assert_eq!((head.as_str(), tone), ("Made the image with 21 unreadable sectors; Check and fix will try them", Tone::Warn));
     }
 
     /// An item the run was stopped in the middle of says so, and nothing

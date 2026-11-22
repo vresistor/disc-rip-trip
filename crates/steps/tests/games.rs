@@ -108,7 +108,7 @@ fn the_simulated_game_steps_are_the_real_ones() {
     let rip = real.info("game-rip").unwrap();
     assert_eq!(rip.name, "Rip");
     assert_eq!(rip.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Make the image anyway"]);
-    assert_eq!(rip.params.iter().map(|p| p.key).collect::<Vec<_>>(), ["retries", "speed"], "Image's settings, so its code reads them");
+    assert_eq!(rip.params.iter().map(|p| p.key).collect::<Vec<_>>(), ["retries", "speed", "if_unreadable"], "Image's settings, so its code reads them");
 }
 
 #[tokio::test]

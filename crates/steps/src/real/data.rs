@@ -52,6 +52,15 @@ pub fn image_info() -> StepInfo {
                 .help("Going back over bad sectors stops by itself once 50 in a row haven't come back."),
         )
         .param(ParamSpec::new("speed", "Read speed", ParamKind::Choice(SPEEDS)).default(SPEEDS[0]))
+        // Sectors still unreadable after the re-reads: the image made with
+        // them left blank and handed on, for Check and fix to read again
+        // its own way, or held here for you.
+        .param(
+            ParamSpec::new(IF_UNREADABLE, "If some sectors can't be read", ParamKind::Choice(UNREADABLE_CHOICES))
+                .default(MAKE_ANYWAY)
+                .labels(UNREADABLE_LABELS)
+                .help("Left blank for Check and fix to read again; verified only if it then matches Redump."),
+        )
         .summary(|g| {
             let retries = g("retries").and_then(|v| v.as_i64()).unwrap_or(0);
             let speed = s(g, "speed");
@@ -63,6 +72,30 @@ pub fn image_info() -> StepInfo {
         // couldn't read filled in (0x55), for Check and fix to read again.
         .retry("keep", "Make the image anyway", "")
         .retry("leave_out", "Skip this disc", "")
+}
+
+/// Rip's setting for sectors it can't read, and its choices.
+pub const IF_UNREADABLE: &str = "if_unreadable";
+pub const MAKE_ANYWAY: &str = "make_anyway";
+pub const ASK_ME: &str = "ask";
+pub const UNREADABLE_CHOICES: &[&str] = &[MAKE_ANYWAY, ASK_ME];
+pub const UNREADABLE_LABELS: &[&str] = &["Make the image anyway and let Check and fix try them", "Ask me"];
+
+/// The fact Rip puts on a dump it made with sectors it couldn't read:
+/// how many. Check and fix never lets such a dump through unless it then
+/// matches Redump.
+pub const UNREADABLE: &str = "unreadable sectors";
+
+/// How many sectors a failure says couldn't be read: *21 unreadable
+/// sectors*.
+pub fn unreadable_count(bad: &str) -> Option<u64> {
+    bad.strip_suffix(" unreadable sectors").or_else(|| bad.strip_suffix(" unreadable sector")).and_then(|n| n.parse().ok())
+}
+
+/// Rip's note for an image it made by itself with `n` sectors it couldn't
+/// read.
+pub fn made_anyway_note(n: u64) -> String {
+    format!("made the image with {}; Check and fix will try them", plural(n, "unreadable sector"))
 }
 
 pub fn check_info() -> StepInfo {
@@ -645,7 +678,7 @@ pub fn read_offset(c: &Context) -> Option<i64> {
 /// The card's line when Rip couldn't make the image: *Couldn't read 774
 /// sectors*.
 pub fn failure_detail(bad: &str) -> String {
-    match bad.strip_suffix(" unreadable sectors").or_else(|| bad.strip_suffix(" unreadable sector")).and_then(|n| n.parse::<u64>().ok()) {
+    match unreadable_count(bad) {
         Some(n) => redumper::unreadable_line(n, 0),
         None if bad.starts_with(redumper::UNEXPECTED) => bad.to_owned(),
         None => cap(bad),
@@ -720,13 +753,38 @@ impl Step for Image {
             o
         };
         cx.progress(None);
+        let anyway = cx.text(IF_UNREADABLE) != ASK_ME;
+        let mut made_anyway = false;
         loop {
+            // Sectors it couldn't read, and its settings say make the
+            // image anyway: made, once, and handed on for Check and fix.
+            if let (Err(bad), true, false) = (&outcome, anyway, made_anyway || cx.stopped()) {
+                if let Some(n) = unreadable_count(bad) {
+                    made_anyway = true;
+                    cx.log(format!("image: {bad}; making it anyway, as Rip's settings say, with them left blank for Check and fix to read again"));
+                    cx.item(&item, ItemState::Busy, "making the image anyway");
+                    outcome = match self.settle(&cx, &item, &t, &mut out, true, false).await? {
+                        Ok(_) => {
+                            item.context_mut().add(Subject::Disc, UNREADABLE, n.to_string(), "Rip");
+                            Ok(made_anyway_note(n))
+                        }
+                        Err(e) => Err(e),
+                    };
+                }
+            }
             match outcome {
                 Ok(note) => {
                     let main = t.main().ok_or_else(|| anyhow!("redumper made no image"))?;
                     cx.item(&item, ItemState::Ok, note.clone());
                     cx.state(StepState::Busy);
-                    cx.status(image_size(&main), if note.contains("re-read") || note.contains("refined") { note.trim_start_matches("✓ ").to_owned() } else { String::new() });
+                    let detail = if note.starts_with("made the image with") {
+                        cap(&note)
+                    } else if note.contains("re-read") || note.contains("refined") {
+                        note.trim_start_matches("✓ ").to_owned()
+                    } else {
+                        String::new()
+                    };
+                    cx.status(image_size(&main), detail);
                     outlet.send(item.becomes(ItemKind::Dump, Some(main))).await;
                     return Ok(());
                 }

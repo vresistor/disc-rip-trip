@@ -818,7 +818,10 @@ pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Ro
     // Nothing in Redump to compare with: held only when it can be helped,
     // and its own sectors say it was read wrong.
     let wrong = log(&main).map(|l| mismatch::read_log(&l)).is_some_and(|r| r.bad().max(r.wrong()) > 0);
-    if !(reached_all && wrong && reread.can_combine(&dump)) {
+    // Made with sectors Rip couldn't read: never let through unchecked,
+    // whatever could or couldn't be looked up.
+    let unreadable = dump.context().get(Subject::Disc, data::UNREADABLE).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0) > 0;
+    if !unreadable && !(reached_all && wrong && reread.can_combine(&dump)) {
         return Ok(Some(dump));
     }
     let explain = |d: &drt_engine::Item| {
