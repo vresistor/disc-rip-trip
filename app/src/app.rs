@@ -1335,6 +1335,7 @@ impl App {
             let settings = sets
                 .iter()
                 .filter(|(s, _)| s.on_card.is_some() && s.applies(get))
+                .filter(|(s, _)| !(s.main_path_only && self.m.on_a_path(i, id)))
                 .filter(|(s, _)| !(s.scope == Scope::Drive && self.m.drive(i).is_empty()))
                 .take(2)
                 .map(|(s, _)| {

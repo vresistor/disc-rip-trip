@@ -119,6 +119,18 @@ impl Node {
         out
     }
 
+    /// Whether the step `id` hangs off another step's *If it fails* or
+    /// *If it needs you* path.
+    pub fn on_a_path(&self, id: &str) -> bool {
+        let mut found = false;
+        self.walk(&mut |n| {
+            if let Node::Step { on_fail, on_needs, .. } = n {
+                found |= [on_fail, on_needs].into_iter().flatten().any(|p| p.ids().contains(&id));
+            }
+        });
+        found
+    }
+
     fn walk<'a>(&'a self, f: &mut impl FnMut(&'a Node)) {
         f(self);
         match self {

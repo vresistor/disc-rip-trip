@@ -110,6 +110,9 @@ pub struct ParamSpec {
     pub only_with: &'static [&'static str],
     /// Shown on the step's card, as label and value; see [`OnCard`].
     pub on_card: Option<OnCard>,
+    /// Means nothing for a step on an *If it fails* or *If it needs you*
+    /// path (Notify's When: what reaches it there is sent as it comes).
+    pub main_path_only: bool,
     /// One short sentence, only where the name and choices can't say it
     /// all, shown under the setting and on hover. At most [`HELP_MAX`]
     /// characters.
@@ -166,7 +169,23 @@ pub struct OnCard {
 
 impl ParamSpec {
     pub fn new(key: &'static str, label: &'static str, kind: ParamKind) -> Self {
-        ParamSpec { key, label, kind, default: None, scope: Scope::Recipe, findable: false, section: "", when: None, only_with: &[], on_card: None, help: None, labels: &[], suggest: None, fits: None }
+        ParamSpec {
+            key,
+            label,
+            kind,
+            default: None,
+            scope: Scope::Recipe,
+            findable: false,
+            section: "",
+            when: None,
+            only_with: &[],
+            on_card: None,
+            main_path_only: false,
+            help: None,
+            labels: &[],
+            suggest: None,
+            fits: None,
+        }
     }
 
     /// What it changes for you, in one plain sentence.
@@ -240,6 +259,12 @@ impl ParamSpec {
     /// Only needed when the recipe has one of these step kinds.
     pub fn only_with(mut self, kinds: &'static [&'static str]) -> Self {
         self.only_with = kinds;
+        self
+    }
+
+    /// Not shown for a step on an *If it fails* or *If it needs you* path.
+    pub fn main_path_only(mut self) -> Self {
+        self.main_path_only = true;
         self
     }
 

@@ -489,6 +489,12 @@ impl Model {
         self.shown.get(&i).and_then(|id| v.iter().find(|r| r.id == *id)).or(v.last())
     }
 
+    /// Whether the step `id` hangs off another's *If it fails* or *If it
+    /// needs you* path, in the recipe as shown (a draft while editing).
+    pub fn on_a_path(&self, i: usize, id: &str) -> bool {
+        self.drafts.get(&i).or_else(|| self.recipes.get(i)).is_some_and(|r| r.root.on_a_path(id))
+    }
+
     pub fn shows_newest(&self, i: usize) -> bool {
         self.shown_run(i).map(|r| r.id) == self.newest(i).map(|r| r.id)
     }

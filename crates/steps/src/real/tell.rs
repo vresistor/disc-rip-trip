@@ -32,15 +32,17 @@ pub fn info() -> StepInfo {
     StepInfo::new("tell", "Notify", Group::Tell, ItemKind::Any, ItemKind::Nothing)
         .takes_messages()
         .from("when all done")
-        .param(ParamSpec::new("when", "When", ParamKind::Choice(WHEN)).default(WHEN[0]).labels(&["After every disc", "Only if it needed you or something isn't right", "Never"]).on_card_as(
-            "When",
-            &[],
-            |g| match g("when").and_then(|v| v.as_str().map(str::to_owned)).as_deref() {
-                Some(w) if w == WHEN[1] => "when it needs you".into(),
-                Some(w) if w == WHEN[2] => "never".into(),
-                _ => "always".into(),
-            },
-        ))
+        .param(
+            ParamSpec::new("when", "When", ParamKind::Choice(WHEN))
+                .default(WHEN[0])
+                .main_path_only()
+                .labels(&["After every disc", "Only if it needed you or something isn't right", "Never"])
+                .on_card_as("When", &[], |g| match g("when").and_then(|v| v.as_str().map(str::to_owned)).as_deref() {
+                    Some(w) if w == WHEN[1] => "when it needs you".into(),
+                    Some(w) if w == WHEN[2] => "never".into(),
+                    _ => "always".into(),
+                }),
+        )
         .param(ParamSpec::new("desktop", "On this computer", ParamKind::Toggle).default(true).on_card_as("Where", &["ntfy_topic"], |g| {
             let topic = g("ntfy_topic").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
             match (g("desktop").and_then(|v| v.as_bool()).unwrap_or(true), topic.is_empty()) {

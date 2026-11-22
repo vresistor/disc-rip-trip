@@ -757,6 +757,7 @@ fn rail_specs_beside(app: &App, i: usize, id: &str, info: &StepInfo, beside: boo
         .iter()
         .filter(|spec| !(info.kind == "drive" && spec.key == "drive") && !(spec.scope == Scope::Drive && app.m.drive(i).is_empty()) && spec.applies(get))
         .filter(|spec| !(beside && locked && spec.on_card.is_some()))
+        .filter(|spec| !(spec.main_path_only && app.m.on_a_path(i, id)))
         .cloned()
         .collect()
 }

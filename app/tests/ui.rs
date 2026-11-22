@@ -2793,6 +2793,8 @@ fn a_notify_on_rips_needs_you_path_says_at_once() {
     assert_eq!(v.detail, "Rip needs you: Couldn't read 771 sectors");
     let said: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).filter(|l| l.contains("sectors")).collect();
     assert_eq!(said, ["SLES_147.11: Rip needs you: Couldn't read 771 sectors"], "once");
+    // On a path, When means nothing: what reaches it is sent as it comes.
+    assert!(h.query_by_label_contains("always").is_none(), "no When on a Notify on a path");
     shot(&mut h, "notify-if-rip-needs-you");
 }
 
