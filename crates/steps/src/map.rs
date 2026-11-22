@@ -18,9 +18,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// What happened to a sector, from best to worst: a block shows the worst
-/// of its sectors.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// What happened to a sector: a block shows the worst of its sectors
+/// ([`Mark::ALL`] is the order, best to worst). Each is kept as its
+/// number, so a number is never given to another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Mark {
     /// Not read yet.
@@ -35,13 +36,22 @@ pub enum Mark {
     Wrong = 4,
     /// The drive couldn't read it.
     Unreadable = 5,
+    /// Read wrong, and put right by the disc's own error correction (its
+    /// ECC), not by reading it again: better than wrong, short of read
+    /// right.
+    Repaired = 6,
 }
 
+/// How many kinds of [`Mark`] there are.
+pub const KINDS: usize = 7;
+
 impl Mark {
-    pub const ALL: [Mark; 6] = [Mark::NotRead, Mark::Good, Mark::Recovered, Mark::C2, Mark::Wrong, Mark::Unreadable];
+    /// Every mark, best to worst: not read yet, then read cleanly, read
+    /// right later, put right by its error correction, and the bad ones.
+    pub const ALL: [Mark; KINDS] = [Mark::NotRead, Mark::Good, Mark::Recovered, Mark::Repaired, Mark::C2, Mark::Wrong, Mark::Unreadable];
 
     fn of(n: u8) -> Mark {
-        Mark::ALL.get(n as usize).copied().unwrap_or(Mark::NotRead)
+        Mark::ALL.iter().copied().find(|m| *m as u8 == n).unwrap_or(Mark::NotRead)
     }
 
     /// Whether it's a sector that's still wrong.
@@ -111,9 +121,9 @@ impl Sectors {
         let blocks = n.div_ceil(per) as usize;
         let mut marks = String::with_capacity(blocks);
         let mut mixed = vec![];
-        let mut totals = [0u64; 6];
+        let mut totals = [0u64; KINDS];
         for b in 0..blocks {
-            let mut c = [0u32; 6];
+            let mut c = [0u32; KINDS];
             for m in &self.marks[b * per as usize..((b + 1) * per as usize).min(n as usize)] {
                 c[*m as usize] += 1;
             }
@@ -126,8 +136,8 @@ impl Sectors {
             }
         }
         let runs = runs_of(self.marks.iter().enumerate().filter(|(_, m)| m.is_bad()).map(|(i, _)| i as u64));
-        let recovered = runs_of(self.marks.iter().enumerate().filter(|(_, m)| **m == Mark::Recovered).map(|(i, _)| i as u64));
-        SectorMap { sectors: n, per_block: per, marks, mixed, totals, at, cd, runs, recovered, checks_only: false }
+        let of = |k: Mark| runs_of(self.marks.iter().enumerate().filter(|(_, m)| **m == k).map(|(i, _)| i as u64));
+        SectorMap { sectors: n, per_block: per, marks, mixed, totals, at, cd, runs, recovered: of(Mark::Recovered), repaired: of(Mark::Repaired), checks_only: false }
     }
 }
 
@@ -151,7 +161,7 @@ fn each(runs: &[Run]) -> impl Iterator<Item = u64> + '_ {
 }
 
 /// The worst mark of a block's counts; not read only when nothing in it is.
-fn worst(c: &[u32; 6]) -> Mark {
+fn worst(c: &[u32; KINDS]) -> Mark {
     Mark::ALL.iter().rev().copied().find(|m| *m != Mark::NotRead && c[*m as usize] > 0).unwrap_or(Mark::NotRead)
 }
 
@@ -178,10 +188,11 @@ pub struct SectorMap {
     pub marks: String,
     /// The blocks with more than one kind of sector in them, and how many
     /// of each, by [`Mark`]'s number. A block not here is all its mark.
-    #[serde(default)]
-    pub mixed: Vec<(u32, [u32; 6])>,
+    #[serde(default, deserialize_with = "mixed_of_any")]
+    pub mixed: Vec<(u32, [u32; KINDS])>,
     /// How many sectors of each mark on the whole disc.
-    pub totals: [u64; 6],
+    #[serde(deserialize_with = "kinds_of_any")]
+    pub totals: [u64; KINDS],
     /// Where the drive is, while it reads.
     #[serde(default)]
     pub at: Option<u64>,
@@ -194,11 +205,32 @@ pub struct SectorMap {
     /// Where the sectors that came back on a later read are.
     #[serde(default)]
     pub recovered: Vec<Run>,
+    /// Where the sectors put right by the disc's error correction are.
+    #[serde(default)]
+    pub repaired: Vec<Run>,
     /// Made from an image's own checks of its sectors, not from a read:
     /// only the sectors that failed them, and what came of each, say
     /// anything ([`SectorMap::checked`]).
     #[serde(default)]
     pub checks_only: bool,
+}
+
+/// Counts of each kind as a map made before there were [`KINDS`] of them
+/// kept them (fewer), or as now.
+fn kinds<T: Default + Copy, const N: usize>(v: Vec<T>) -> [T; N] {
+    let mut out = [T::default(); N];
+    for (o, x) in out.iter_mut().zip(v) {
+        *o = x;
+    }
+    out
+}
+
+fn kinds_of_any<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u64; KINDS], D::Error> {
+    Ok(kinds(Vec::<u64>::deserialize(d)?))
+}
+
+fn mixed_of_any<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(u32, [u32; KINDS])>, D::Error> {
+    Ok(Vec::<(u32, Vec<u32>)>::deserialize(d)?.into_iter().map(|(b, c)| (b, kinds(c))).collect())
 }
 
 impl SectorMap {
@@ -217,12 +249,12 @@ impl SectorMap {
     }
 
     /// How many sectors of each mark block `b` has.
-    pub fn counts(&self, b: usize) -> [u32; 6] {
+    pub fn counts(&self, b: usize) -> [u32; KINDS] {
         if let Some((_, c)) = self.mixed.iter().find(|(k, _)| *k as usize == b) {
             return *c;
         }
         let (a, z) = self.range(b);
-        let mut c = [0u32; 6];
+        let mut c = [0u32; KINDS];
         c[self.mark(b) as usize] = (z - a + 1) as u32;
         c
     }
@@ -259,16 +291,17 @@ impl SectorMap {
     }
 
     /// The same map with what another look at some sectors found: each to
-    /// its mark. Where each was before is known only as bad, come back, or
-    /// neither, from the map's stretches; which kind of bad, from its
-    /// block's counts. One already bad that's found bad again stays as it
-    /// was; one come back already stays so.
+    /// its mark. Where each was before is known only as bad, come back,
+    /// repaired, or none of those, from the map's stretches; which kind of
+    /// bad, from its block's counts. One already bad that's found bad
+    /// again stays as it was; one come back or repaired already stays so.
     pub fn overlay(&mut self, found: &[(u64, Mark)]) {
         if found.is_empty() {
             return;
         }
         let mut bad: std::collections::BTreeSet<u64> = each(&self.runs).collect();
         let mut back: std::collections::BTreeSet<u64> = each(&self.recovered).collect();
+        let mut repaired: std::collections::BTreeSet<u64> = each(&self.repaired).collect();
         for &(lba, to) in found {
             if lba >= self.sectors {
                 continue;
@@ -279,8 +312,10 @@ impl SectorMap {
             let from = match to {
                 _ if to.is_bad() && was_bad => continue,
                 Mark::Recovered if back.contains(&lba) => continue,
+                Mark::Repaired if repaired.contains(&lba) => continue,
                 _ if was_bad => [Mark::Unreadable, Mark::Wrong, Mark::C2].into_iter().find(|m| c[*m as usize] > 0),
                 _ if back.contains(&lba) => Some(Mark::Recovered),
+                _ if repaired.contains(&lba) => Some(Mark::Repaired),
                 _ => [Mark::Good, Mark::NotRead].into_iter().find(|m| c[*m as usize] > 0),
             };
             let Some(from) = from.filter(|f| *f != to) else { continue };
@@ -298,19 +333,23 @@ impl SectorMap {
             }
             bad.remove(&lba);
             back.remove(&lba);
-            if to.is_bad() {
-                bad.insert(lba);
-            } else if to == Mark::Recovered {
-                back.insert(lba);
-            }
+            repaired.remove(&lba);
+            match to {
+                _ if to.is_bad() => bad.insert(lba),
+                Mark::Recovered => back.insert(lba),
+                Mark::Repaired => repaired.insert(lba),
+                _ => false,
+            };
         }
         self.runs = runs_of(bad.into_iter());
         self.recovered = runs_of(back.into_iter());
+        self.repaired = runs_of(repaired.into_iter());
     }
 
     /// Each sector a map made from checks found something in, and what.
     pub fn found(&self) -> Vec<(u64, Mark)> {
         let mut out: Vec<(u64, Mark)> = each(&self.recovered).map(|l| (l, Mark::Recovered)).collect();
+        out.extend(each(&self.repaired).map(|l| (l, Mark::Repaired)));
         out.extend(each(&self.runs).map(|l| (l, Mark::Wrong)));
         out
     }
@@ -334,8 +373,8 @@ pub fn combined(rip: Option<SectorMap>, wrong: &[u64], check: Option<SectorMap>)
         }
         (Some(mut c), Some(m)) => {
             let bad: std::collections::BTreeSet<u64> = each(&c.runs).collect();
-            let fixed: std::collections::BTreeSet<u64> = each(&c.recovered).collect();
-            let back: Vec<(u64, Mark)> = each(&m.recovered).filter(|l| !bad.contains(l)).map(|l| (l, Mark::Recovered)).collect();
+            let fixed: std::collections::BTreeSet<u64> = each(&c.recovered).chain(each(&c.repaired)).collect();
+            let back: Vec<(u64, Mark)> = each(&m.recovered).filter(|l| !bad.contains(l) && !fixed.contains(l)).map(|l| (l, Mark::Recovered)).collect();
             c.overlay(&back);
             // Found wrong by Rip's check, unless Check has put them right.
             if !c.checks_only {
@@ -716,6 +755,40 @@ mod tests {
         // Neither, or only one.
         assert_eq!(combined(None, &[], None), None);
         assert_eq!(combined(Some(rip.clone()), &[], None), Some(rip));
+    }
+
+    #[test]
+    fn a_sector_repaired_by_its_error_correction_has_a_mark_of_its_own() {
+        // Fixing put 50 right on a re-read and left 3 and 60; the error
+        // correction then repaired 60.
+        let rip = sectors(10_000, &[(3, Mark::Unreadable)]).map(None, true);
+        let mut check = SectorMap::checked(10_000, &[(50, Mark::Recovered), (3, Mark::Wrong), (60, Mark::Wrong)], true);
+        check.overlay(&[(60, Mark::Repaired)]);
+        assert_eq!((check.total(Mark::Repaired), check.total(Mark::Wrong), check.total(Mark::Recovered)), (1, 1, 1));
+        assert_eq!(check.repaired, [Run { from: 60, to: 60 }]);
+        assert_eq!(check.runs, [Run { from: 3, to: 3 }]);
+        assert!(!Mark::Repaired.is_bad());
+        // Worse than put right on a re-read, better than any bad sector.
+        let c = check.counts(6);
+        assert_eq!((check.mark(6), c[Mark::Repaired as usize]), (Mark::Repaired, 1));
+        let m = combined(Some(rip), &[60], Some(check.clone())).unwrap();
+        assert_eq!((m.total(Mark::Repaired), m.total(Mark::Wrong), m.total(Mark::Unreadable)), (1, 0, 1), "Rip's check found 60 wrong; it's repaired now");
+        // Two sectors to a block: put right on a re-read beside repaired.
+        let mut both = sectors(2_000, &[(0, Mark::Recovered), (1, Mark::Repaired)]).map(None, false);
+        assert_eq!(both.mark(0), Mark::Repaired);
+        both.overlay(&[(1, Mark::C2)]);
+        assert_eq!(both.mark(0), Mark::C2);
+        // It goes to the window and back the same.
+        let back: SectorMap = serde_json::from_value(serde_json::to_value(&check).unwrap()).unwrap();
+        assert_eq!(back, check);
+    }
+
+    #[test]
+    fn a_map_kept_before_there_were_seven_kinds_still_loads() {
+        let old = r#"{"sectors":20,"per_block":10,"marks":"15","mixed":[[1,[0,9,0,0,0,1]]],"totals":[0,19,0,0,0,1],"cd":true,"runs":[{"from":12,"to":12}]}"#;
+        let m: SectorMap = serde_json::from_str(old).unwrap();
+        assert_eq!((m.mark(0), m.mark(1), m.total(Mark::Good), m.total(Mark::Unreadable), m.total(Mark::Repaired)), (Mark::Good, Mark::Unreadable, 19, 1, 0));
+        assert_eq!(m.counts(1)[Mark::Unreadable as usize], 1);
     }
 
     #[test]

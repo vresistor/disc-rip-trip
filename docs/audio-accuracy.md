@@ -356,7 +356,8 @@ stay as they are.
 The same rule for an image of a game or data disc: the *Check and fix*
 step (its id is `check`). Its
 code is in `data.rs`, with its hold in `game.rs`, fixing bad sectors in
-`fix.rs`, and combining rips in `combine.rs`. Rip reads the disc once;
+`fix.rs`, combining rips in `combine.rs`, and repairing by the disc's
+error correction in `ecc.rs`. Rip reads the disc once;
 Check and fix verifies the image and puts it right, using the drive
 through the same drive lane, so the two never read at once. See
 `docs/adr/0002-check-verifies-and-fixes.md` for why.
@@ -422,12 +423,55 @@ through the same drive lane, so the two never read at once. See
   fits; among those, the most common one. It counts sectors that no rip
   read so that they pass, and sectors where passing copies disagree.
   Combining the three rips above gave Redump's checksums exactly.
-- **A sector is never repaired.** The combiner never works out or writes
-  an EDC, an ECC or a header. Some PlayStation discs carry sectors that
+- **Combining never repairs a sector.** The combiner never works out or
+  writes an EDC, an ECC or a header. Some PlayStation discs carry sectors that
   fail their checks on purpose, as copy protection, and Redump's copy
   keeps them as pressed. So a sector every rip agrees on is kept byte
   for byte however it fails, and where the rips differ and none passes,
   the most common copy is kept as it was read.
+- **The disc's error correction, last.** Every Mode 1 and Mode 2 form 1
+  sector carries 276 bytes of error correction after its EDC: P and Q
+  parity, a Reed–Solomon product code over GF(2^8) (ECMA-130, Annex A).
+  P is 86 codewords of 26 bytes, one per column; Q is 52 of 45, one per
+  diagonal, covering P too. For Mode 2 the 4-byte header is taken as
+  zeros, so the parity can't vouch for it. `ecc.rs` makes P and Q as
+  ECMA-130 does (checked against ECM's separate implementation, and made
+  again byte for byte for all 202,847 form 1 sectors of a
+  Redump-verified PlayStation image:
+  `DRT_ECC_BIN=<a .bin> cargo test --release -p drt-steps
+  ecc::tests::real_sectors -- --ignored --exact --nocapture`). It
+  corrects by syndromes: each codeword puts one wrong byte right, and
+  passes of P then Q go on until nothing changes. A sector counts as
+  repaired only if every P and Q codeword then fits, its EDC fits, and
+  it passes every check of its own, its address too; otherwise it's
+  given up and left exactly as read. A wrong Mode 2 header or a missing
+  sync isn't covered, so a slipped sector is never "repaired". Tests
+  spoil real-shaped sectors with 1 to 600 random bytes: each comes back
+  byte for byte or is reported beyond repair, never anything else.
+- **When it's used.** Only once every way of reading it again is spent:
+  by itself, after Fix bad sectors and after ripping again and combining;
+  under *Ask me*, as the last of the buttons that put it right. It
+  works on the last combination if there is one. A sector nothing was
+  read of (filled in) can't be repaired, and a form 2 sector has no
+  error correction; both are said so in the log and left.
+- **Copy protection is left alone.** A sector every read gave back the
+  same (two or more rips agreeing, or every re-read matching the image),
+  or one read only once, may be pressed that way on purpose. It isn't
+  repaired along with the sectors whose reads differed. Only if the copy
+  with those repaired still isn't Redump's, and Redump has the disc, are
+  they repaired too, to see whether the copy then matches; if it
+  doesn't, each is put back byte for byte as read (they're kept aside
+  first) and the files hashed again. With no Redump entry they're never
+  changed.
+- **Verified only by Redump.** Repairing can make every sector pass its
+  own checks and still be wrong. The result is verified only when the
+  files, hashed again from disk, match Redump's entry on size, CRC-32,
+  MD5 and SHA-1: *Verified: …, 3 sectors repaired by the disc's error
+  correction*. Otherwise it's held, *Not verified: 3 sectors repaired by
+  the disc's error correction*, and kept only if you say so. The log
+  lists every repaired sector's address and how many of its bytes
+  changed, and every sector left and why; the map of the disc marks each
+  repaired sector with a block crossed by one line, corner to corner.
 - **How a combination is verified.** Its files are written to disk,
   then put in the place of the dump's own (the first rip stays in
   `rip-1`), then hashed again from disk. They're verified only if every
@@ -447,13 +491,15 @@ through the same drive lane, so the two never read at once. See
 - **If it doesn't match Redump.** Check's setting has two choices. *Try
   to fix it by itself* (the first): Fix bad sectors; if that doesn't
   make it match, rip again and combine, up to 3 extra rips (a setting),
-  combining after each and stopping at a match; if it still doesn't
-  match, it stops and asks, with the choices above. *Ask me*: it asks
+  combining after each and stopping at a match; then, last, repair by the
+  disc's error correction; if it still doesn't match, it stops and asks,
+  with the choices above. *Ask me*: it asks
   straight away, offering Fix bad sectors among them. Either way, a copy
   that doesn't match is never kept or filed without you. A fixed rip is
   the first rip when combining, so a result reads *211 sectors re-read,
   1 from a second rip*. For a disc Redump doesn't have, it only fixes
-  sectors that fail their own check, then holds the copy, labelled not
+  sectors that fail their own check and repairs what it can of the rest
+  by their error correction, then holds the copy, labelled not
   verified: no Redump entry; with nothing to stop on, it never rips
   again by itself. The log lists each bad sector and why, how many tries
   each took, which were put in place, which rip each combined sector

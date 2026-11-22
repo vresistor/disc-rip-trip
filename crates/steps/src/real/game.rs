@@ -11,7 +11,7 @@
 //! revisions), so identity waits for the hash. Each step's `StepInfo` is
 //! here once and shared by the real and the simulated step.
 
-use super::mismatch::{self, Combination, Fixing, Mismatch};
+use super::mismatch::{self, Combination, Fixing, Mismatch, Repairing};
 use super::playstation::{self, Sectors, Volume};
 use super::{data, media, redump};
 use crate::template;
@@ -373,6 +373,27 @@ pub trait Reread: Send + Sync {
     async fn adopt(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<()>;
     /// The dump's own files hashed again, from disk, as they are now.
     async fn rehash(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<Vec<redump::Rom>>;
+    /// Repairs the dump's sectors that still fail their own check by the
+    /// disc's own error correction, as `which` says, in the dump's own
+    /// files (the last combination put in their place first, if there's
+    /// one), keeping them as they were until [`Reread::settled`]. What
+    /// fixing found of each sector's re-reads (`fixed`) and every rip so
+    /// far say which may be pressed so. Gives what that came to and the
+    /// files' checksums, hashed again from disk.
+    async fn repair(&self, cx: &Cx, dump: &drt_engine::Item, fixed: Option<&Fixing>, which: Ecc) -> Result<(Repairing, Vec<redump::Rom>)>;
+}
+
+/// Which sectors [`Reread::repair`] puts right by their error correction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ecc {
+    /// Those read wrong: reads of them gave back different bytes. Gives
+    /// what it found of every bad sector.
+    ReadWrong,
+    /// Those too that may be pressed so (every read the same, or read only
+    /// once), each kept aside as read first. Gives how many it repaired.
+    MaybePressed,
+    /// Puts those back as read. Gives how many it put back.
+    PutBack,
 }
 
 /// The choices for Check's *If it doesn't match Redump*.
@@ -410,9 +431,9 @@ impl Policy {
 }
 
 /// What Check does next by itself: fix bad sectors, if it can; then, for a
-/// disc Redump has, rip again and combine, up to the policy's rips. `None`
-/// when that's all done, or a different disc seems to be in the drive:
-/// then it asks.
+/// disc Redump has, rip again and combine, up to the policy's rips; then,
+/// last, repair by the disc's error correction. `None` when that's all
+/// done, or a different disc seems to be in the drive: then it asks.
 fn next_by_itself(options: &[(String, String)], fixed: Option<&Fixing>, rips: u32, policy: &Policy, listed: bool) -> Option<&'static str> {
     let offers = |id: &str| options.iter().any(|o| o.0 == id);
     if fixed.is_some_and(|f| f.other_disc) {
@@ -421,7 +442,72 @@ fn next_by_itself(options: &[(String, String)], fixed: Option<&Fixing>, rips: u3
     if offers("fix") {
         return Some("fix");
     }
-    (listed && offers("combine") && rips < policy.rips).then_some("combine")
+    if listed && offers("combine") && rips < policy.rips {
+        return Some("combine");
+    }
+    offers("repair").then_some("repair")
+}
+
+/// What `id` is called in the log when Check does it by itself.
+fn by_itself_words(id: &str) -> &'static str {
+    match id {
+        "fix" => "Fix bad sectors",
+        "combine" => "Rip again and combine",
+        _ => "Repair with the disc's error correction",
+    }
+}
+
+/// Puts the dump's files' checksums, as hashed from disk, on the dump.
+fn note_hashes(dump: &mut drt_engine::Item, roms: &[redump::Rom]) {
+    for r in roms {
+        dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
+    }
+}
+
+/// Redump's entry the dump's files, hashed from disk, are on all four
+/// counts, if any; a SHA-1 match that fails the others is logged.
+fn matched<'a>(cx: &Cx, cat: Option<&'a redump::Catalogue>, roms: &[redump::Rom]) -> Option<&'a redump::Game> {
+    let entry = cat?.by_hashes(roms)?;
+    match compare(cx, entry, roms) {
+        Ok(()) => Some(entry),
+        Err(why) => {
+            cx.log(format!("not verified: {why}"));
+            None
+        }
+    }
+}
+
+/// Repairs by the disc's error correction: first the sectors read wrong;
+/// then, when that's not Redump's and Redump has the disc, those that may
+/// be pressed so too, put back as read unless that makes it Redump's. The
+/// dump's hashes are the files' as left. Gives what it came to and
+/// Redump's entry, if it's now that.
+async fn repair_all<'a>(
+    cx: &Cx,
+    reread: &dyn Reread,
+    dump: &mut drt_engine::Item,
+    fixed: Option<&Fixing>,
+    cat: Option<&'a redump::Catalogue>,
+    listed: bool,
+) -> Result<(Repairing, Option<&'a redump::Game>)> {
+    let (mut r, roms) = reread.repair(cx, dump, fixed, Ecc::ReadWrong).await?;
+    note_hashes(dump, &roms);
+    let mut entry = matched(cx, cat, &roms);
+    if entry.is_none() && listed && r.held_back > 0 {
+        let (more, roms) = reread.repair(cx, dump, fixed, Ecc::MaybePressed).await?;
+        note_hashes(dump, &roms);
+        entry = matched(cx, cat, &roms);
+        if entry.is_some() {
+            cx.log(format!("error correction: with {} that may be pressed so repaired too, it matches Redump: they were read wrong after all", mismatch::sectors(more.repaired)));
+            r.repaired += more.repaired;
+            r.held_back = r.held_back.saturating_sub(more.repaired);
+        } else {
+            let (_, roms) = reread.repair(cx, dump, fixed, Ecc::PutBack).await?;
+            note_hashes(dump, &roms);
+        }
+    }
+    r.verified = entry.is_some();
+    Ok((r, entry))
 }
 
 /// Holds a dump, Bad, until you say: one of the dump's own options (see
@@ -450,13 +536,14 @@ pub async fn hold(
     cx.log(&bad);
     let mut combined: Option<Combination> = None;
     let mut fixed: Option<Fixing> = None;
+    let mut repaired: Option<Repairing> = None;
     let mut trouble: Option<String> = None;
     let mut by_itself = policy.by_itself;
     let mut own_rips = 0u32;
     let mut tried: Vec<String> = vec![];
     let total_rips = 1 + policy.rips as usize;
     loop {
-        let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), combined.clone()).fixing(fixed.clone()));
+        let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), combined.clone()).fixing(fixed.clone()).repairing(repaired.clone()));
         if let Some(m) = &why {
             cx.log(format!("compared with {}: {}", if m.in_redump() { m.entry.as_str() } else { "nothing in Redump" }, m.short()));
             for line in &m.reading {
@@ -469,13 +556,19 @@ pub async fn hold(
         let planned = if by_itself { next_by_itself(&options, fixed.as_ref(), own_rips, &policy, listed) } else { None };
         let option = match planned {
             Some(o) => {
-                cx.log(format!("by itself, as Check's settings say: {}", if o == "fix" { "Fix bad sectors" } else { "Rip again and combine" }));
+                cx.log(format!("by itself, as Check's settings say: {}", by_itself_words(o)));
                 o.to_owned()
             }
             None => {
-                if by_itself && !tried.is_empty() && trouble.is_none() {
+                let repairs = repaired.as_ref().filter(|r| r.repaired > 0);
+                if by_itself && (!tried.is_empty() || repairs.is_some()) && trouble.is_none() {
                     let not = if listed { "still doesn't match Redump" } else { "not verified: no Redump entry" };
-                    trouble = Some(format!("Tried by itself ({}); {not}", tried.join(", ")));
+                    let against = if listed { "doesn't match Redump" } else { "no Redump entry" };
+                    trouble = Some(match repairs {
+                        Some(r) if tried.is_empty() => format!("Not verified: {}; {against}", r.note()),
+                        Some(r) => format!("Not verified: {}; tried by itself ({}); {against}", r.note(), tried.join(", ")),
+                        None => format!("Tried by itself ({}); {not}", tried.join(", ")),
+                    });
                     cx.log(format!("tried by itself ({}); {not}: asking", tried.join(", ")));
                 }
                 by_itself = false;
@@ -505,13 +598,18 @@ pub async fn hold(
             "keep" if combined.is_some() => {
                 reread.adopt(cx, &dump).await?;
                 let against = if listed { format!("; doesn't match Redump's copies of {serial}") } else { String::new() };
-                cx.item(&dump, ItemState::Ok, format!("kept the best combination, not verified{against}"));
-                cx.status("Kept, not verified", mismatch::result_note(fixed.as_ref(), combined.as_ref()));
+                let with = repaired.as_ref().filter(|r| r.repaired > 0).map(|r| format!(", {}", r.note())).unwrap_or_default();
+                cx.item(&dump, ItemState::Ok, format!("kept the best combination{with}, not verified{against}"));
+                cx.status("Kept, not verified", mismatch::and_repaired(mismatch::result_note(fixed.as_ref(), combined.as_ref()), repaired.as_ref()));
                 return Ok(Some(dump));
             }
             "keep" => {
                 let against = if listed { format!("; doesn't match Redump's copies of {serial}") } else { "; not verified".to_owned() };
-                let how = if fixed.as_ref().is_some_and(|f| f.fixed > 0) { "kept with bad sectors fixed" } else { "kept anyway" };
+                let how = match repaired.as_ref().filter(|r| r.repaired > 0) {
+                    Some(r) => format!("kept with {}", r.note()),
+                    None if fixed.as_ref().is_some_and(|f| f.fixed > 0) => "kept with bad sectors fixed".to_owned(),
+                    None => "kept anyway".to_owned(),
+                };
                 cx.item(&dump, ItemState::Ok, format!("{how}{against}"));
                 cx.status("Kept anyway", if listed { "doesn't match Redump" } else { "not verified" });
                 return Ok(Some(dump));
@@ -549,10 +647,14 @@ pub async fn hold(
                 reread.settled(cx, &dump).await?;
                 let name = entry.name.clone();
                 dump.context_mut().add(Subject::Disc, "name", name.clone(), "Redump");
-                let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), None).fixing(Some(f.clone())));
+                if let Some(r) = repaired.as_mut() {
+                    r.verified = true;
+                }
+                let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), None).fixing(Some(f.clone())).repairing(repaired.clone()));
                 cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
-                cx.verified(&dump, format!("Verified: {name}, {}", f.note()));
-                cx.status("Verified", f.note());
+                let note = mismatch::and_repaired(f.note(), repaired.as_ref());
+                cx.verified(&dump, format!("Verified: {name}, {note}"));
+                cx.status("Verified", note);
                 return Ok(Some(dump));
             }
             "combine" => {
@@ -585,6 +687,8 @@ pub async fn hold(
                 }
                 cx.log(format!("{}: {} sectors differed, {} with no good copy, {} where good copies disagree, {} still bad", c.note(), c.differing, c.no_good, c.disagree, c.still_bad));
                 combined = Some(c.clone());
+                // A new combination: what was repaired was another image.
+                repaired = None;
                 let Some(entry) = cat.and_then(|cat| cat.by_hashes(&roms)) else { continue };
                 // Its SHA-1 is Redump's. Verified only once the dump's own
                 // files, the combination in their place, are hashed again
@@ -609,6 +713,39 @@ pub async fn hold(
                 let why = explain(&dump).map(|m| m.with(true, Some(c.clone())).fixing(fixed.clone()));
                 cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
                 let note = mismatch::result_note(fixed.as_ref(), Some(&c));
+                // Nothing repaired is in this combination: `repaired` is gone.
+                cx.verified(&dump, format!("Verified: {name}, {note}"));
+                cx.status("Verified", note);
+                return Ok(Some(dump));
+            }
+            "repair" => {
+                cx.item(&dump, ItemState::Busy, "repairing by the disc's error correction");
+                cx.status("Repairing with the disc's error correction", serial.to_owned());
+                // No soft failure: partway, sectors that may be pressed so
+                // could be left repaired, so a failure stops Check.
+                let (r, entry) = repair_all(cx, reread, &mut dump, fixed.as_ref(), cat, listed).await?;
+                if by_itself && r.repaired == 0 {
+                    tried.push("nothing repaired by error correction".into());
+                }
+                repaired = Some(r.clone());
+                let Some(entry) = entry else {
+                    if !by_itself {
+                        trouble = Some(if r.repaired > 0 { format!("Not verified: {}", r.note()) } else { "Not verified: the disc's error correction repaired nothing".to_owned() });
+                    }
+                    continue;
+                };
+                if let Some(f) = fixed.as_mut() {
+                    f.verified = true;
+                }
+                if let Some(c) = combined.as_mut() {
+                    c.verified = true;
+                }
+                reread.settled(cx, &dump).await?;
+                let name = entry.name.clone();
+                dump.context_mut().add(Subject::Disc, "name", name.clone(), "Redump");
+                let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), combined.clone()).fixing(fixed.clone()).repairing(repaired.clone()));
+                cx.report(why.as_ref().and_then(|m| serde_json::to_value(m).ok()));
+                let note = mismatch::and_repaired(mismatch::result_note(fixed.as_ref(), combined.as_ref()), Some(&r));
                 cx.verified(&dump, format!("Verified: {name}, {note}"));
                 cx.status("Verified", note);
                 return Ok(Some(dump));
@@ -699,6 +836,9 @@ pub fn redumper_rip() -> RipFn {
 pub struct Disc {
     pub rip: RipFn,
     pub source: SourceFn,
+    /// What fixing and repairing found of each sector that failed its own
+    /// check, for the map.
+    pub marks: std::sync::Mutex<BTreeMap<u64, crate::map::Mark>>,
 }
 
 /// Where Fix bad sectors reads from, for a dump: the drive it was ripped
@@ -719,8 +859,48 @@ pub fn drive_source() -> SourceFn {
 }
 
 impl Disc {
+    /// The real disc, read again through `rip` and `source`.
+    pub fn new(rip: RipFn, source: SourceFn) -> Disc {
+        Disc { rip, source, marks: Default::default() }
+    }
+
     fn folders(cx: &Cx) -> Result<PathBuf> {
         cx.work()
+    }
+
+    /// The map of the disc as fixing and repairing left it: its sectors as
+    /// last read from the dump's own `.state` when it's there, with each
+    /// that failed its checks over it, put right or not; else the checks
+    /// alone.
+    async fn show_map(&self, cx: &Cx, dump: &drt_engine::Item, main: &Path) {
+        let found: Vec<(u64, crate::map::Mark)> = self.marks.lock().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect()).unwrap_or_default();
+        let sectors = super::combine::layout(main).map(|ts| ts.iter().map(|t| (t.start.max(0) as u64) + t.size / super::combine::SECTOR as u64).max().unwrap_or(0)).unwrap_or(0);
+        let sectors = sectors.max(found.iter().map(|f| f.0 + 1).max().unwrap_or(0));
+        let t = super::redumper::Target { dir: main.parent().unwrap_or(Path::new(".")).to_path_buf(), name: main.file_stem().unwrap_or_default().to_string_lossy().into_owned() };
+        let offset = data::read_offset(dump.context()).unwrap_or(0);
+        let read = tokio::task::spawn_blocking(move || {
+            let mut s = super::redumper::StateScan::new(&t, sectors, offset, true);
+            s.read_to(sectors, sectors, true).ok().map(|_| s.map(false))
+        })
+        .await
+        .ok()
+        .flatten();
+        let map = match read {
+            Some(mut m) => {
+                m.overlay(&found);
+                m
+            }
+            None => crate::map::SectorMap::checked(sectors, &found, true),
+        };
+        cx.map(serde_json::to_value(map).ok());
+    }
+
+    fn mark(&self, lbas: impl IntoIterator<Item = i64>, m: crate::map::Mark) {
+        if let Ok(mut marks) = self.marks.lock() {
+            for l in lbas {
+                marks.insert(l.max(0) as u64, m);
+            }
+        }
     }
 }
 
@@ -780,31 +960,10 @@ impl Reread for Disc {
         for l in fix::log_lines(&fixed, tries) {
             cx.log(l);
         }
-        // The map of the disc as fixing left it: its sectors as last read
-        // from the dump's own `.state` when it's there, with each that
-        // failed its checks over it, put right or not; else the checks alone.
         if fixed.other_disc.is_none() {
-            let sectors = super::combine::layout(&main).map(|ts| ts.iter().map(|t| (t.start.max(0) as u64) + t.size / super::combine::SECTOR as u64).max().unwrap_or(0)).unwrap_or(0);
-            let found: Vec<(u64, crate::map::Mark)> =
-                fixed.bad.iter().map(|s| (s.lba.max(0) as u64, if matches!(s.outcome, fix::Outcome::Fixed { .. }) { crate::map::Mark::Recovered } else { crate::map::Mark::Wrong })).collect();
-            let sectors = sectors.max(found.iter().map(|f| f.0 + 1).max().unwrap_or(0));
-            let t = super::redumper::Target { dir: main.parent().unwrap_or(Path::new(".")).to_path_buf(), name: main.file_stem().unwrap_or_default().to_string_lossy().into_owned() };
-            let offset = data::read_offset(dump.context()).unwrap_or(0);
-            let read = tokio::task::spawn_blocking(move || {
-                let mut s = super::redumper::StateScan::new(&t, sectors, offset, true);
-                s.read_to(sectors, sectors, true).ok().map(|_| s.map(false))
-            })
-            .await
-            .ok()
-            .flatten();
-            let map = match read {
-                Some(mut m) => {
-                    m.overlay(&found);
-                    m
-                }
-                None => crate::map::SectorMap::checked(sectors, &found, true),
-            };
-            cx.map(serde_json::to_value(map).ok());
+            self.mark(fixed.fixed().map(|s| s.lba), crate::map::Mark::Recovered);
+            self.mark(fixed.left().map(|s| s.lba), crate::map::Mark::Wrong);
+            self.show_map(cx, dump, &main).await;
         }
         let roms = self.rehash(cx, dump).await?;
         for r in &roms {
@@ -819,6 +978,7 @@ impl Reread for Disc {
             std::fs::remove_dir_all(&keep)?;
             cx.log("verified: the copy of the files as they were before fixing is gone");
         }
+        let _ = std::fs::remove_file(Self::folders(cx)?.join("maybe-pressed.bin"));
         Ok(())
     }
 
@@ -892,6 +1052,63 @@ impl Reread for Disc {
             super::hash::hash_files(&refs, |_| {}, || cx2.stopped())
         })
         .await?
+    }
+
+    async fn repair(&self, cx: &Cx, dump: &drt_engine::Item, fixed: Option<&Fixing>, which: Ecc) -> Result<(Repairing, Vec<redump::Rom>)> {
+        use super::ecc;
+        use crate::map::Mark;
+        let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
+        let work = Self::folders(cx)?;
+        let name = main.file_name().unwrap_or_default().to_owned();
+        // The best copy there is: the last combination, if it's not in place yet.
+        if which == Ecc::ReadWrong && work.join("combined").join(&name).is_file() {
+            self.adopt(cx, dump).await?;
+        }
+        let keep = work.join("before-fix");
+        let aside = work.join("maybe-pressed.bin");
+        let reads = ecc::Reads {
+            rips: (1..).map(|n| work.join(format!("rip-{n}")).join(&name)).take_while(|c| c.is_file()).collect(),
+            same_every_time: fixed.map(|f| f.same_every_time.clone()).unwrap_or_default(),
+            read_differently: fixed.map(|f| f.read_differently.clone()).unwrap_or_default(),
+        };
+        let (cx2, m) = (cx.clone(), main.clone());
+        let (r, lines, done, left) = tokio::task::spawn_blocking(move || -> std::io::Result<(Repairing, Vec<String>, Vec<i64>, Vec<i64>)> {
+            if which == Ecc::PutBack {
+                let back = ecc::put_back(&m, &aside, &keep)?;
+                let line = format!(
+                    "error correction: put back as read, since the image with them repaired isn't Redump's: {} ({})",
+                    mismatch::sectors(back.len() as u64),
+                    back.iter().map(i64::to_string).collect::<Vec<_>>().join(", ")
+                );
+                return Ok((Repairing { repaired: back.len() as u64, ..Repairing::default() }, vec![line], vec![], back));
+            }
+            let found = ecc::look(&m, &reads, |p| cx2.progress(Some(p)), &|| cx2.stopped())?;
+            let pressed_too = which == Ecc::MaybePressed;
+            let take: Vec<&ecc::Found> = found.iter().filter(|f| f.repair.is_ok() && f.maybe_pressed == pressed_too).collect();
+            if pressed_too && !take.is_empty() {
+                ecc::keep_aside(&take, &aside)?;
+            }
+            let done = ecc::apply(&take, &keep)?;
+            let left = found.iter().map(ecc::Found::lba).filter(|l| !done.contains(l)).collect();
+            let mut r = ecc::summary(&found);
+            if pressed_too {
+                r = Repairing { repaired: done.len() as u64, ..Repairing::default() };
+            }
+            Ok((r, ecc::log_lines(&found, pressed_too), done, left))
+        })
+        .await??;
+        cx.progress(None);
+        for l in lines {
+            cx.log(l);
+        }
+        self.mark(done, Mark::Repaired);
+        self.mark(left, Mark::Wrong);
+        self.show_map(cx, dump, &main).await;
+        let roms = self.rehash(cx, dump).await?;
+        for r in &roms {
+            cx.log(format!("after error correction: <rom name=\"{}\" size=\"{}\" crc=\"{}\" md5=\"{}\" sha1=\"{}\" />", r.name, r.size, r.crc, r.md5, r.sha1));
+        }
+        Ok((r, roms))
     }
 }
 

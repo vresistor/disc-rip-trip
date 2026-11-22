@@ -415,10 +415,11 @@ impl game::Reread for Reread {
         cx.status(format!("Re-reading {bad} bad sectors"), "");
         cx.sleep(1500).await?;
         *self.fixed.lock().unwrap() = true;
-        let f = Fixing { bad, fixed: bad - 1, left: 1, left_at: vec![98_000], same: 0, tries, other_disc: false, verified: false };
+        let f = Fixing { bad, fixed: bad - 1, left: 1, left_at: vec![98_000], same: 0, tries, other_disc: false, verified: false, read_differently: vec![98_000], ..Fixing::default() };
         cx.log(format!("fix bad sectors: {bad} fail their own check; {} read right and put in place; sector 98000: no good copy in {tries} tries", bad - 1));
         // Still not Redump's: one sector left.
-        let roms = self.roms.iter().map(|r| if r.is_data() { redump::Rom { sha1: format!("f1ced000{}", &r.sha1[8..]), ..r.clone() } } else { r.clone() }).collect();
+        let roms: Vec<redump::Rom> = self.roms.iter().map(|r| if r.is_data() { redump::Rom { sha1: format!("f1ced000{}", &r.sha1[8..]), ..r.clone() } } else { r.clone() }).collect();
+        *self.last.lock().unwrap() = roms.clone();
         Ok((f, roms))
     }
 
@@ -476,6 +477,44 @@ impl game::Reread for Reread {
 
     async fn rehash(&self, _: &Cx, _: &Item) -> Result<Vec<redump::Rom>> {
         Ok(self.last.lock().unwrap().clone())
+    }
+
+    /// The disc's error correction: after a fix, it repairs the one sector
+    /// left, and the copy is Redump's; before one, it repairs all but 3 of
+    /// the first rip's bad sectors (form 2, with none), and it isn't. Its
+    /// map of the disc says which.
+    async fn repair(&self, cx: &Cx, dump: &Item, _fixed: Option<&Fixing>, which: game::Ecc) -> Result<(crate::real::mismatch::Repairing, Vec<redump::Rom>)> {
+        use crate::map::{Mark, SectorMap};
+        use crate::real::mismatch::Repairing;
+        cx.item(dump, ItemState::Busy, "repairing by the disc's error correction");
+        cx.sleep(600).await?;
+        if which != game::Ecc::ReadWrong {
+            return Ok((Repairing::default(), self.last.lock().unwrap().clone()));
+        }
+        let fixed = *self.fixed.lock().unwrap();
+        let bad = if fixed { 1 } else { RIP_BAD[0] };
+        let form2 = if fixed { 0 } else { 3 };
+        let r = Repairing { bad, repaired: bad - form2, form2, ..Repairing::default() };
+        let at = |k: u64| 98_000 + k * 731;
+        let mut found: Vec<(u64, Mark)> = (0..RIP_BAD[0]).map(|k| (at(k), if fixed { Mark::Recovered } else { Mark::Repaired })).collect();
+        found[0].1 = Mark::Repaired;
+        for f in found.iter_mut().rev().take(form2 as usize) {
+            f.1 = Mark::Wrong;
+        }
+        cx.map(serde_json::to_value(SectorMap::checked(200_000, &found, true)).ok());
+        let cat = redump::parse(GAME_DAT.as_bytes())?;
+        let theirs = cat.by_serial(dump.context().get(Subject::Disc, "serial").unwrap_or("")).first().map(|g| g.roms.clone()).unwrap_or_default();
+        let roms: Vec<redump::Rom> = self
+            .roms
+            .iter()
+            .map(|r| match theirs.iter().find(|t| t.is_data() && r.is_data()) {
+                Some(t) if fixed => redump::Rom { name: r.name.clone(), ..t.clone() },
+                _ if r.is_data() => redump::Rom { sha1: format!("ecc00000{}", &r.sha1[8..]), ..r.clone() },
+                _ => r.clone(),
+            })
+            .collect();
+        *self.last.lock().unwrap() = roms.clone();
+        Ok((r, roms))
     }
 }
 

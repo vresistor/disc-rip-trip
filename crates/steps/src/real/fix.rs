@@ -9,10 +9,12 @@
 //! [`combine::trust`]): its header names another address, or its EDC (and,
 //! where it has one, its ECC) doesn't fit its data.
 //!
-//! Nothing is ever repaired. A copy is put in place only when it was read
+//! Nothing is repaired here. A copy is put in place only when it was read
 //! from the disc and passes its own checks; a sector that never comes back
 //! so stays as it is, which is what copy protection needs, since some
-//! discs are pressed with sectors that fail on purpose. Before anything is
+//! discs are pressed with sectors that fail on purpose. (Putting a sector
+//! right by its own error correction is [`super::ecc`]'s, and Check's last
+//! resort.) Before anything is
 //! changed, a few sectors that read right the first time are read again
 //! and must come back the same: a different disc in the drive changes
 //! nothing. The image's files as they were are kept until Redump's
@@ -167,7 +169,8 @@ fn fill(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     Ok(n)
 }
 
-fn read_at(p: &Place) -> io::Result<Vec<u8>> {
+/// Sector `p` of the image, as it is on disk.
+pub fn read_at(p: &Place) -> io::Result<Vec<u8>> {
     let mut f = std::fs::File::open(&p.file)?;
     f.seek(SeekFrom::Start(p.offset))?;
     let mut s = vec![0u8; SECTOR];
@@ -181,8 +184,9 @@ pub enum Outcome {
     /// A copy that passes its checks came back on this try.
     Fixed { tries: u32 },
     /// None did in `tries`. `same` when every read gave back exactly the
-    /// image's copy: likely as pressed. `errors`: tries the drive refused.
-    Left { tries: u32, same: bool, errors: u32, last_error: Option<String> },
+    /// image's copy: likely as pressed. `differed` when one gave back other
+    /// bytes. `errors`: tries the drive refused.
+    Left { tries: u32, same: bool, differed: bool, errors: u32, last_error: Option<String> },
 }
 
 /// One bad sector: where, why it was bad, and what came of it.
@@ -199,7 +203,7 @@ pub struct Sector {
 /// EDC) is taken only when two reads agree. `before` is the image's copy.
 pub fn reread(source: &mut dyn Source, lba: i64, before: &[u8], tries: u32, stop: &dyn Fn() -> bool) -> io::Result<(Option<Vec<u8>>, Outcome)> {
     let (mut errors, mut last_error) = (0, None);
-    let mut same = true;
+    let (mut same, mut differed) = (true, false);
     let mut unchecked: Option<Vec<u8>> = None;
     for t in 1..=tries.max(1) {
         if stop() {
@@ -223,6 +227,7 @@ pub fn reread(source: &mut dyn Source, lba: i64, before: &[u8], tries: u32, stop
             }
         };
         same &= s == before;
+        differed |= s != before;
         match combine::trust(&s, lba, true) {
             Trust::Checked => return Ok((Some(s), Outcome::Fixed { tries: t })),
             Trust::Unchecked if unchecked.as_ref() == Some(&s) => return Ok((Some(s), Outcome::Fixed { tries: t })),
@@ -230,7 +235,7 @@ pub fn reread(source: &mut dyn Source, lba: i64, before: &[u8], tries: u32, stop
             Trust::Bad => {}
         }
     }
-    Ok((None, Outcome::Left { tries: tries.max(1), same, errors, last_error }))
+    Ok((None, Outcome::Left { tries: tries.max(1), same, differed, errors, last_error }))
 }
 
 /// What fixing came to.
@@ -424,7 +429,7 @@ pub fn log_lines(f: &Fixed, tries: u32) -> Vec<String> {
         out.push(format!("  read right on a later try, with the drive's cache cleared first, and put in place: {} ({})", later.len(), list(later)));
     }
     for s in f.left() {
-        if let Outcome::Left { tries: t, same, errors, last_error } = &s.outcome {
+        if let Outcome::Left { tries: t, same, errors, last_error, .. } = &s.outcome {
             let how = match (same, errors) {
                 (true, _) => "the same as the image's on every read, so it's left as it is (it may be pressed so)".to_owned(),
                 (false, 0) => "no read passed its check; left as it is".to_owned(),
@@ -574,7 +579,7 @@ pub(crate) mod tests {
         let mut f = fake(vec![(lba, vec![Ok(pressed.clone())])]);
         let (copy, o) = reread(&mut f, lba, &pressed, 10, &|| false).unwrap();
         assert_eq!(copy, None);
-        assert_eq!(o, Outcome::Left { tries: 10, same: true, errors: 0, last_error: None });
+        assert_eq!(o, Outcome::Left { tries: 10, same: true, differed: false, errors: 0, last_error: None });
         assert_eq!(f.reads.len(), 10);
         // Reads that fail or differ are left too, but not called the same.
         let mut f = fake(vec![(lba, vec![Ok(slipped(lba)), Err(io::Error::other("sense 3/11/05"))])]);
@@ -621,7 +626,7 @@ pub(crate) mod tests {
         assert_eq!(r.other_disc, None);
         assert_eq!(
             r.bad.iter().map(|s| (s.lba, s.outcome.clone())).collect::<Vec<_>>(),
-            [(5, Outcome::Fixed { tries: 2 }), (17, Outcome::Fixed { tries: 1 }), (30, Outcome::Left { tries: 4, same: true, errors: 0, last_error: None })]
+            [(5, Outcome::Fixed { tries: 2 }), (17, Outcome::Fixed { tries: 1 }), (30, Outcome::Left { tries: 4, same: true, differed: false, errors: 0, last_error: None })]
         );
         let now = std::fs::read(dir.join("G.bin")).unwrap();
         let mut want = disc.clone();

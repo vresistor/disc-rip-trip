@@ -51,74 +51,20 @@ const EDC_TABLE: [u32; 256] = {
     t
 };
 
-/// The ECC's tables: multiplying by 2 in GF(2^8), and its inverse (ECM's).
-const ECC_F: [u8; 256] = {
-    let mut t = [0u8; 256];
-    let mut i = 0;
-    while i < 256 {
-        t[i] = ((i << 1) ^ if i & 0x80 != 0 { 0x11D } else { 0 }) as u8;
-        i += 1;
-    }
-    t
-};
-const ECC_B: [u8; 256] = {
-    let mut t = [0u8; 256];
-    let mut i = 0;
-    while i < 256 {
-        t[i ^ ECC_F[i] as usize] = i as u8;
-        i += 1;
-    }
-    t
-};
-
 /// A sector's EDC over `data`.
 pub fn edc(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |c, &x| EDC_TABLE[((c ^ x as u32) & 0xFF) as usize] ^ (c >> 8))
 }
 
-/// One of the two ECC parity blocks (P or Q) over `src`, the sector from
-/// its header on, into `dest`.
-fn ecc_block(src: &[u8], major_count: usize, minor_count: usize, major_mult: usize, minor_inc: usize, dest: &mut [u8]) {
-    let size = major_count * minor_count;
-    for major in 0..major_count {
-        let mut index = (major >> 1) * major_mult + (major & 1);
-        let (mut a, mut b) = (0u8, 0u8);
-        for _ in 0..minor_count {
-            let x = src[index];
-            index += minor_inc;
-            if index >= size {
-                index -= size;
-            }
-            a ^= x;
-            b ^= x;
-            a = ECC_F[a as usize];
-        }
-        a = ECC_B[(ECC_F[a as usize] ^ b) as usize];
-        dest[major] = a;
-        dest[major + major_count] = a ^ b;
-    }
+/// Whether a sector's P and Q parity fit it (see [`super::ecc`]). A Mode
+/// 2 sector's are worked out with its header taken as zeros.
+pub fn ecc_ok(sec: &[u8], zero_header: bool) -> bool {
+    super::ecc::fits(sec, zero_header)
 }
 
-/// Where P and Q parity start in a sector.
-const P_AT: usize = 0x81C;
-const Q_AT: usize = 0x8C8;
-
-/// Whether a sector's P and Q parity fit it. A Mode 2 sector's are worked
-/// out with its header taken as zeros.
-pub fn ecc_ok(sec: &[u8], zero_header: bool) -> bool {
-    let mut b = [0u8; SECTOR - 12];
-    b.copy_from_slice(&sec[12..]);
-    if zero_header {
-        b[..4].fill(0);
-    }
-    let mut p = [0u8; 172];
-    ecc_block(&b, 86, 24, 2, 86, &mut p);
-    if p[..] != b[P_AT - 12..Q_AT - 12] {
-        return false;
-    }
-    let mut q = [0u8; 104];
-    ecc_block(&b, 52, 43, 86, 88, &mut q);
-    q[..] == b[Q_AT - 12..]
+/// Whether a sector starts with the sync pattern every data sector has.
+pub fn has_sync(sec: &[u8]) -> bool {
+    sec.len() >= 12 && sec[..12] == SYNC
 }
 
 fn bcd(v: u32) -> u8 {
@@ -459,18 +405,7 @@ pub(crate) mod tests {
 
     /// Writes P and Q parity, the header taken as zeros for Mode 2.
     fn parity(s: &mut [u8], zero_header: bool) {
-        let mut b = [0u8; SECTOR - 12];
-        b.copy_from_slice(&s[12..]);
-        if zero_header {
-            b[..4].fill(0);
-        }
-        let mut p = [0u8; 172];
-        ecc_block(&b, 86, 24, 2, 86, &mut p);
-        b[P_AT - 12..Q_AT - 12].copy_from_slice(&p);
-        let mut q = [0u8; 104];
-        ecc_block(&b, 52, 43, 86, 88, &mut q);
-        s[P_AT..Q_AT].copy_from_slice(&p);
-        s[Q_AT..].copy_from_slice(&q);
+        super::super::ecc::parity(s, zero_header);
     }
 
     fn image(secs: &[Vec<u8>]) -> Vec<u8> {

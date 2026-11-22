@@ -2764,6 +2764,66 @@ fn check_rips_again_and_combines_until_it_matches() {
     shot(&mut h, "step-check-combined-verified");
 }
 
+/// The disc's error correction, last of the ways to put a copy right:
+/// asked first, it repairs what it can and the copy still isn't Redump's,
+/// so it says so, not verified; after Fix bad sectors it repairs the one
+/// sector left, and the copy is Redump's. Rip's map of the disc marks each
+/// sector it repaired with a shape of its own.
+#[test]
+fn check_repairs_by_the_disc_s_error_correction_last() {
+    let held = |a: &App| a.m.snapshot(a.sel).steps["g_check"].items.first().is_some_and(|i| i.state == ItemState::Bad);
+    let start = |e: &Env| {
+        let mut reg = simulated(None);
+        reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+        let mut h = window_on(e, reg, true, 0.0, egui::vec2(1280.0, 1100.0), 1.0);
+        h.get_by_label_contains("Games, Ready").click();
+        h.run_steps(2);
+        let i = app(&h).sel;
+        app_mut(&mut h).m.set_param(i, "g_check", "if_no_match", Value::from("ask")).unwrap();
+        click(&mut h, "Start");
+        until(&mut h, "Check to hold the dump", held);
+        open_id(&mut h, "g_check");
+        h
+    };
+    let e = env();
+    let mut h = start(&e);
+    let options: Vec<String> = snap(&h).steps["g_check"].items[0].options.iter().map(|o| o.1.clone()).collect();
+    assert_eq!(options, ["Fix bad sectors", "Rip again and combine", "Repair with the disc's error correction", "Keep it anyway", "Skip this disc"], "last of the ways to put it right");
+    h.get_all_by_label_contains("Repair with the disc's error correction, ").next().expect("on the dump's row").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "the repair", |a| held(a) && a.m.snapshot(a.sel).steps["g_check"].detail.contains("repaired by error correction"));
+    h.run_steps(3);
+    assert_eq!(snap(&h).steps["g_check"].items[0].note, "Not verified: 137 sectors repaired by the disc's error correction");
+    h.get_by_label_contains("The disc's error correction was tried last, and this copy still doesn't match Redump's copy of SLES-04711.");
+    h.get_by_label("Repaired by error correction");
+    h.get_by_label("137 sectors put right by the error correction stored in each");
+    h.get_by_label("3 sectors with no error correction");
+    h.get_by_label_contains("It still doesn't match Redump's copy, so it isn't verified.");
+    shot(&mut h, "step-check-repaired-not-verified");
+    open_id(&mut h, "g_rip");
+    h.run_steps(3);
+    h.get_by_label_contains("137 repaired by error correction");
+    h.get_by_label_contains("Map of the disc: 199,860 good · 137 repaired by error correction · 3 came back wrong");
+    shot(&mut h, "games-rip-map-repaired");
+
+    let e = env();
+    let mut h = start(&e);
+    h.get_all_by_label_contains("Fix bad sectors, ").next().expect("on the dump's row").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "the fix", |a| held(a) && a.m.snapshot(a.sel).steps["g_check"].detail.contains("re-read"));
+    h.get_all_by_label_contains("Repair with the disc's error correction, ").next().expect("still offered, last").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "it to verify", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Verified");
+    open_id(&mut h, "g_check");
+    h.run_steps(3);
+    assert_eq!(snap(&h).steps["g_check"].items[0].note, "Verified: Lantern Keep (Europe) (Disc 1), 139 sectors re-read, 1 sector repaired by the disc's error correction");
+    h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now, with 1 sector repaired by the disc's error correction.");
+    shot(&mut h, "step-check-repaired-verified");
+    open_id(&mut h, "g_rip");
+    h.run_steps(3);
+    shot(&mut h, "games-rip-map-repaired-verified");
+}
+
 /// A Notify on Rip's path for when it needs you says so the moment Rip
 /// can't read the disc and holds it for you, once, in Rip's own words;
 /// and the canvas draws that path dashed.

@@ -276,14 +276,18 @@ async fn ripping_again_and_combining_until_it_matches_redump() {
     let s = until(&run, held).await;
     let item = s.steps["g_check"].items[0].clone();
     let labels = |i: &drt_engine::ItemView| i.options.iter().map(|o| o.1.clone()).collect::<Vec<_>>();
-    assert_eq!(labels(&item), ["Fix bad sectors", "Rip again and combine", "Keep it anyway", "Skip this disc"], "the drive reported nothing: Re-read bad parts can't help");
+    assert_eq!(
+        labels(&item),
+        ["Fix bad sectors", "Rip again and combine", "Repair with the disc's error correction", "Keep it anyway", "Skip this disc"],
+        "the drive reported nothing: Re-read bad parts can't help"
+    );
     let m: Mismatch = serde_json::from_value(s.steps["g_check"].record.report.clone().unwrap()).unwrap();
     assert!(m.reading[0].contains("Rip again and combine reads the whole disc again"), "{:?}", m.reading);
     run.send(Command::Retry { step: "g_check".into(), item: item.id.clone(), option: "combine".into() }).await;
     let s = until(&run, |s| held(s) && s.steps["g_check"].detail.starts_with("combined")).await;
     let c = &s.steps["g_check"];
     assert_eq!((c.status.as_str(), c.detail.as_str()), ("Doesn't match Redump", "combined from 2 rips, 4 sectors still bad"));
-    assert_eq!(labels(&c.items[0]), ["Rip again and combine again", "Keep the best combination (not verified)", "Skip this disc"]);
+    assert_eq!(labels(&c.items[0]), ["Rip again and combine again", "Repair with the disc's error correction", "Keep the best combination (not verified)", "Skip this disc"]);
     let m: Mismatch = serde_json::from_value(c.record.report.clone().unwrap()).unwrap();
     let comb = m.combined.as_ref().unwrap();
     assert_eq!((comb.rips.len(), comb.still_bad, comb.verified), (2, 4, false));

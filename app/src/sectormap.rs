@@ -8,7 +8,7 @@
 //! [`drt_steps::map`]).
 
 use crate::theme::{font, mix, tnum, Pal};
-use drt_steps::map::{cm, turn_line, where_line, Mark, SectorMap};
+use drt_steps::map::{cm, turn_line, where_line, Mark, SectorMap, KINDS};
 use egui::{pos2, vec2, Color32, Rect, RichText, Sense, Stroke, Ui};
 
 /// Blocks to a row, at most and at least.
@@ -23,13 +23,15 @@ const SCALE_W: f32 = 64.0;
 /// A mark's colour on the map. Each kind has a shape of its own too (see
 /// [`draw`]), so nothing rests on colour alone; and the colours are from
 /// Okabe and Ito's set, told apart with every common kind of colour
-/// blindness: blue for put right, orange for C2, vermilion for bad.
+/// blindness: blue for put right, bluish green for repaired by the disc's
+/// error correction, orange for C2, vermilion for bad.
 pub fn colour(m: Mark, p: &Pal) -> Color32 {
     match m {
         Mark::NotRead => p.line,
         // Most of a disc reads cleanly: quiet, so what didn't stands out.
         Mark::Good => mix(p.muted, if p.dark { 0.45 } else { 0.32 }, p.raised),
         Mark::Recovered => Color32::from_rgb(0x00, 0x72, 0xB2),
+        Mark::Repaired => Color32::from_rgb(0x00, 0x9E, 0x73),
         Mark::C2 => Color32::from_rgb(0xE6, 0x9F, 0x00),
         Mark::Wrong | Mark::Unreadable => Color32::from_rgb(0xD5, 0x5E, 0x00),
     }
@@ -37,8 +39,9 @@ pub fn colour(m: Mark, p: &Pal) -> Color32 {
 
 /// Draws one block (or a legend swatch) in `r`: a shape for each kind, so
 /// they're told apart without colour. Not read: an empty outline. Good: a
-/// quiet fill. Put right: filled, a hole in the middle. C2: half filled.
-/// Bad: filled, a cross through it.
+/// quiet fill. Put right: filled, a hole in the middle. Repaired by error
+/// correction: filled, one line across it corner to corner. C2: half
+/// filled. Bad: filled, a cross through it.
 pub fn draw(pt: &egui::Painter, r: Rect, m: Mark, p: &Pal) {
     let c = colour(m, p);
     let round = 2.0;
@@ -52,6 +55,11 @@ pub fn draw(pt: &egui::Painter, r: Rect, m: Mark, p: &Pal) {
         Mark::Recovered => {
             pt.rect_filled(r, round, c);
             pt.rect_filled(Rect::from_center_size(r.center(), r.size() * 0.42), 1.0, p.surface);
+        }
+        Mark::Repaired => {
+            pt.rect_filled(r, round, c);
+            let k = r.shrink(r.width() * 0.2);
+            pt.line_segment([k.left_bottom(), k.right_top()], Stroke::new((r.width() * 0.15).max(1.4), p.surface));
         }
         Mark::C2 => {
             pt.rect_stroke(r.shrink(0.5), round, Stroke::new(1.0, c), egui::StrokeKind::Inside);
@@ -73,6 +81,7 @@ fn word(m: Mark) -> &'static str {
         Mark::NotRead => "not read yet",
         Mark::Good => "good",
         Mark::Recovered => "recovered on a re-read",
+        Mark::Repaired => "repaired by error correction",
         Mark::C2 => "with C2 errors",
         Mark::Wrong => "came back wrong",
         Mark::Unreadable => "unreadable",
@@ -80,7 +89,7 @@ fn word(m: Mark) -> &'static str {
 }
 
 /// The legend's order: what's fine first, then what isn't.
-const ORDER: [Mark; 6] = [Mark::Good, Mark::Recovered, Mark::C2, Mark::Wrong, Mark::Unreadable, Mark::NotRead];
+const ORDER: [Mark; KINDS] = [Mark::Good, Mark::Recovered, Mark::Repaired, Mark::C2, Mark::Wrong, Mark::Unreadable, Mark::NotRead];
 
 fn thousands(n: u64) -> String {
     drt_steps::real::redumper::thousands(n)
@@ -88,7 +97,7 @@ fn thousands(n: u64) -> String {
 
 /// The counts in words: *268,850 good · 140 unreadable · 11 with C2
 /// errors*; only those there are.
-pub fn counts_line(c: &[u64; 6]) -> String {
+pub fn counts_line(c: &[u64; KINDS]) -> String {
     ORDER.iter().filter(|m| c[**m as usize] > 0).map(|m| format!("{} {}", thousands(c[*m as usize]), word(*m))).collect::<Vec<_>>().join(" · ")
 }
 
@@ -207,7 +216,7 @@ mod tests {
 
     #[test]
     fn the_legend_and_hover_say_only_what_there_is() {
-        let mut c = [0u64; 6];
+        let mut c = [0u64; KINDS];
         c[Mark::Good as usize] = 268_850;
         c[Mark::Unreadable as usize] = 140;
         c[Mark::C2 as usize] = 11;

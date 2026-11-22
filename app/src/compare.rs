@@ -5,7 +5,7 @@
 
 use crate::theme::{font, state_icon, tnum, Pal};
 use drt_engine::{StepState, StepView};
-use drt_steps::real::mismatch::{Combination, Fixing, Mismatch, Read};
+use drt_steps::real::mismatch::{Combination, Fixing, Mismatch, Read, Repairing};
 use egui::{pos2, vec2, Align2, RichText, Sense, Stroke, Ui};
 
 /// The comparison Check keeps in its record, if it held this dump.
@@ -31,10 +31,23 @@ pub fn check_say(v: &StepView) -> String {
     if v.status.starts_with("Re-reading ") && (v.status.ends_with(" bad sectors") || v.status.ends_with(" bad sector")) {
         return format!("{}: each is read again from the disc, on its own, and put in place only if the copy passes its own check.", v.status);
     }
+    if v.status == "Repairing with the disc's error correction" {
+        return "Last of all: each sector that still fails its own check is put right, where it can be, by the error-correction bytes stored in it. Only Redump's checksums can say the copy is right after that.".into();
+    }
+    let repaired = m.as_ref().and_then(|m| m.repaired.as_ref()).filter(|r| r.repaired > 0);
     if v.status.starts_with("Rip ") && v.status.contains(" of ") {
         return format!("{}: the whole disc is read again, to combine with the rips before, sector by sector. It stops as soon as the copy matches Redump's.", v.status);
     }
     match (v.status.as_str(), &m) {
+        ("Verified", Some(m)) if repaired.is_some() => format!(
+            "It matches Redump's copy of {} now, with {} repaired by the disc's error correction. Its size and all its checksums are Redump's.",
+            m.entry,
+            sectors(repaired.map_or(0, |r| r.repaired))
+        ),
+        ("Doesn't match Redump", Some(m)) if m.repaired.is_some() => {
+            format!("The disc's error correction was tried last, and this copy still doesn't match Redump's copy of {}. Below, what that came to.", m.serial)
+        }
+        ("Not verified", Some(m)) if m.repaired.is_some() => "The disc's error correction was tried last. Redump has no copy of this disc to compare with, so it can't be called verified.".into(),
         ("Verified", Some(m)) if fixed.is_some() && rips.is_some() => format!(
             "It matches Redump's copy of {} now: {} read again from the disc, then combined with {} more rip{}. Its size and all its checksums are Redump's.",
             m.entry,
@@ -254,6 +267,29 @@ fn fixing(ui: &mut Ui, p: &Pal, f: &Fixing) {
     }
 }
 
+/// What repairing by the disc's error correction came to. Only Redump's
+/// checksums verify: the sectors it put right get no mark unless they do.
+fn repairing(ui: &mut Ui, p: &Pal, r: &Repairing) {
+    heading(ui, p, "Repaired by error correction");
+    if r.repaired > 0 {
+        fact(ui, p, &format!("{} put right by the error correction stored in {}", sectors(r.repaired), if r.repaired == 1 { "it" } else { "each" }), "", r.verified.then_some(true));
+    } else {
+        fact(ui, p, "Nothing repaired", "", None);
+    }
+    if r.held_back > 0 {
+        fact(ui, p, &format!("{} left as read", sectors(r.held_back)), "every read the same: may be pressed so on purpose", None);
+    }
+    if r.unreadable > 0 {
+        fact(ui, p, &format!("{} never read", sectors(r.unreadable)), "nothing there to correct", Some(false));
+    }
+    if r.form2 > 0 {
+        fact(ui, p, &format!("{} with no error correction", sectors(r.form2)), "form 2 sectors have none", Some(false));
+    }
+    if r.beyond > 0 {
+        fact(ui, p, &format!("{} beyond repair", sectors(r.beyond)), "too damaged, or read with the wrong address", Some(false));
+    }
+}
+
 /// Each rip, and what combining them came to.
 fn rips(ui: &mut Ui, p: &Pal, m: &Mismatch, c: &Combination) {
     heading(ui, p, "Rips");
@@ -292,6 +328,9 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
         if let Some(c) = &m.combined {
             rips(ui, p, m, c);
         }
+        if let Some(r) = &m.repaired {
+            repairing(ui, p, r);
+        }
         if let Some(r) = &m.read {
             read(ui, p, r, m.combined.is_some() || m.fixed.is_some(), m.fixed.as_ref().filter(|f| !f.other_disc && f.bad > 0).map(|f| f.bad));
         }
@@ -328,6 +367,9 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &Mismatch) {
     }
     if let Some(c) = &m.combined {
         rips(ui, p, m, c);
+    }
+    if let Some(r) = &m.repaired {
+        repairing(ui, p, r);
     }
     if let Some(r) = &m.read {
         read(ui, p, r, m.combined.is_some() || m.fixed.is_some(), m.fixed.as_ref().filter(|f| !f.other_disc && f.bad > 0).map(|f| f.bad));

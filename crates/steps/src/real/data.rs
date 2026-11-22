@@ -840,7 +840,7 @@ impl Step for Check {
             cx.status(status, detail);
             // A game Redump has under its serial, but not with this hash: suspect, held for you.
             let dump = if found.is_none() {
-                let reread = super::game::Disc { rip: self.rip.clone(), source: self.source.clone() };
+                let reread = super::game::Disc::new(self.rip.clone(), self.source.clone());
                 super::game::hold_if_suspect(&cx, dump, &roms, looked > 0 && failed.is_empty(), &reread).await?
             } else {
                 Some(dump)

@@ -70,8 +70,10 @@ C, as built. The step's display name is *Check and fix*. Its id stays
   re-reads). Check and fix is the same kind of step for an image.
 
 With *Try to fix it by itself* (the default), it fixes bad sectors, then
-rips again and combines, up to *Extra rips*, stopping as soon as the copy
-matches Redump. Then it asks. With *Ask me*, those actions are buttons.
+rips again and combines, up to *Extra rips*, then, last, repairs what
+sectors it can by the disc's own error correction, stopping as soon as
+the copy matches Redump. Then it asks. With *Ask me*, those actions are
+buttons, the error correction last.
 
 ## Consequences
 
@@ -80,6 +82,13 @@ matches Redump. Then it asks. With *Ask me*, those actions are buttons.
   lane, and none opens the tray.
 - Verified still means one thing only. The final files, read again from
   disk, match Redump's entry on size, CRC-32, MD5 and SHA-1.
+- **Repair by error correction is the last resort** (22 November 2026).
+  It writes bytes no read gave back, so it comes after every way of
+  reading the disc again, and only Redump can verify what it makes.
+  Sectors that may be pressed bad on purpose (every read the same, or
+  read once) are repaired only to see whether the copy then matches
+  Redump, and put back as read if it doesn't. See `docs/audio-accuracy.md`,
+  *Game and data discs*.
 - **Not built yet:** re-reading the sectors that can't check themselves.
   These are the Mode 2 Form 2 sectors stored with an EDC of 0, which only
   their address checks, so a misread one passes every check.
