@@ -680,9 +680,13 @@ pub struct StateScan {
     at: u64,
 }
 
-/// How far behind the drive a read is looked at again: what redumper read
-/// there may still be on its way to the file.
-const UNSETTLED: u64 = 600;
+/// How far behind the drive a sector not in the file yet may still be
+/// coming: redumper flushes each sector's states as it writes them
+/// (`write_entry`, `utils/file_io.ixx`), and writes none for a sector it
+/// couldn't read, so one past the file's end that the drive is well past
+/// couldn't be read; the one it's on, and the one before, may be on
+/// their way.
+const UNSETTLED: u64 = 2;
 
 impl StateScan {
     /// The `.state` of `t`'s dump, the disc `sectors` long, read at
@@ -700,16 +704,16 @@ impl StateScan {
     /// A read of the disc through, the drive now at `at` of `of`: what's
     /// been read since the last look. `done` once the read has ended,
     /// when what it couldn't read is surely so.
-    pub fn read_to(&mut self, at: u64, of: u64, done: bool) -> std::io::Result<()> {
-        self.sectors.grow(of);
+    pub fn read_to(&mut self, at: u64, _of: u64, done: bool) -> std::io::Result<()> {
+        // The disc as long as it was first said to be: the read goes a
+        // sector or so on into the lead-out, which isn't the disc.
         self.at = self.at.max(at).min(self.sectors.len());
         let from = self.settled;
         let to = self.at;
         if to > from {
             self.look(from, to, |m, lba, end| match m {
-                // Not on disk yet, or not yet written so near the drive.
-                None if !done => crate::map::Mark::NotRead,
-                Some(crate::map::Mark::Unreadable) if !done && lba + UNSETTLED >= end => crate::map::Mark::NotRead,
+                // Past what's written, right by the drive: may be on its way.
+                None if !done && lba + UNSETTLED >= end => crate::map::Mark::NotRead,
                 None => crate::map::Mark::Unreadable,
                 Some(m) => m,
             })?;
@@ -1596,9 +1600,10 @@ mod tests {
         let dir = std::env::current_dir().unwrap().join("../../target/drt-test/state-scan");
         std::fs::create_dir_all(&dir).unwrap();
         let t = Target { dir: dir.clone(), name: "D".into() };
-        // Read as far as 1,500 of 2,000, at +103: 100 unreadable, 200 with
-        // a C2 error, 1,400 zeros not yet written so near the drive.
-        let mut marks = vec![4u8; 1_500];
+        // Written as far as 1,490, the drive at 1,500 of 2,000, at +103:
+        // 100 and 1,400 unreadable, 200 with a C2 error; 1,490 to 1,497
+        // not written, the drive past them; 1,498 and 1,499 may be coming.
+        let mut marks = vec![4u8; 1_490];
         marks[100] = 0;
         marks[200] = 1;
         marks[1_400] = 0;
@@ -1606,18 +1611,18 @@ mod tests {
         let mut s = StateScan::new(&t, 2_000, 103, true);
         s.read_to(1_500, 2_000, false).unwrap();
         assert_eq!([s.sectors.get(99), s.sectors.get(100), s.sectors.get(101), s.sectors.get(200)], [Mark::Good, Mark::Unreadable, Mark::Good, Mark::C2]);
-        assert_eq!((s.sectors.get(1_400), s.sectors.get(1_500), s.sectors.get(1_999)), (Mark::NotRead, Mark::NotRead, Mark::NotRead));
+        assert_eq!((s.sectors.get(1_400), s.sectors.get(1_497), s.sectors.get(1_498)), (Mark::Unreadable, Mark::Unreadable, Mark::NotRead));
         let m = s.map(true);
-        assert_eq!((m.total(Mark::Unreadable), m.total(Mark::C2), m.total(Mark::NotRead)), (1, 1, 501));
+        assert_eq!((m.total(Mark::Unreadable), m.total(Mark::C2), m.total(Mark::NotRead)), (10, 1, 502));
         assert_eq!(m.at, Some(1_500));
-        // Read to its end: 1,400 was written good after all; the rest,
-        // never written, couldn't be read.
-        marks[1_400] = 4;
-        marks.extend([4u8; 400]);
+        // Read to its end, and a sector on into the lead-out, which isn't
+        // the disc: 1,498 and on written good.
+        marks.extend([0u8; 8]);
+        marks.extend([4u8; 503]);
         state_file(&t.file("state"), &marks, 103);
-        s.read_to(1_900, 2_000, false).unwrap();
-        s.read_to(2_000, 2_000, true).unwrap();
-        assert_eq!((s.sectors.get(1_400), s.sectors.get(1_950)), (Mark::Good, Mark::Unreadable));
+        s.read_to(1_900, 2_001, false).unwrap();
+        s.read_to(2_001, 2_001, true).unwrap();
+        assert_eq!((s.sectors.get(1_498), s.sectors.get(1_999), s.sectors.len()), (Mark::Good, Mark::Good, 2_000));
         // A re-read: 100 comes back; 200 doesn't.
         marks[100] = 4;
         state_file(&t.file("state"), &marks, 103);
@@ -1626,7 +1631,7 @@ mod tests {
         // A scan begun at the re-read reads the disc whole first.
         let mut fresh = StateScan::new(&t, 2_000, 103, true);
         fresh.reread(200, 2_000, false).unwrap();
-        assert_eq!((fresh.sectors.get(100), fresh.sectors.get(200), fresh.sectors.get(1_950)), (Mark::Good, Mark::C2, Mark::Unreadable));
+        assert_eq!((fresh.sectors.get(100), fresh.sectors.get(200), fresh.sectors.get(1_492)), (Mark::Good, Mark::C2, Mark::Unreadable));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

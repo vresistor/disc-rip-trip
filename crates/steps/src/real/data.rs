@@ -431,7 +431,7 @@ impl MapWatch {
     /// last progress line is a sector short of it).
     fn ended(&mut self, completed: bool) -> std::io::Result<()> {
         if completed && !self.rereading {
-            self.at.0 = self.at.1;
+            self.at.0 = self.scan.as_ref().map_or(self.at.1, |s| s.sectors.len());
         }
         self.look(false)
     }
@@ -1088,16 +1088,20 @@ mod tests {
         let t = redumper::Target { dir: dir.clone(), name: "D".into() };
         let mut disc = Item::new(DUMP, ItemKind::Dump, "D", None, None);
         disc.context_mut().add(Subject::Disc, "media", "CD", "the disc");
-        // Read through to the end of 2,000 sectors, 100 unreadable; the
-        // last progress line a sector short of the end.
-        let mut marks = vec![4u8; 2_000];
+        // Read through to the end of 2,000 sectors, 100 unreadable, and a
+        // sector on into the lead-out (zeros), as a real read ends:
+        // `2000/2001`.
+        let mut marks = vec![4u8; 2_001];
         marks[100] = 0;
+        marks[2_000] = 0;
         state_at_103(&t.file("state"), &marks);
         let dump = ["dump".to_owned(), "--drive-read-offset=103".into()];
         let mut m = MapWatch::new(&disc, &t, &dump).unwrap();
         m.at = (1_999, 2_000);
         m.look(true).unwrap();
-        assert_eq!(m.map(true).unwrap().at, Some(1_999));
+        m.at = (2_000, 2_001);
+        m.look(true).unwrap();
+        assert_eq!(m.map(true).unwrap().at, Some(2_000));
         m.ended(true).unwrap();
         let read = m.map(false).unwrap();
         assert_eq!((read.total(Mark::Good), read.total(Mark::Unreadable), read.total(Mark::NotRead), read.at), (1_999, 1, 0, None));

@@ -334,8 +334,13 @@ pub fn combined(rip: Option<SectorMap>, wrong: &[u64], check: Option<SectorMap>)
         }
         (Some(mut c), Some(m)) => {
             let bad: std::collections::BTreeSet<u64> = each(&c.runs).collect();
+            let fixed: std::collections::BTreeSet<u64> = each(&c.recovered).collect();
             let back: Vec<(u64, Mark)> = each(&m.recovered).filter(|l| !bad.contains(l)).map(|l| (l, Mark::Recovered)).collect();
             c.overlay(&back);
+            // Found wrong by Rip's check, unless Check has put them right.
+            if !c.checks_only {
+                c.overlay(&wrong.iter().filter(|l| !fixed.contains(l)).map(|l| (*l, Mark::Wrong)).collect::<Vec<_>>());
+            }
             Some(c)
         }
         (c, m) => c.or(m),
@@ -698,10 +703,12 @@ mod tests {
         assert_eq!((m.total(Mark::Unreadable), m.total(Mark::Recovered), m.total(Mark::Wrong)), (2, 2, 0));
         // Check read the disc again itself: its map, with where Rip's
         // re-read brought sectors back, unless Check finds them bad.
-        let again = sectors(10_000, &[(3, Mark::C2)]).map(None, true);
-        let m = combined(Some(rip.clone()), &[], Some(again)).unwrap();
-        assert_eq!((m.total(Mark::Unreadable), m.total(Mark::Recovered), m.total(Mark::C2)), (0, 1, 1));
-        assert_eq!(m.recovered, [Run { from: 2, to: 2 }]);
+        let again = sectors(10_000, &[(3, Mark::C2), (60, Mark::Recovered)]).map(None, true);
+        let m = combined(Some(rip.clone()), &[50, 60], Some(again)).unwrap();
+        assert_eq!((m.total(Mark::Unreadable), m.total(Mark::Recovered), m.total(Mark::C2)), (0, 2, 1));
+        assert_eq!(m.recovered, [Run { from: 2, to: 2 }, Run { from: 60, to: 60 }]);
+        // What Rip's check found wrong stays so, but not where Check put it right.
+        assert_eq!(m.runs, [Run { from: 3, to: 3 }, Run { from: 50, to: 50 }]);
         // Neither, or only one.
         assert_eq!(combined(None, &[], None), None);
         assert_eq!(combined(Some(rip.clone()), &[], None), Some(rip));
