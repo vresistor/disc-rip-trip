@@ -494,7 +494,16 @@ async fn repair_all<'a>(
     note_hashes(dump, &roms);
     let mut entry = matched(cx, cat, &roms);
     if entry.is_none() && listed && r.held_back > 0 {
-        let (more, roms) = reread.repair(cx, dump, fixed, Ecc::MaybePressed).await?;
+        let (more, roms) = match reread.repair(cx, dump, fixed, Ecc::MaybePressed).await {
+            Ok(done) => done,
+            // Stopped or failed partway: put them back as read before saying so.
+            Err(e) => {
+                if let Err(back) = reread.repair(cx, dump, fixed, Ecc::PutBack).await {
+                    cx.log(format!("error correction: putting back the sectors that may be pressed so: {back}"));
+                }
+                return Err(e);
+            }
+        };
         note_hashes(dump, &roms);
         entry = matched(cx, cat, &roms);
         if entry.is_some() {
@@ -633,6 +642,8 @@ pub async fn hold(
                     dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
                 }
                 fixed = Some(f.clone());
+                // What the re-reads found may settle sectors a repair held back.
+                repaired = None;
                 if f.fixed == 0 {
                     continue;
                 }
@@ -734,12 +745,8 @@ pub async fn hold(
                     }
                     continue;
                 };
-                if let Some(f) = fixed.as_mut() {
-                    f.verified = true;
-                }
-                if let Some(c) = combined.as_mut() {
-                    c.verified = true;
-                }
+                // The copy is Redump's with the repairs: what came before
+                // them, a fix or a combination, wasn't by itself.
                 reread.settled(cx, &dump).await?;
                 let name = entry.name.clone();
                 dump.context_mut().add(Subject::Disc, "name", name.clone(), "Redump");
@@ -1068,7 +1075,7 @@ impl Reread for Disc {
         let aside = work.join("maybe-pressed.bin");
         let reads = ecc::Reads {
             rips: (1..).map(|n| work.join(format!("rip-{n}")).join(&name)).take_while(|c| c.is_file()).collect(),
-            same_every_time: fixed.map(|f| f.same_every_time.clone()).unwrap_or_default(),
+            read_alike: fixed.map(|f| f.read_alike.clone()).unwrap_or_default(),
             read_differently: fixed.map(|f| f.read_differently.clone()).unwrap_or_default(),
         };
         let (cx2, m) = (cx.clone(), main.clone());

@@ -184,9 +184,10 @@ pub enum Outcome {
     /// A copy that passes its checks came back on this try.
     Fixed { tries: u32 },
     /// None did in `tries`. `same` when every read gave back exactly the
-    /// image's copy: likely as pressed. `differed` when one gave back other
-    /// bytes. `errors`: tries the drive refused.
-    Left { tries: u32, same: bool, differed: bool, errors: u32, last_error: Option<String> },
+    /// image's copy: likely as pressed. `alike`: reads that gave back the
+    /// image's copy; `differed` when one gave back other bytes. `errors`:
+    /// tries the drive refused.
+    Left { tries: u32, same: bool, alike: u32, differed: bool, errors: u32, last_error: Option<String> },
 }
 
 /// One bad sector: where, why it was bad, and what came of it.
@@ -203,7 +204,7 @@ pub struct Sector {
 /// EDC) is taken only when two reads agree. `before` is the image's copy.
 pub fn reread(source: &mut dyn Source, lba: i64, before: &[u8], tries: u32, stop: &dyn Fn() -> bool) -> io::Result<(Option<Vec<u8>>, Outcome)> {
     let (mut errors, mut last_error) = (0, None);
-    let (mut same, mut differed) = (true, false);
+    let (mut same, mut alike, mut differed) = (true, 0, false);
     let mut unchecked: Option<Vec<u8>> = None;
     for t in 1..=tries.max(1) {
         if stop() {
@@ -228,6 +229,7 @@ pub fn reread(source: &mut dyn Source, lba: i64, before: &[u8], tries: u32, stop
         };
         same &= s == before;
         differed |= s != before;
+        alike += u32::from(s == before);
         match combine::trust(&s, lba, true) {
             Trust::Checked => return Ok((Some(s), Outcome::Fixed { tries: t })),
             Trust::Unchecked if unchecked.as_ref() == Some(&s) => return Ok((Some(s), Outcome::Fixed { tries: t })),
@@ -235,7 +237,7 @@ pub fn reread(source: &mut dyn Source, lba: i64, before: &[u8], tries: u32, stop
             Trust::Bad => {}
         }
     }
-    Ok((None, Outcome::Left { tries: tries.max(1), same, differed, errors, last_error }))
+    Ok((None, Outcome::Left { tries: tries.max(1), same, alike, differed, errors, last_error }))
 }
 
 /// What fixing came to.
@@ -579,7 +581,7 @@ pub(crate) mod tests {
         let mut f = fake(vec![(lba, vec![Ok(pressed.clone())])]);
         let (copy, o) = reread(&mut f, lba, &pressed, 10, &|| false).unwrap();
         assert_eq!(copy, None);
-        assert_eq!(o, Outcome::Left { tries: 10, same: true, differed: false, errors: 0, last_error: None });
+        assert_eq!(o, Outcome::Left { tries: 10, same: true, alike: 10, differed: false, errors: 0, last_error: None });
         assert_eq!(f.reads.len(), 10);
         // Reads that fail or differ are left too, but not called the same.
         let mut f = fake(vec![(lba, vec![Ok(slipped(lba)), Err(io::Error::other("sense 3/11/05"))])]);
@@ -626,7 +628,7 @@ pub(crate) mod tests {
         assert_eq!(r.other_disc, None);
         assert_eq!(
             r.bad.iter().map(|s| (s.lba, s.outcome.clone())).collect::<Vec<_>>(),
-            [(5, Outcome::Fixed { tries: 2 }), (17, Outcome::Fixed { tries: 1 }), (30, Outcome::Left { tries: 4, same: true, differed: false, errors: 0, last_error: None })]
+            [(5, Outcome::Fixed { tries: 2 }), (17, Outcome::Fixed { tries: 1 }), (30, Outcome::Left { tries: 4, same: true, alike: 4, differed: false, errors: 0, last_error: None })]
         );
         let now = std::fs::read(dir.join("G.bin")).unwrap();
         let mut want = disc.clone();

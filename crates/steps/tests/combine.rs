@@ -624,7 +624,8 @@ async fn asked_first_a_sector_read_once_is_repaired_only_because_redump_then_mat
 async fn by_itself_a_pressed_sector_on_a_disc_redump_doesnt_have_is_never_repaired() {
     let base = base("ecc-unlisted");
     let first = disc1(&[(3, misread(0)), (7, pressed())]);
-    let drive = reads(disc1(&[(7, pressed())]), vec![(3, (4..14).map(misread).collect()), (7, vec![pressed()])]);
+    // Sector 7 slips once among its re-reads: two reads alike still say pressed.
+    let drive = reads(disc1(&[(7, pressed())]), vec![(3, (4..14).map(misread).collect()), (7, vec![pressed(), form1(6), pressed()])]);
     let (run, _e) = start_disc(&base, &disc1(&[]), &first, vec![], false, "fix", drive);
     let s = asks(&run).await;
     let check = &s.steps["check"];

@@ -115,10 +115,22 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
         let col = if *mk == Mark::NotRead { mix(p.line, 0.7, body) } else { colour(*mk, p) };
         band(pt, px(*a) - 0.3, px(*b) + 0.3, col, 0.0);
     }
-    let mut loud: Vec<&(f64, f64, Mark)> = spans.iter().filter(|s| least_width(s.2) > 0.0).collect();
-    loud.sort_by_key(|s| Mark::ALL.iter().position(|m| *m == s.2));
-    for (a, b, mk) in loud {
-        ring(pt, *a, *b, colour(*mk, p), least_width(*mk));
+    // Each ring with something not read cleanly, as strong as how much of
+    // it: a few sectors put right on a ring are a tint, a ring of sectors
+    // that can't be read is solid. What's still bad never fades out of
+    // sight; what was put right stays quiet.
+    let mut loud: Vec<&Ring> = rings.iter().filter(|r| !r.spot && least_width(r.mark) > 0.0).collect();
+    loud.sort_by_key(|r| Mark::ALL.iter().position(|m| *m == r.mark));
+    for r in loud {
+        let all: u32 = r.counts.iter().sum::<u32>().max(1);
+        let share = r.counts[r.mark as usize] as f32 / all as f32;
+        let (floor, top) = match r.mark {
+            Mark::Wrong | Mark::Unreadable => (0.6, 1.0),
+            Mark::C2 => (0.4, 0.9),
+            _ => (0.18, 0.55),
+        };
+        let strength = (share * 25.0).clamp(floor, top);
+        ring(pt, r.inner, r.outer, colour(r.mark, p).gamma_multiply(strength), least_width(r.mark));
     }
     // A spot's ring: dashes in a channel of blank disc, so they show
     // against rings of their own colour too.

@@ -313,11 +313,12 @@ pub struct Fixing {
     pub other_disc: bool,
     /// Its checksums are Redump's.
     pub verified: bool,
-    /// Every sector left whose reads, all that came back, gave the image's
-    /// own copy each time: it may be pressed so.
+    /// Every sector left that a re-read gave back the image's own copy of,
+    /// whatever other reads gave: two reads alike, so it may be pressed so.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub same_every_time: Vec<i64>,
-    /// Every sector left of which a read gave back other bytes: read wrong.
+    pub read_alike: Vec<i64>,
+    /// Every sector left whose re-reads all gave back other bytes than the
+    /// image's, or none: read wrong.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_differently: Vec<i64>,
 }
@@ -334,8 +335,8 @@ impl Fixing {
             tries,
             other_disc: f.other_disc.is_some(),
             verified: false,
-            same_every_time: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { differed: false, errors, tries, .. } if errors < tries)).map(|s| s.lba).collect(),
-            read_differently: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { differed: true, .. })).map(|s| s.lba).collect(),
+            read_alike: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { alike, .. } if alike > 0)).map(|s| s.lba).collect(),
+            read_differently: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { alike: 0, differed: true, .. })).map(|s| s.lba).collect(),
         }
     }
 

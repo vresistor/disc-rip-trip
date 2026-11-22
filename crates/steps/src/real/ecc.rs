@@ -314,8 +314,8 @@ pub struct Reads {
     /// Every rip of the disc, by its cue sheet, first to last (`rip-1`
     /// on); none when it's been ripped only once.
     pub rips: Vec<PathBuf>,
-    /// Sectors whose every re-read gave back the image's copy.
-    pub same_every_time: Vec<i64>,
+    /// Sectors a re-read gave back the image's copy of.
+    pub read_alike: Vec<i64>,
     /// Sectors a re-read gave back other bytes of.
     pub read_differently: Vec<i64>,
 }
@@ -337,10 +337,12 @@ pub fn look(cue: &Path, reads: &Reads, progress: impl FnMut(f32), stop: &dyn Fn(
         let mut same = if copies.is_empty() { 1 } else { copies.iter().filter(|c| **c == before).count() };
         let mut differed = copies.iter().any(|c| *c != before);
         // Re-reads were of the first rip's copy, as fixing left it.
-        if copies.first().is_none_or(|c| *c == before) && reads.same_every_time.contains(&lba) {
+        if copies.first().is_none_or(|c| *c == before) && reads.read_alike.contains(&lba) {
             same = same.max(1) + 1;
         }
         differed |= reads.read_differently.contains(&lba);
+        // Two reads alike outweigh any that differ: a pressed sector can be
+        // misread too.
         let repair = repair(&before, lba);
         out.push(Found { place, before, repair, same_reads: same, maybe_pressed: same >= 2 || !differed });
     }
@@ -637,6 +639,38 @@ pub(crate) mod tests {
         let mut s = good1.clone();
         s[14] ^= 0x40;
         assert_eq!(repair(&s, lba).map(|r| r.sector), Ok(good1));
+    }
+
+    /// Real misreads: each sector where a real rip differs from the same
+    /// disc's Redump-verified image is handed to [`repair`]; what it puts
+    /// right must be the verified sector, byte for byte.
+    /// `DRT_ECC_BIN=<verified .bin> DRT_ECC_RIPS=<rip .bin>:<rip .bin> cargo test --release -p drt-steps ecc::tests::real_misreads -- --ignored --exact --nocapture`
+    #[test]
+    #[ignore]
+    fn real_misreads() {
+        use std::io::Read;
+        let good = std::env::var("DRT_ECC_BIN").expect("DRT_ECC_BIN");
+        for rip in std::env::var("DRT_ECC_RIPS").expect("DRT_ECC_RIPS").split(':') {
+            let mut g = std::io::BufReader::new(std::fs::File::open(&good).unwrap());
+            let mut r = std::io::BufReader::new(std::fs::File::open(rip).unwrap());
+            let (mut a, mut b) = (vec![0u8; SECTOR], vec![0u8; SECTOR]);
+            let mut lba = 0i64;
+            let mut tally: std::collections::BTreeMap<String, u64> = Default::default();
+            while g.read_exact(&mut a).is_ok() && r.read_exact(&mut b).is_ok() {
+                if a != b {
+                    let what = match repair(&b, lba) {
+                        Ok(x) => {
+                            assert_eq!(x.sector, a, "sector {lba} of {rip}: repaired into something else");
+                            "repaired, the verified sector byte for byte".to_owned()
+                        }
+                        Err(e) => format!("{e:?}"),
+                    };
+                    *tally.entry(what).or_default() += 1;
+                }
+                lba += 1;
+            }
+            println!("{rip}: {tally:?}");
+        }
     }
 
     /// Every form 1 sector of a real, Redump-verified PlayStation image:
