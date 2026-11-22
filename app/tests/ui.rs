@@ -26,6 +26,8 @@ struct Env {
     tests_sent: Arc<Mutex<Vec<(bool, String, String)>>>,
     /// Each drive whose tray was opened.
     trays: Arc<Mutex<Vec<String>>>,
+    /// Each alert Notify sent the moment something needed you.
+    alerts: Arc<Mutex<Vec<(drt_app::model::AlertTo, String, String)>>>,
 }
 
 fn env() -> Env {
@@ -37,6 +39,7 @@ fn env() -> Env {
         picked_from: Arc::default(),
         tests_sent: Arc::default(),
         trays: Arc::default(),
+        alerts: Arc::default(),
     }
 }
 
@@ -88,6 +91,13 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
         connected: {
             let plugged = e.plugged.clone();
             Arc::new(move || plugged.lock().unwrap().clone())
+        },
+        alert: {
+            let alerts = e.alerts.clone();
+            Arc::new(move |to, title, body| {
+                alerts.lock().unwrap().push((to, title, body));
+                Box::pin(async { Ok(()) })
+            })
         },
         // Nothing goes out: a server named *down* can't be reached.
         send_test: {
@@ -2762,6 +2772,46 @@ fn check_rips_again_and_combines_until_it_matches() {
     h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now, combined from 3 rips.");
     h.get_by_label("Combined: matches Redump");
     shot(&mut h, "step-check-combined-verified");
+}
+
+/// A Notify set to say so at once does, the moment Rip can't read the
+/// disc: on this computer and to its own ntfy topic, once; and still at
+/// the end.
+#[test]
+fn notify_says_at_once_when_rip_needs_you() {
+    use drt_app::model::AlertTo;
+    let e = env();
+    let mut all = recipes::all();
+    for r in all.iter_mut().filter(|r| r.name == "Games") {
+        let root = std::mem::replace(&mut r.root, Node::step("x", "x"));
+        r.root = drt_engine::recipe::chain([
+            root,
+            Node::step("g_tell", "tell").with("when", drt_steps::real::tell::AS_SOON).with("ntfy_topic", "rip-test-topic").with("ntfy_server", "https://ntfy.example.org"),
+        ]);
+    }
+    Store::new(e.dir.path().join("config")).save_recipes(&all).unwrap();
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
+    let mut h = window_on(&e, reg, true, 1.0, egui::vec2(1280.0, 720.0), 1.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    until(&mut h, "Rip to need you", |a| a.m.snapshot(a.sel).steps["g_rip"].items.first().is_some_and(|i| i.state == ItemState::Bad));
+    let start = Instant::now();
+    while e.alerts.lock().unwrap().len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        h.run_steps(1);
+    }
+    h.run_steps(5);
+    let sent = e.alerts.lock().unwrap().clone();
+    let line = "SLES_147.11: Rip couldn't read 771 sectors";
+    assert_eq!(
+        sent,
+        [
+            (AlertTo::Desktop, "Needs you".to_owned(), line.to_owned()),
+            (AlertTo::Ntfy { server: "https://ntfy.example.org".into(), topic: "rip-test-topic".into() }, "Needs you".to_owned(), "A disc: Rip couldn't read 771 sectors".to_owned()),
+        ],
+        "once to each, and a volume label never to ntfy"
+    );
 }
 
 /// A disc the drive can't read in places: the read crawling, the re-read

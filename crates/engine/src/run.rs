@@ -396,6 +396,13 @@ impl Run {
         self.shared.context.lock().unwrap().clone()
     }
 
+    /// [`Run::context`] for something that outlives this handle: a watcher
+    /// of the run on another task.
+    pub fn context_source(&self) -> impl Fn() -> Context + Send + Sync + 'static {
+        let shared = self.shared.clone();
+        move || shared.context.lock().unwrap().clone()
+    }
+
     /// This run's working folder; it exists once a step has used it.
     pub fn work(&self) -> &std::path::Path {
         &self.shared.work

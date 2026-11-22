@@ -21,21 +21,27 @@ use drt_engine::{Context, Cx, Group, Inlet, Item, ItemKind, Outlet, ParamSpec, S
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-pub const WHEN: &[&str] = &["Always", "Only when something needs you", "Never"];
+pub const WHEN: &[&str] = &["Always", "Only when something needs you", AS_SOON, "Never"];
+/// Said the moment a step stops to wait for you or fails, as well as
+/// after every disc. Not a wire: the window watches the run and sends for
+/// each such Notify ([`moments`]).
+pub const AS_SOON: &str = "As soon as something needs you";
 const APP: &str = "Disc Rip Trip";
 
 pub fn info() -> StepInfo {
     StepInfo::new("tell", "Notify", Group::Tell, ItemKind::Any, ItemKind::Nothing)
         .from("when all done")
-        .param(ParamSpec::new("when", "When", ParamKind::Choice(WHEN)).default(WHEN[0]).labels(&["After every disc", "Only if it needed you or something isn't right", "Never"]).on_card_as(
-            "When",
-            &[],
-            |g| match g("when").and_then(|v| v.as_str().map(str::to_owned)).as_deref() {
-                Some(w) if w == WHEN[1] => "when it needs you".into(),
-                Some(w) if w == WHEN[2] => "never".into(),
-                _ => "always".into(),
-            },
-        ))
+        .param(
+            ParamSpec::new("when", "When", ParamKind::Choice(WHEN))
+                .default(WHEN[0])
+                .labels(&["After every disc", "Only if it needed you or something isn't right", "As soon as something needs you, and after every disc", "Never"])
+                .on_card_as("When", &[], |g| match g("when").and_then(|v| v.as_str().map(str::to_owned)).as_deref() {
+                    Some(w) if w == WHEN[1] => "when it needs you".into(),
+                    Some(AS_SOON) => "as soon as it needs you".into(),
+                    Some(w) if w == WHEN[3] => "never".into(),
+                    _ => "always".into(),
+                }),
+        )
         .param(ParamSpec::new("desktop", "On this computer", ParamKind::Toggle).default(true).on_card_as("Where", &["ntfy_topic"], |g| {
             let topic = g("ntfy_topic").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
             match (g("desktop").and_then(|v| v.as_bool()).unwrap_or(true), topic.is_empty()) {
@@ -226,18 +232,7 @@ impl Outcome {
             let asked = c.get(Subject::Disc, "selected").and_then(|v| v.parse().ok()).unwrap_or(c.parts()) as usize;
             o.left_out = asked.saturating_sub(o.tracks);
         }
-        let get = |k| c.get(Subject::Disc, k).unwrap_or("").to_owned();
-        let (artist, album, label) = (get("album_artist"), get("album"), get("label"));
-        o.title = match (artist.is_empty(), album.is_empty()) {
-            (false, false) => format!("{artist} — {album}"),
-            (true, false) => album,
-            _ if !c.get(Subject::Disc, "name").unwrap_or("").is_empty() => get("name"),
-            _ if !label.is_empty() => {
-                o.from_label = true;
-                label
-            }
-            _ => "A disc".into(),
-        };
+        (o.title, o.from_label) = disc_title(&c);
         o
     }
 
@@ -283,6 +278,91 @@ impl Outcome {
         }
         s
     }
+}
+
+/// What a disc is called, from what's known of it: the album, a
+/// catalogue's name, else its volume label (and whether it's that, which
+/// never goes to ntfy); else *A disc*.
+pub fn disc_title(c: &Context) -> (String, bool) {
+    let get = |k| c.get(Subject::Disc, k).unwrap_or("").to_owned();
+    let (artist, album, label, name) = (get("album_artist"), get("album"), get("label"), get("name"));
+    match (artist.is_empty(), album.is_empty()) {
+        (false, false) => (format!("{artist} — {album}"), false),
+        (true, false) => (album, false),
+        _ if !name.is_empty() => (name, false),
+        _ if !label.is_empty() => (label, true),
+        _ => ("A disc".into(), false),
+    }
+}
+
+/// A moment a run stops for you: a step asks something, holds an item for
+/// you, or fails. Which step, which item (if any), and why, in a few
+/// words that follow the step's name: *couldn't read 774 sectors*.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Moment {
+    pub step: String,
+    pub item: Option<String>,
+    pub line: String,
+}
+
+/// What's newly waiting for you between two snapshots of a run: a
+/// question that wasn't asked before, an item that wasn't bad before, a
+/// step that wasn't failed before. Each moment once, when it begins; one
+/// that ends and begins again (a retry that fails too) is a new one.
+/// Notify's own trouble isn't one, nor is anything in a stopped run.
+pub fn moments(before: &drt_engine::Snapshot, now: &drt_engine::Snapshot) -> Vec<Moment> {
+    use drt_engine::{ItemState, StepState};
+    let mut out = vec![];
+    if now.stopped {
+        return out;
+    }
+    if let Some((step, q)) = &now.question {
+        if before.question.as_ref().is_none_or(|(s, b)| s != step || b.prompt != q.prompt) {
+            let name = now.steps.get(step).map_or(step.as_str(), |v| v.name.as_str());
+            out.push(Moment { step: name.to_owned(), item: None, line: format!("{name} asks: {}", q.prompt.trim_end_matches(['?', '.'])) });
+        }
+    }
+    for id in &now.order {
+        let Some(v) = now.steps.get(id) else { continue };
+        if v.step == "tell" {
+            continue;
+        }
+        let was = before.steps.get(id);
+        let mut any = false;
+        // The tray opened by hand: whoever opened it is there.
+        for it in v.items.iter().filter(|i| i.state == ItemState::Bad && i.note != super::TRAY_OPENED) {
+            any = true;
+            let was_bad = was.and_then(|w| w.items.iter().find(|i| i.id == it.id)).is_some_and(|i| i.state == ItemState::Bad);
+            if !was_bad {
+                out.push(Moment { step: v.name.clone(), item: Some(it.id.clone()), line: why(&v.name, &it.label, &it.note, v.items.len() > 1) });
+            }
+        }
+        if !any && v.state == StepState::Bad && was.is_none_or(|w| w.state != StepState::Bad) {
+            let why = if v.detail.is_empty() { v.status.clone() } else { v.detail.clone() };
+            out.push(Moment { step: v.name.clone(), item: None, line: if why.is_empty() { format!("{} failed", v.name) } else { format!("{} failed: {why}", v.name) } });
+        }
+    }
+    out
+}
+
+/// Why an item stopped, after its step's name: *Rip couldn't read 774
+/// sectors*; *Rip: track 3, no match*.
+fn why(step: &str, label: &str, note: &str, several: bool) -> String {
+    let n = note.trim();
+    let unread = n.strip_suffix(" unreadable sectors").or_else(|| n.strip_suffix(" unreadable sector")).and_then(|c| c.parse::<u64>().ok());
+    match unread {
+        Some(c) => format!("{step} couldn't read {} sector{}", super::redumper::thousands(c), if c == 1 { "" } else { "s" }),
+        None if several && n.is_empty() => format!("{step} needs you: {label}"),
+        None if several => format!("{step} needs you: {label}, {n}"),
+        None if n.is_empty() => format!("{step} needs you"),
+        None => format!("{step} needs you: {n}"),
+    }
+}
+
+/// The one line said for a moment: *Koudelka (Europe) (Disc 4): Rip
+/// couldn't read 774 sectors*.
+pub fn moment_text(title: &str, m: &Moment) -> String {
+    format!("{title}: {}", m.line)
 }
 
 /// Whether to say anything, given the setting.
@@ -578,6 +658,69 @@ mod tests {
         let o = Outcome::of(&[]);
         assert_eq!(o.body(), "Nothing filed");
         assert!(should_tell(when, &o));
+    }
+
+    fn view(name: &str, state: drt_engine::StepState, items: Vec<drt_engine::ItemView>) -> drt_engine::StepView {
+        drt_engine::StepView {
+            step: name.to_lowercase(),
+            name: name.into(),
+            from: String::new(),
+            state,
+            status: String::new(),
+            qualifier: String::new(),
+            detail: String::new(),
+            progress: None,
+            now: None,
+            items,
+            total: None,
+            preds: vec![],
+            hold: false,
+            record: Default::default(),
+        }
+    }
+
+    fn item(id: &str, state: drt_engine::ItemState, note: &str) -> drt_engine::ItemView {
+        drt_engine::ItemView { id: id.into(), label: id.to_uppercase(), state, note: note.into(), verified: false, options: vec![] }
+    }
+
+    fn snap(steps: Vec<(&str, drt_engine::StepView)>) -> drt_engine::Snapshot {
+        drt_engine::Snapshot { order: steps.iter().map(|s| s.0.to_owned()).collect(), steps: steps.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(), ..Default::default() }
+    }
+
+    #[test]
+    fn a_step_that_stops_for_you_is_a_moment_once() {
+        use drt_engine::{ItemState, StepState};
+        let reading = snap(vec![("g_rip", view("Rip", StepState::Busy, vec![item("dump", ItemState::Busy, "re-reading 4%")]))]);
+        let stuck = snap(vec![("g_rip", view("Rip", StepState::Bad, vec![item("dump", ItemState::Bad, "774 unreadable sectors")]))]);
+        let m = moments(&reading, &stuck);
+        assert_eq!(m.len(), 1);
+        assert_eq!(moment_text("Koudelka (Europe) (Disc 4)", &m[0]), "Koudelka (Europe) (Disc 4): Rip couldn't read 774 sectors");
+        // Still stuck: nothing new.
+        assert!(moments(&stuck, &stuck).is_empty());
+        // Tried again and stuck again: a new moment.
+        assert_eq!(moments(&reading, &stuck).len(), 1);
+        // A question; a step that failed outright; Notify's own trouble
+        // isn't one; a stopped run says nothing.
+        let mut asking = reading.clone();
+        asking.question = Some((
+            "g_rip".into(),
+            drt_engine::Question { prompt: "What is this game?".into(), shape: drt_engine::QuestionShape::PickOne { options: vec![], preselected: 0, details: None, skip: false } },
+        ));
+        assert_eq!(moments(&reading, &asking)[0].line, "Rip asks: What is this game");
+        let mut failed = view("CHD", StepState::Bad, vec![]);
+        failed.detail = "chdman isn't there".into();
+        let mut tell = view("Notify", StepState::Bad, vec![]);
+        tell.step = "tell".into();
+        let later = snap(vec![("g_chd", failed), ("g_tell", tell)]);
+        let m = moments(&snap(vec![]), &later);
+        assert_eq!(m.iter().map(|m| m.line.as_str()).collect::<Vec<_>>(), ["CHD failed: chdman isn't there"]);
+        let mut stopped = stuck.clone();
+        stopped.stopped = true;
+        assert!(moments(&reading, &stopped).is_empty());
+        // A track among several says which.
+        let tracks = snap(vec![("rip", view("Rip", StepState::Bad, vec![item("t1", ItemState::Ok, "✓ 12"), item("t3", ItemState::Bad, "no match")]))]);
+        assert_eq!(moments(&snap(vec![]), &tracks)[0].line, "Rip needs you: T3, no match");
+        assert!(should_tell(AS_SOON, &Outcome { tracks: 1, verified: 1, ..Default::default() }), "and after every disc");
     }
 
     #[test]
