@@ -22,15 +22,6 @@ pub type PickFolder = Arc<dyn Fn(Option<PathBuf>) -> Option<PathBuf> + Send + Sy
 /// Sends Notify's test: to this computer or not, the ntfy server, the
 /// topic. Gives where it went, as [`drt_steps::real::tell::send_test`].
 pub type SendTest = Arc<dyn Fn(bool, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<&'static str>>> + Send>> + Send + Sync>;
-/// Where Notify sends the moment something needs you.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AlertTo {
-    Desktop,
-    Ntfy { server: String, topic: String },
-}
-/// Sends one alert: where, its title, its line. As
-/// [`drt_steps::real::tell::send`] and [`drt_steps::real::tell::send_ntfy`].
-pub type Alert = Arc<dyn Fn(AlertTo, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> + Send + Sync>;
 /// Opens a drive's tray, by the drive's name; says why if it can't.
 /// Blocks: called off the window's thread.
 pub type OpenTray = Arc<dyn Fn(&str) -> std::result::Result<(), String> + Send + Sync>;
@@ -50,8 +41,6 @@ pub struct Deps {
     /// Which drives are connected; asked every couple of seconds.
     pub connected: ListDrives,
     pub send_test: SendTest,
-    /// Notify's alerts the moment something needs you.
-    pub alert: Alert,
     /// Opens a drive's tray: [`drt_steps::real::open_tray`], or a stand-in.
     pub open_tray: OpenTray,
 }
@@ -142,7 +131,6 @@ pub struct Model {
     pub open_folder: OpenFolder,
     pub pick_folder: PickFolder,
     pub send_test: SendTest,
-    alert: Alert,
     /// The last save, folder-open or tray that failed, until one works.
     failed: Arc<std::sync::Mutex<Option<String>>>,
     open_tray_hook: OpenTray,
@@ -250,7 +238,6 @@ impl Model {
             failed: Default::default(),
             pick_folder: d.pick_folder,
             send_test: d.send_test,
-            alert: d.alert,
             open_tray_hook: d.open_tray,
             opening: Default::default(),
             ctx: None,
@@ -922,7 +909,6 @@ impl Model {
                 }
             });
         }
-        self.watch_for_alerts(i, &run);
         let rx = run.snapshot.clone();
         let snap = rx.borrow().clone();
         let id = self.next_id;
@@ -930,78 +916,6 @@ impl Model {
         let (recipe, settings) = (self.recipes[i].clone(), self.engine.settings.lock().unwrap().clone());
         self.runs.entry(i).or_default().push(Running { id, run, rx, snap, repeated: false, kept: false, recipe, settings });
         Ok(())
-    }
-
-    /// Where the recipe's Notify steps set to *As soon as something needs
-    /// you* send: each its own way, by its own settings, once. Empty when
-    /// none is.
-    pub fn alert_targets(&self, i: usize) -> Vec<AlertTo> {
-        use drt_steps::real::tell;
-        let mut out = vec![];
-        let ids: Vec<String> = self.recipes[i]
-            .root
-            .steps()
-            .into_iter()
-            .filter_map(|n| match n {
-                Node::Step { id, step, .. } if self.engine.registry.canonical(step) == "tell" => Some(id.clone()),
-                _ => None,
-            })
-            .collect();
-        let Some(info) = self.engine.registry.info("tell") else { return out };
-        for id in ids {
-            let get = |k: &str| info.params.iter().find(|p| p.key == k).and_then(|p| self.value(i, &id, p));
-            if get("when").as_ref().and_then(|v| v.as_str()) != Some(tell::AS_SOON) {
-                continue;
-            }
-            let to = |a: AlertTo, out: &mut Vec<AlertTo>| {
-                if !out.contains(&a) {
-                    out.push(a);
-                }
-            };
-            if get("desktop").and_then(|v| v.as_bool()).unwrap_or(true) {
-                to(AlertTo::Desktop, &mut out);
-            }
-            let topic = get("ntfy_topic").map(|v| value_text(&v).trim().to_owned()).unwrap_or_default();
-            if !topic.is_empty() {
-                let server = get("ntfy_server").map(|v| value_text(&v)).unwrap_or_else(|| "https://ntfy.sh".into());
-                to(AlertTo::Ntfy { server, topic }, &mut out);
-            }
-        }
-        out
-    }
-
-    /// Watches a run, off the window's thread (so a hidden window still
-    /// sends), for the moments it stops for you ([`drt_steps::real::tell::moments`]),
-    /// and sends each to the recipe's Notify steps that want them at once.
-    /// Notify itself still says how the disc went at the end.
-    fn watch_for_alerts(&self, i: usize, run: &Run) {
-        use drt_steps::real::tell;
-        let targets = self.alert_targets(i);
-        if targets.is_empty() {
-            return;
-        }
-        let (mut w, context, alert) = (run.snapshot.clone(), run.context_source(), self.alert.clone());
-        self.rt.spawn(async move {
-            let mut before = w.borrow_and_update().clone();
-            while w.changed().await.is_ok() {
-                let now = w.borrow_and_update().clone();
-                let found = tell::moments(&before, &now);
-                before = now;
-                if found.is_empty() {
-                    continue;
-                }
-                let (title, from_label) = tell::disc_title(&context());
-                for m in found {
-                    for to in &targets {
-                        // A volume label stays on this computer.
-                        let shown = if from_label && matches!(to, AlertTo::Ntfy { .. }) { "A disc" } else { title.as_str() };
-                        if let Err(e) = alert(to.clone(), "Needs you".into(), tell::moment_text(shown, &m)).await {
-                            eprintln!("couldn't send an alert: {e:#}");
-                        }
-                    }
-                }
-            }
-        });
     }
 
     /// Says something to the run the recipe shows.
@@ -1364,7 +1278,8 @@ impl Model {
     /// branches.
     pub fn spots(&self, i: usize) -> Vec<Spot> {
         let root = &self.recipes[i].root;
-        root.ids().into_iter().map(|id| Spot::After(id.to_owned())).chain(root.joins().into_iter().map(Spot::Join)).collect()
+        let sides = root.line_ids().into_iter().flat_map(|id| drt_engine::Side::BOTH.map(|s| Spot::On(id.to_owned(), s)));
+        root.ids().into_iter().map(|id| Spot::After(id.to_owned())).chain(root.joins().into_iter().map(Spot::Join)).chain(sides).collect()
     }
 
     /// Puts a new step of `kind` after `after`, if the recipe still checks.
@@ -1652,7 +1567,29 @@ pub fn migrate(root: &mut Node, reg: &drt_engine::Registry) -> bool {
     let renamed = migrate_steps(root, reg);
     let cues = move_old_cues(root);
     let lrc = lrc_to_lyrics_file(root);
-    renamed | cues | lrc
+    renamed | cues | lrc | as_soon_is_after_every_disc(root)
+}
+
+/// Notify's *As soon as something needs you* went: a path from the step
+/// for when it needs you says so at once now. A Notify set so says
+/// *After every disc*, as it also did.
+fn as_soon_is_after_every_disc(root: &mut Node) -> bool {
+    use drt_steps::real::tell;
+    let ids: Vec<String> = root
+        .steps()
+        .into_iter()
+        .filter_map(|n| match n {
+            Node::Step { id, step, params, .. } if step == "tell" && params.get("when").and_then(|s| s.resolve(None)).is_some_and(|v| v.as_str() == Some(tell::OLD_AS_SOON)) => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    for id in &ids {
+        if let Some(Node::Step { params, .. }) = root.find_mut(id) {
+            params.insert("when".into(), Setting::chosen(Value::from(tell::WHEN[0])));
+            eprintln!("Notify ({id}): \"As soon as something needs you\" is gone; it now says \"After every disc\"");
+        }
+    }
+    !ids.is_empty()
 }
 
 /// Every node, so no `any`: it would stop at the first that changed.
@@ -2016,6 +1953,7 @@ pub fn plain_misfit(reg: &drt_engine::Registry, root: &Node, e: &drt_engine::Che
         K::PictureFile => "pictures",
         K::AnyFile => "files",
         K::Any => "something",
+        K::Message => "a message",
     };
     let fact = |f: &str| match f {
         "release" => "an album or game chosen".to_owned(),
@@ -2041,6 +1979,7 @@ pub fn plain_misfit(reg: &drt_engine::Registry, root: &Node, e: &drt_engine::Che
         E::NotRightAfter { id, after } => format!("{} goes straight after {}", name(id), after.iter().map(|k| step_name(k)).collect::<Vec<_>>().join(" or ")),
         E::UnknownStep { step, .. } => format!("{} isn't in this version of the app", step),
         E::Empty => "There's nothing to run".to_owned(),
+        E::PathOnPath { id } => format!("{} already says when a step fails or needs you", name(id)),
     }
 }
 
@@ -2068,6 +2007,16 @@ mod tests {
         assert_eq!(topic(&recipes[1], "t2"), Some(serde_json::Value::from("its-own")), "its own is kept");
         assert_eq!(s.app("tell", "ntfy_topic"), Setting::Default, "no longer app-wide");
         assert!(!ntfy_to_each_notify(&mut recipes, &mut s), "once");
+    }
+
+    #[test]
+    fn notify_set_to_say_at_once_says_after_every_disc() {
+        let reg = drt_steps::simulated(None);
+        let mut root = drt_engine::recipe::chain([Node::step("d", "drive"), Node::step("t", "tell").with("when", drt_steps::real::tell::OLD_AS_SOON)]);
+        assert!(migrate(&mut root, &reg));
+        let Some(Node::Step { params, .. }) = root.find_mut("t") else { panic!() };
+        assert_eq!(params["when"].resolve(None), Some(Value::from("Always")));
+        assert!(!migrate(&mut root, &reg), "once");
     }
 
     #[test]

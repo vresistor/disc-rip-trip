@@ -27,6 +27,12 @@ pub enum Node {
         /// Items wait before this step until you approve.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hold: bool,
+        /// What hears of it if it fails: a step that takes a message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_fail: Option<Box<Node>>,
+        /// What hears of it if it needs you: a question, a hold.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_needs: Option<Box<Node>>,
     },
     /// Left to right: a strip, or a strip of strips.
     Chain { nodes: Vec<Node> },
@@ -38,7 +44,46 @@ pub enum Node {
 
 impl Node {
     pub fn step(id: &str, step: &str) -> Node {
-        Node::Step { id: id.into(), step: step.into(), label: None, params: BTreeMap::new(), hold: false }
+        Node::Step { id: id.into(), step: step.into(), label: None, params: BTreeMap::new(), hold: false, on_fail: None, on_needs: None }
+    }
+
+    /// What hears of this step if it fails, or needs you.
+    pub fn side(&self, s: Side) -> Option<&Node> {
+        match (self, s) {
+            (Node::Step { on_fail, .. }, Side::Fails) => on_fail.as_deref(),
+            (Node::Step { on_needs, .. }, Side::NeedsYou) => on_needs.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn side_slot(&mut self, s: Side) -> Option<&mut Option<Box<Node>>> {
+        match (self, s) {
+            (Node::Step { on_fail, .. }, Side::Fails) => Some(on_fail),
+            (Node::Step { on_needs, .. }, Side::NeedsYou) => Some(on_needs),
+            _ => None,
+        }
+    }
+
+    /// The same step, with `node` hearing of it when `s` happens.
+    pub fn on(mut self, s: Side, node: Node) -> Node {
+        if let Some(slot) = self.side_slot(s) {
+            *slot = Some(Box::new(node));
+        }
+        self
+    }
+
+    /// Every step on the main line, not on a path of its own from a step
+    /// that fails or needs you: left to right and top to bottom.
+    pub fn line_ids(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        fn go<'a>(n: &'a Node, out: &mut Vec<&'a str>) {
+            match n {
+                Node::Step { id, .. } => out.push(id),
+                n => n.kids().iter().for_each(|k| go(k, out)),
+            }
+        }
+        go(self, &mut out);
+        out
     }
 
     /// Sets a recipe-scoped parameter, as chosen.
@@ -77,12 +122,24 @@ impl Node {
     fn walk<'a>(&'a self, f: &mut impl FnMut(&'a Node)) {
         f(self);
         match self {
-            Node::Step { .. } => {}
+            Node::Step { on_fail, on_needs, .. } => [on_fail, on_needs].into_iter().flatten().for_each(|n| n.walk(f)),
             Node::Chain { nodes } => nodes.iter().for_each(|n| n.walk(f)),
             Node::Branches { branches } => branches.iter().for_each(|n| n.walk(f)),
             Node::Group { body, .. } => body.walk(f),
         }
     }
+}
+
+/// When a step's own path is taken, besides its usual one: if it fails,
+/// or if it needs you (asks something, holds, waits on a track).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Side {
+    Fails,
+    NeedsYou,
+}
+
+impl Side {
+    pub const BOTH: [Side; 2] = [Side::Fails, Side::NeedsYou];
 }
 
 /// Where a + is: after a step, or where a set of branches comes
@@ -94,6 +151,8 @@ pub enum Spot {
     /// After the branches at this path: from the root, the index of each
     /// part of a chain, each branch, and 0 for a group's body.
     Join(Vec<usize>),
+    /// On the step's own path for when it fails or needs you.
+    On(String, Side),
 }
 
 impl Node {
@@ -179,6 +238,7 @@ impl Node {
         match at {
             Spot::After(id) => self.path_of(id),
             Spot::Join(p) => matches!(self.at(p), Some(Node::Branches { .. })).then(|| p.clone()),
+            Spot::On(..) => None,
         }
     }
 
@@ -210,6 +270,15 @@ impl Node {
     /// whatever already followed them. False if there's no such spot.
     pub fn add_at(&mut self, at: &Spot, new: Node, beside: bool) -> bool {
         let path = match at {
+            // A path of its own, if it hasn't one yet.
+            Spot::On(id, s) => {
+                let Some(slot) = self.find_mut(id).and_then(|n| n.side_slot(*s)) else { return false };
+                if slot.is_some() {
+                    return false;
+                }
+                *slot = Some(Box::new(new));
+                return true;
+            }
             Spot::After(id) if beside => return self.add_branch_after(id, new),
             Spot::After(id) => return self.insert_after(id, new),
             Spot::Join(p) => p,
@@ -289,7 +358,7 @@ impl Node {
     pub fn find_mut(&mut self, id: &str) -> Option<&mut Node> {
         match self {
             Node::Step { id: x, .. } if x == id => Some(self),
-            Node::Step { .. } => None,
+            Node::Step { on_fail, on_needs, .. } => [on_fail, on_needs].into_iter().flatten().find_map(|n| n.find_mut(id)),
             Node::Chain { nodes } => nodes.iter_mut().find_map(|n| n.find_mut(id)),
             Node::Branches { branches } => branches.iter_mut().find_map(|n| n.find_mut(id)),
             Node::Group { body, .. } => body.find_mut(id),
@@ -412,7 +481,19 @@ impl Node {
         fn rm(node: &mut Node, id: &str) -> bool {
             let hit = |n: &Node| matches!(n, Node::Step { id: x, .. } if x == id);
             match node {
-                Node::Step { .. } => false,
+                // A step on a path of its own: that path goes with it.
+                Node::Step { on_fail, on_needs, .. } => [on_fail, on_needs].into_iter().any(|slot| {
+                    let Some(n) = slot else { return false };
+                    if hit(n) {
+                        *slot = None;
+                        return true;
+                    }
+                    let found = rm(n, id);
+                    if n.is_empty() {
+                        *slot = None;
+                    }
+                    found
+                }),
                 Node::Chain { nodes: v } | Node::Branches { branches: v } => {
                     if let Some(i) = v.iter().position(hit) {
                         v.remove(i);

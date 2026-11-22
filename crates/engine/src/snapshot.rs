@@ -333,6 +333,11 @@ impl Snapshot {
     }
 }
 
+/// A track's note when its read stopped because the tray was opened.
+pub const TRAY_OPENED: &str = "Read stopped: tray opened";
+/// A step's detail when its read stopped so.
+pub const TRAY_DETAIL: &str = "Tray opened";
+
 pub(crate) fn idle_status(preds: &[String], steps: &BTreeMap<String, StepView>) -> String {
     match preds.first().and_then(|p| steps.get(p)) {
         Some(_) if preds.len() > 1 => format!("After all {}", preds.len()),

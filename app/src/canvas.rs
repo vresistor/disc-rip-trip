@@ -218,6 +218,23 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
         painter.add(PathShape::convex_polygon(vec![tip, base + side * half, base - side * half], p.faint, Stroke::NONE));
     }
 
+    // A step's paths for when it fails or needs you: thin, dashed, in the
+    // colour of that state, kept quiet.
+    for sw in &lay.side_wires {
+        let pts: Vec<Pos2> = sw.path.iter().map(|&(x, y)| at(x, y)).collect();
+        if pts.len() < 2 {
+            continue;
+        }
+        let col = side_colour(p, sw.side);
+        painter.extend(Shape::dashed_line(&rounded(&pts, 12.0 * z), Stroke::new(1.5 * z, col), 5.0 * z, 4.0 * z));
+        let tip = pts[pts.len() - 1];
+        let dir = (tip - pts[pts.len() - 2]).normalized();
+        let side = vec2(-dir.y, dir.x);
+        let (len, half) = (8.0 * z, 4.5 * z);
+        let base = tip - dir * len;
+        painter.add(PathShape::convex_polygon(vec![tip, base + side * half, base - side * half], col, Stroke::NONE));
+    }
+
     // Tiles, then the notches that point into the next tile over them.
     let mut click = None;
     let mut notches = Vec::new();
@@ -384,6 +401,35 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
                 click = Some(Click::Plus(spot));
             }
         }
+        // On each card's foot, a small button for each path it can take
+        // besides its usual one: if it fails, if it needs you.
+        for (id, side, (x, y)) in &lay.side_buttons {
+            let spot = Spot::On(id.clone(), *side);
+            if marks.dead.contains(&spot) {
+                continue;
+            }
+            let c = at(*x, *y);
+            let name = snap.steps.get(id).map_or(id.clone(), |v| v.name.clone());
+            let label = crate::popover::side_title(*side, &name);
+            let hit = Rect::from_center_size(c, vec2(20.0, 20.0) * z);
+            let resp = ui.interact(hit, ui.scope_id().with(("side", id, *side)), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &label));
+            let on = marks.plus_open == Some(&spot);
+            let col = side_colour(p, *side);
+            let (fill, fg, line) = if on {
+                (col, p.raised, col)
+            } else if resp.hovered() {
+                (mix(col, 0.12, p.raised), col, col)
+            } else {
+                (p.raised, mix(col, 0.8, p.faint), p.line)
+            };
+            painter.circle(c, 8.5 * z, fill, Stroke::new(1.0 * z, line));
+            painter.extend(side_icon(*side, c, 10.0 * z, fg));
+            let resp = resp.on_hover_text(&label);
+            if resp.clicked() {
+                click = Some(Click::Plus(spot));
+            }
+        }
         // A smaller, quieter + on each seam inside a strip, to put a step
         // between two: it adds in line after the tile on its left.
         for (id, (x, y)) in lay.seams.iter().filter(|(id, _)| !marks.dead.contains(&after(id))) {
@@ -414,6 +460,29 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
         click = Some(Click::Empty);
     }
     click
+}
+
+/// The colour of a path for when a step fails (the failed colour) or
+/// needs you (the asking colour), softened.
+fn side_colour(p: &Pal, side: drt_engine::Side) -> Color32 {
+    match side {
+        drt_engine::Side::Fails => mix(p.bad, 0.7, p.surface),
+        drt_engine::Side::NeedsYou => mix(p.warn, 0.75, p.surface),
+    }
+}
+
+/// A warning sign for *If it fails*, Notify's bell for *If it needs you*,
+/// `size` across, centred on `c`.
+fn side_icon(side: drt_engine::Side, c: Pos2, size: f32, col: Color32) -> Vec<Shape> {
+    let h = size / 2.0;
+    match side {
+        drt_engine::Side::Fails => {
+            let st = Stroke::new(size * 0.13, col);
+            let (top, l, r) = (c + vec2(0.0, -h), c + vec2(-h, h * 0.8), c + vec2(h, h * 0.8));
+            vec![Shape::closed_line(vec![top, r, l], st), Shape::line_segment([c + vec2(0.0, -h * 0.3), c + vec2(0.0, h * 0.25)], st), Shape::circle_filled(c + vec2(0.0, h * 0.55), size * 0.07, col)]
+        }
+        drt_engine::Side::NeedsYou => kind_icon("tell", c - vec2(h, h), size, col),
+    }
 }
 
 /// A + after a strip or where branches meet: a circle with a plus, filled

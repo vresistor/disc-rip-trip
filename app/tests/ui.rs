@@ -26,8 +26,6 @@ struct Env {
     tests_sent: Arc<Mutex<Vec<(bool, String, String)>>>,
     /// Each drive whose tray was opened.
     trays: Arc<Mutex<Vec<String>>>,
-    /// Each alert Notify sent the moment something needed you.
-    alerts: Arc<Mutex<Vec<(drt_app::model::AlertTo, String, String)>>>,
 }
 
 fn env() -> Env {
@@ -39,7 +37,6 @@ fn env() -> Env {
         picked_from: Arc::default(),
         tests_sent: Arc::default(),
         trays: Arc::default(),
-        alerts: Arc::default(),
     }
 }
 
@@ -91,13 +88,6 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
         connected: {
             let plugged = e.plugged.clone();
             Arc::new(move || plugged.lock().unwrap().clone())
-        },
-        alert: {
-            let alerts = e.alerts.clone();
-            Arc::new(move |to, title, body| {
-                alerts.lock().unwrap().push((to, title, body));
-                Box::pin(async { Ok(()) })
-            })
         },
         // Nothing goes out: a server named *down* can't be reached.
         send_test: {
@@ -2774,20 +2764,17 @@ fn check_rips_again_and_combines_until_it_matches() {
     shot(&mut h, "step-check-combined-verified");
 }
 
-/// A Notify set to say so at once does, the moment Rip can't read the
-/// disc: on this computer and to its own ntfy topic, once; and still at
-/// the end.
+/// A Notify on Rip's path for when it needs you says so the moment Rip
+/// can't read the disc and holds it for you, once, in Rip's own words;
+/// and the canvas draws that path dashed.
 #[test]
-fn notify_says_at_once_when_rip_needs_you() {
-    use drt_app::model::AlertTo;
+fn a_notify_on_rips_needs_you_path_says_at_once() {
+    use drt_engine::Side;
     let e = env();
     let mut all = recipes::all();
     for r in all.iter_mut().filter(|r| r.name == "Games") {
-        let root = std::mem::replace(&mut r.root, Node::step("x", "x"));
-        r.root = drt_engine::recipe::chain([
-            root,
-            Node::step("g_tell", "tell").with("when", drt_steps::real::tell::AS_SOON).with("ntfy_topic", "rip-test-topic").with("ntfy_server", "https://ntfy.example.org"),
-        ]);
+        let Some(rip) = r.root.find_mut("g_rip") else { panic!() };
+        *rip = rip.clone().on(Side::NeedsYou, Node::step("g_tell_needs", "tell"));
     }
     Store::new(e.dir.path().join("config")).save_recipes(&all).unwrap();
     let mut reg = simulated(None);
@@ -2795,23 +2782,58 @@ fn notify_says_at_once_when_rip_needs_you() {
     let mut h = window_on(&e, reg, true, 1.0, egui::vec2(1280.0, 720.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
+    let lay = app(&h).layout(app(&h).sel);
+    assert_eq!(lay.side_wires.len(), 1);
+    assert_eq!((lay.side_wires[0].from_step.as_str(), lay.side_wires[0].to_step.as_str()), ("g_rip", "g_tell_needs"));
+    assert_eq!(app(&h).m.snapshot(app(&h).sel).steps["g_tell_needs"].status, "If rip needs you");
     click(&mut h, "Start");
-    until(&mut h, "Rip to need you", |a| a.m.snapshot(a.sel).steps["g_rip"].items.first().is_some_and(|i| i.state == ItemState::Bad));
-    let start = Instant::now();
-    while e.alerts.lock().unwrap().len() < 2 && start.elapsed() < Duration::from_secs(5) {
-        h.run_steps(1);
-    }
+    until(&mut h, "Rip's Notify to send", |a| a.m.snapshot(a.sel).steps["g_tell_needs"].status == "Sent");
     h.run_steps(5);
-    let sent = e.alerts.lock().unwrap().clone();
-    let line = "SLES_147.11: Rip couldn't read 771 sectors";
-    assert_eq!(
-        sent,
-        [
-            (AlertTo::Desktop, "Needs you".to_owned(), line.to_owned()),
-            (AlertTo::Ntfy { server: "https://ntfy.example.org".into(), topic: "rip-test-topic".into() }, "Needs you".to_owned(), "A disc: Rip couldn't read 771 sectors".to_owned()),
-        ],
-        "once to each, and a volume label never to ntfy"
-    );
+    let v = app(&h).m.snapshot(app(&h).sel).steps["g_tell_needs"].clone();
+    assert_eq!(v.detail, "Rip needs you: Couldn't read 771 sectors");
+    let said: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).filter(|l| l.contains("sectors")).collect();
+    assert_eq!(said, ["SLES_147.11: Rip needs you: Couldn't read 771 sectors"], "once");
+    shot(&mut h, "notify-if-rip-needs-you");
+}
+
+/// In edit mode each card has a button for each path it can take: one
+/// for if it fails, one for if it needs you. Each offers only what takes
+/// a message, Notify, and puts it on that path.
+#[test]
+fn the_buttons_on_a_card_put_a_notify_on_its_fail_and_needs_paths() {
+    use drt_engine::Side;
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    assert!(h.query_by_label("If Rip fails").is_none(), "only while editing");
+    click(&mut h, "Edit");
+    h.get_by_label("If Rip fails").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(h.get_all_by_label("If Rip fails").count(), 2, "the button, and the list's title");
+    let listed: Vec<String> = h.get_all_by_role(Role::ListItem).filter_map(|n| n.accesskit_node().label()).filter(|l| !l.contains(", ")).collect();
+    assert_eq!(listed, ["Notify"], "only what takes a message");
+    h.get_all_by_role(Role::ListItem).find(|n| n.accesskit_node().label().as_deref() == Some("Notify")).unwrap().click_accesskit();
+    h.run_steps(2);
+    h.get_by_label("If Rip needs you").click_accesskit();
+    h.run_steps(2);
+    h.get_all_by_role(Role::ListItem).find(|n| n.accesskit_node().label().as_deref() == Some("Notify")).unwrap().click_accesskit();
+    h.run_steps(2);
+    let root = app(&h).m.recipes[0].root.clone();
+    drt_engine::check(&root, &app(&h).m.engine.registry).unwrap();
+    let rip = root.steps().into_iter().find(|n| n.ids()[0] == "rip").unwrap().clone();
+    for s in Side::BOTH {
+        assert!(matches!(rip.side(s), Some(Node::Step { step, .. }) if step == "tell"), "{s:?}");
+    }
+    assert!(h.query_by_label("If Rip fails").is_none(), "one path each");
+    app_mut(&mut h).popover = None;
+    app_mut(&mut h).selected = None;
+    h.run_steps(2);
+    shot(&mut h, "edit-notify-if-rip-fails-or-needs-you");
+    // Removing Rip takes its paths with it.
+    let gone = app(&h).m.removal(0, "rip");
+    for s in Side::BOTH {
+        let id = rip.side(s).unwrap().ids()[0].to_owned();
+        assert!(gone.contains(&id), "{id} in {gone:?}");
+    }
 }
 
 /// A disc the drive can't read in places: the read crawling, the re-read

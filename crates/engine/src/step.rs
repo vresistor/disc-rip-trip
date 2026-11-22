@@ -75,6 +75,9 @@ pub struct StepInfo {
     /// The tile's second line worked out from the settings in effect
     /// ("V0, joint stereo"), given how to read one.
     pub summary: Option<crate::setting::Words>,
+    /// Takes a [`ItemKind::Message`] too, on a step's path for when it
+    /// fails or needs you (Notify).
+    pub takes_messages: bool,
 }
 
 impl StepInfo {
@@ -97,7 +100,19 @@ impl StepInfo {
             repeatable: false,
             unless: vec![],
             right_after: vec![],
+            takes_messages: false,
         }
+    }
+
+    pub fn takes_messages(mut self) -> Self {
+        self.takes_messages = true;
+        self
+    }
+
+    /// Whether it can be given `kind`: what its input accepts, or a
+    /// message if it takes those.
+    pub fn takes(&self, kind: ItemKind) -> bool {
+        self.input.accepts(kind) || (kind == ItemKind::Message && self.takes_messages)
     }
 
     pub fn from(mut self, from: &'static str) -> Self {
@@ -546,6 +561,11 @@ impl Cx {
 
     pub fn stopped(&self) -> bool {
         self.shared.cancel.is_cancelled()
+    }
+
+    /// The kind of item the recipe gives this step, where it checks.
+    pub fn given(&self) -> Option<ItemKind> {
+        self.flow.as_ref().map(|f| f.kind)
     }
 
     /// Whether any step in this run has waited on you so far: asked a

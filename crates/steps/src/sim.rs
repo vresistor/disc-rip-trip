@@ -748,8 +748,11 @@ impl Step for Tell {
     }
 
     async fn run(&self, mut inlet: Inlet, _outlet: Outlet, cx: Cx) -> Result<()> {
+        // What the real one would say, without putting it anywhere.
+        if cx.given() == Some(drt_engine::ItemKind::Message) {
+            return crate::real::tell::each_message(&mut inlet, &cx, |_| async { vec![] }).await;
+        }
         let all = inlet.all().await;
-        // What the real one would say, without putting it on the desktop.
         let o = crate::real::tell::Outcome { needed_you: cx.needed_you(), ..crate::real::tell::Outcome::of(&all) };
         let told = crate::real::tell::should_tell(&cx.text("when"), &o);
         cx.status(if told { "Sent" } else { "Not sent" }, o.body());

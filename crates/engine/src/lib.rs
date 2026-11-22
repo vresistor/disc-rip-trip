@@ -19,7 +19,7 @@ pub use check::{check, first_misfit, fits, fits_flow, flow_after, flows_in, kind
 pub use context::{Candidate, Context, Fact, Subject};
 pub use item::{Item, ItemKind};
 pub use lanes::LaneKind;
-pub use recipe::{Node, Recipe, Spot};
+pub use recipe::{Node, Recipe, Side, Spot};
 pub use run::{cache_dir, Engine, Run};
 pub use setting::{Fitted, ParamKind, ParamSpec, Scope, Setting, Settings, HELP_MAX};
 pub use snapshot::{Answer, Choice, Command, Decision, ItemChoice, ItemState, ItemView, Made, Question, QuestionShape, Snapshot, StepState, StepView};

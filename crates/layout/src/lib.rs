@@ -9,7 +9,7 @@
 //!
 //! A window only draws what this gives it, scaled by its zoom.
 
-use drt_engine::Node;
+use drt_engine::{Node, Side};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Metrics {
@@ -165,6 +165,30 @@ pub struct Layout {
     /// the next disc: down from the step, along under everything, and up
     /// into the start. Corner points, in order; the last is the arrow's tip.
     pub loops: Vec<Vec<(f32, f32)>>,
+    /// Where each step's buttons for a path of its own go when editing:
+    /// on its card's foot, by its right corner. Only for a path it hasn't.
+    pub side_buttons: Vec<(String, Side, (f32, f32))>,
+    /// The paths a step takes when it fails or needs you: down from its
+    /// card's foot, round what's below, along under everything and down
+    /// into what hears of it, in a row of its own at the bottom.
+    pub side_wires: Vec<SideWire>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SideWire {
+    pub from_step: String,
+    pub to_step: String,
+    pub side: Side,
+    /// Corner points, in order; the last is the arrow's tip.
+    pub path: Vec<(f32, f32)>,
+}
+
+/// Where on a card's foot a path for `side` leaves, from its left.
+pub fn side_x(r: Rect, side: Side) -> f32 {
+    match side {
+        Side::Fails => r.right() - 48.0,
+        Side::NeedsYou => r.right() - 24.0,
+    }
 }
 
 impl Layout {
@@ -206,11 +230,79 @@ pub fn layout_with_loops(root: &Node, m: Metrics, loops_back: impl Fn(&str) -> b
     for id in ids {
         l.loop_back(&id);
     }
+    add_sides(&mut l, root, m);
     l
 }
 
 pub fn layout(root: &Node, m: Metrics) -> Layout {
-    layout_ordered(root, m, &|_| false)
+    let mut l = layout_ordered(root, m, &|_| false);
+    add_sides(&mut l, root, m);
+    l
+}
+
+/// The paths for when a step fails or needs you, after everything else
+/// (the start stays the first tile): each what hears of it in a row at
+/// the bottom, under the step where there's room, its line on a lane of
+/// its own above that row.
+fn add_sides(l: &mut Layout, root: &Node, m: Metrics) {
+    let main: Vec<TilePlace> = l.tiles.clone();
+    let mut paths: Vec<(Rect, &str, Side, &Node)> = vec![];
+    for n in root.steps() {
+        let Node::Step { id, .. } = n else { continue };
+        let Some(t) = main.iter().find(|t| t.id == *id) else { continue };
+        for s in Side::BOTH {
+            match n.side(s) {
+                Some(path) => paths.push((t.rect, id, s, path)),
+                None => l.side_buttons.push((id.clone(), s, (side_x(t.rect, s), t.rect.y + t.rect.h))),
+            }
+        }
+    }
+    if paths.is_empty() {
+        return;
+    }
+    paths.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then(a.0.y.total_cmp(&b.0.y)));
+    let below = main.iter().map(|t| t.rect.y + t.rect.h).chain(l.loops.iter().flatten().map(|p| p.1)).fold(0.0, f32::max) + 32.0;
+    let lane = |k: usize| below + 16.0 * k as f32;
+    let row = lane(paths.len() - 1) + 32.0;
+    // Is the way down at `x`, from `y0` to `y1`, clear of every card but
+    // the step's own?
+    let blocked = |x: f32, y0: f32, y1: f32| main.iter().any(|t| t.rect.x < x && x < t.rect.right() && t.rect.y < y1 && t.rect.y + t.rect.h > y0);
+    let across = |x0: f32, x1: f32, y: f32| main.iter().any(|t| t.rect.x < x0.max(x1) && x0.min(x1) < t.rect.right() && t.rect.y < y && y < t.rect.y + t.rect.h);
+    let mut cursor = f32::MIN;
+    for (k, (r, from, side, path)) in paths.into_iter().enumerate() {
+        let sub = layout(path, m);
+        let x = r.x.max(cursor);
+        cursor = x + sub.width;
+        let first = l.tiles.len();
+        for t in &sub.tiles {
+            l.tiles.push(TilePlace { id: t.id.clone(), rect: Rect { x: t.rect.x + x, y: t.rect.y + row, ..t.rect }, in_strip: t.in_strip });
+        }
+        let shift = |p: (f32, f32)| (p.0 + x, p.1 + row);
+        for w in &sub.wires {
+            l.wires.push(Wire { from: shift(w.from), bend: shift(w.bend), c1: shift(w.c1), c2: shift(w.c2), to: shift(w.to), ..w.clone() });
+        }
+        let into = l.tiles[first].clone();
+        let (sx, foot, y) = (side_x(r, side), r.y + r.h, lane(k));
+        // Straight down; else down into the gap below the card, along to
+        // the nearest clear way down, and down that.
+        let mut pts = vec![(sx, foot)];
+        if blocked(sx, foot, y) {
+            let mid = foot + m.vgap / 2.0;
+            let off = if side == Side::Fails { 12.0 } else { 24.0 };
+            let mut ways: Vec<f32> = main.iter().flat_map(|t| [t.rect.x - off, t.rect.right() + off]).collect();
+            ways.sort_by(|a, b| (a - sx).abs().total_cmp(&(b - sx).abs()));
+            if let Some(gx) = ways.into_iter().find(|&gx| !across(sx, gx, mid) && !blocked(gx, mid, y)) {
+                pts.extend([(sx, mid), (gx, mid)]);
+            }
+        }
+        let last = pts.last().unwrap().0;
+        let cx = into.rect.x + into.rect.w / 2.0;
+        pts.extend([(last, y), (cx, y), (cx, into.rect.y)]);
+        pts.dedup();
+        l.side_wires.push(SideWire { from_step: from.to_owned(), to_step: into.id.clone(), side, path: pts });
+        l.width = l.width.max(cursor + m.gap);
+    }
+    l.height = l.height.max(row + m.tile_h);
 }
 
 /// The layout, with the branches `last` picks drawn after their siblings.
@@ -432,6 +524,45 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn a_steps_own_paths_go_round_every_card_into_a_row_below() {
+        let m = Metrics::default();
+        for r in recipes::all() {
+            let mut root = r.root.clone();
+            let ids: Vec<String> = root.ids().into_iter().map(str::to_owned).collect();
+            for (k, id) in ids.iter().enumerate() {
+                let n = root.find_mut(id).unwrap();
+                *n = n.clone().on(Side::Fails, Node::step(&format!("f{k}"), "tell")).on(Side::NeedsYou, Node::step(&format!("n{k}"), "tell"));
+            }
+            let l = layout_with_loops(&root, m, |id| id.ends_with("next"));
+            assert_eq!(l.side_wires.len(), 2 * ids.len(), "{}", r.name);
+            let main_bottom = l.tiles.iter().filter(|t| ids.contains(&t.id)).map(|t| t.rect.y + t.rect.h).fold(0.0, f32::max);
+            for w in &l.side_wires {
+                let into = l.tile(&w.to_step).unwrap().rect;
+                assert!(into.y > main_bottom, "{} sits below everything", w.to_step);
+                assert_eq!(*w.path.last().unwrap(), (into.x + into.w / 2.0, into.y), "into the top of {}", w.to_step);
+                // Leaves its own card's foot and crosses no other.
+                let from = l.tile(&w.from_step).unwrap().rect;
+                assert_eq!(w.path[0], (side_x(from, w.side), from.y + from.h));
+                let others = Layout { tiles: l.tiles.iter().filter(|t| t.id != w.to_step).cloned().collect(), ..Layout::default() };
+                assert_eq!(crosses(&others, &w.path, &w.from_step), None, "{}: {} → {}", r.name, w.from_step, w.to_step);
+            }
+            // No two cards overlap.
+            for (a, ta) in l.tiles.iter().enumerate() {
+                for tb in &l.tiles[a + 1..] {
+                    let (x, y) = (ta.rect, tb.rect);
+                    assert!(x.right() <= y.x + 0.5 || y.right() <= x.x + 0.5 || x.y + x.h <= y.y + 0.5 || y.y + y.h <= x.y + 0.5, "{} on {}", ta.id, tb.id);
+                }
+            }
+            assert!(l.width >= l.tiles.iter().map(|t| t.rect.right()).fold(0.0, f32::max));
+        }
+        // A step with both paths has no buttons left; one with none, two.
+        let root = drt_engine::recipe::chain([Node::step("d", "drive"), Node::step("r", "rip").on(Side::Fails, Node::step("t", "tell"))]);
+        let l = layout(&root, m);
+        let buttons: Vec<(&str, Side)> = l.side_buttons.iter().map(|b| (b.0.as_str(), b.1)).collect();
+        assert_eq!(buttons, [("d", Side::Fails), ("d", Side::NeedsYou), ("r", Side::NeedsYou)]);
     }
 
     #[test]

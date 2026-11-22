@@ -33,9 +33,15 @@ impl Flow {
         Flow { kind: ItemKind::Nothing, found: BTreeSet::new(), seen: BTreeSet::new(), last: None }
     }
 
+    /// What starts a step's path for when it fails or needs you: one
+    /// message at a time, and nothing found.
+    pub fn message() -> Flow {
+        Flow { kind: ItemKind::Message, ..Flow::start() }
+    }
+
     /// Whether a step fits here.
     pub fn fits(&self, info: &StepInfo) -> bool {
-        info.input.accepts(self.kind) && self.unmet(info).is_none() && self.repeated(info).is_none() && self.settled(info).is_none() && self.not_right_after(info).is_none()
+        info.takes(self.kind) && self.unmet(info).is_none() && self.repeated(info).is_none() && self.settled(info).is_none() && self.not_right_after(info).is_none()
     }
 
     /// The steps this one must come straight after, if what's just before
@@ -119,6 +125,11 @@ pub enum CheckError {
         after: Vec<&'static str>,
     },
     Empty,
+    /// A step on a path for when another fails or needs you has a path of
+    /// its own.
+    PathOnPath {
+        id: String,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -131,6 +142,7 @@ impl fmt::Display for CheckError {
             CheckError::Settled { id, fact } => write!(f, "{id} only makes sense before {fact} is found"),
             CheckError::NotRightAfter { id, after } => write!(f, "{id} goes straight after {}", after.join(" or ")),
             CheckError::Empty => write!(f, "an empty chain or set of branches"),
+            CheckError::PathOnPath { id } => write!(f, "{id} is on a path for when another step fails or needs you, and has one of its own"),
         }
     }
 }
@@ -139,7 +151,13 @@ impl std::error::Error for CheckError {}
 
 /// Checks a recipe from its first step, which is given nothing.
 pub fn check(root: &Node, reg: &Registry) -> Result<ItemKind, CheckError> {
-    walk(root, Flow::start(), reg).map(|f| f.kind)
+    walk(root, Flow::start(), reg, false).map(|f| f.kind)
+}
+
+/// A step's paths for when it fails or needs you, each with what it's
+/// given.
+fn sides(node: &Node) -> impl Iterator<Item = &Node> {
+    crate::recipe::Side::BOTH.into_iter().filter_map(|s| node.side(s))
 }
 
 /// The steps that can follow a point with this flow.
@@ -151,7 +169,7 @@ pub fn fits_flow<'a>(flow: &Flow, reg: &'a Registry) -> Vec<&'a StepInfo> {
 
 /// The steps that can follow something giving `given`, whatever was found.
 pub fn fits(given: ItemKind, reg: &Registry) -> Vec<&StepInfo> {
-    let mut v: Vec<_> = reg.infos().filter(|i| i.input.accepts(given) && i.input != ItemKind::Nothing).collect();
+    let mut v: Vec<_> = reg.infos().filter(|i| i.takes(given) && i.input != ItemKind::Nothing).collect();
     v.sort_by_key(|i| (i.group as u8, i.name));
     v
 }
@@ -257,6 +275,9 @@ pub fn flows_in(root: &Node, reg: &Registry) -> std::collections::HashMap<String
             Node::Step { id, step, .. } => {
                 let after = reg.info(step).filter(|i| given.fits(i)).map(|i| given.after(&i));
                 out.insert(id.clone(), given);
+                for side in sides(node) {
+                    go(side, Flow::message(), reg, out);
+                }
                 after
             }
             Node::Chain { nodes } => nodes.iter().try_fold(given, |f, n| go(n, f, reg, out)),
@@ -290,13 +311,18 @@ pub fn first_misfit(root: &Node, reg: &Registry) -> Option<String> {
     type At = (Option<Flow>, bool);
     fn go(node: &Node, (given, unknown): At, reg: &Registry) -> Result<At, String> {
         match node {
-            Node::Step { id, step, .. } => match (reg.info(step), given) {
-                (None, _) => Ok((None, true)),
-                (Some(info), Some(g)) if !info.input.accepts(g.kind) || (!unknown && !g.fits(&info)) => Err(id.clone()),
-                (Some(info), Some(g)) => Ok((Some(g.after(&info)), unknown)),
-                (Some(info), None) if info.passes_through => Ok((None, unknown)),
-                (Some(info), None) => Ok((Some(Flow::start().after(&info)), unknown)),
-            },
+            Node::Step { id, step, .. } => {
+                for side in sides(node) {
+                    go(side, (Some(Flow::message()), false), reg)?;
+                }
+                match (reg.info(step), given) {
+                    (None, _) => Ok((None, true)),
+                    (Some(info), Some(g)) if !info.takes(g.kind) || (!unknown && !g.fits(&info)) => Err(id.clone()),
+                    (Some(info), Some(g)) => Ok((Some(g.after(&info)), unknown)),
+                    (Some(info), None) if info.passes_through => Ok((None, unknown)),
+                    (Some(info), None) => Ok((Some(Flow::start().after(&info)), unknown)),
+                }
+            }
             Node::Chain { nodes } => nodes.iter().try_fold((given, unknown), |f, n| go(n, f, reg)),
             Node::Branches { branches } => {
                 let outs = branches.iter().map(|b| go(b, (given.clone(), unknown), reg)).collect::<Result<Vec<_>, _>>()?;
@@ -315,11 +341,18 @@ pub fn first_misfit(root: &Node, reg: &Registry) -> Option<String> {
     go(root, (Some(Flow::start()), false), reg).err()
 }
 
-fn walk(node: &Node, given: Flow, reg: &Registry) -> Result<Flow, CheckError> {
+/// `on_side`: on a path for when another step fails or needs you.
+fn walk(node: &Node, given: Flow, reg: &Registry, on_side: bool) -> Result<Flow, CheckError> {
     match node {
         Node::Step { id, step, .. } => {
             let info = reg.info(step).ok_or_else(|| CheckError::UnknownStep { id: id.clone(), step: step.clone() })?;
-            if !info.input.accepts(given.kind) {
+            for side in sides(node) {
+                if on_side {
+                    return Err(CheckError::PathOnPath { id: id.clone() });
+                }
+                walk(side, Flow::message(), reg, true)?;
+            }
+            if !info.takes(given.kind) {
                 return Err(CheckError::Mismatch { id: id.clone(), takes: info.input, given: given.kind });
             }
             if let Some(any_of) = given.unmet(&info) {
@@ -340,15 +373,15 @@ fn walk(node: &Node, given: Flow, reg: &Registry) -> Result<Flow, CheckError> {
             if nodes.is_empty() {
                 return Err(CheckError::Empty);
             }
-            nodes.iter().try_fold(given, |f, n| walk(n, f, reg))
+            nodes.iter().try_fold(given, |f, n| walk(n, f, reg, on_side))
         }
         Node::Branches { branches } => {
-            let outs = branches.iter().map(|b| walk(b, given.clone(), reg)).collect::<Result<Vec<_>, _>>()?;
+            let outs = branches.iter().map(|b| walk(b, given.clone(), reg, on_side)).collect::<Result<Vec<_>, _>>()?;
             if outs.is_empty() {
                 return Err(CheckError::Empty);
             }
             Ok(Flow::join(&outs))
         }
-        Node::Group { body, .. } => walk(body, given, reg),
+        Node::Group { body, .. } => walk(body, given, reg, on_side),
     }
 }

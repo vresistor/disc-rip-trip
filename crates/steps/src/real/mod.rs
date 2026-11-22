@@ -654,7 +654,7 @@ impl Rip {
 
 /// A track's note when its read was stopped for the tray to open, or a
 /// read wasn't started after it opened.
-pub const TRAY_OPENED: &str = "Read stopped: tray opened";
+pub use drt_engine::snapshot::TRAY_OPENED;
 /// A track's note when there was no disc to read it from.
 pub const NO_DISC: &str = "No disc in the drive";
 

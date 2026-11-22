@@ -111,6 +111,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     let anchor = match &pop.at {
         Spot::After(after) => lay.pluses.iter().chain(&lay.seams).find(|(id, _)| id == after).map(|p| p.1),
         Spot::Join(path) => lay.joins.iter().find(|j| j.path == *path).map(|j| j.at),
+        Spot::On(id, side) => lay.side_buttons.iter().find(|(x, s, _)| x == id && s == side).map(|b| b.2),
     };
     let Some((px, py)) = anchor else {
         app.popover = None;
@@ -129,7 +130,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
             let next = lay.tiles.iter().position(|t| t.id == *after).and_then(|k| lay.tiles.get(k + 1)).map(|t| t.id.clone()).unwrap_or_default();
             snap.steps.get(&next).map_or(next, |v| v.name.clone())
         }),
-        Spot::Join(_) => None,
+        Spot::Join(_) | Spot::On(..) => None,
     };
     // What a step put the other way would go beside, or in front of.
     let next = next_names(&root, &pop.at, &snap).unwrap_or_default();
@@ -186,7 +187,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     let x = x.clamp(canvas.left() + 8.0, (canvas.right() - 8.0 - WIDTH).max(canvas.left() + 8.0));
     let y = (plus.y - 44.0).clamp(canvas.top() + 8.0, (canvas.bottom() - 8.0 - h).max(canvas.top() + 8.0));
     let name = match &pop.at {
-        Spot::After(id) => snap.steps.get(id).map(|v| v.name.clone()).unwrap_or_default(),
+        Spot::After(id) | Spot::On(id, _) => snap.steps.get(id).map(|v| v.name.clone()).unwrap_or_default(),
         Spot::Join(_) => String::new(),
     };
     let moved = down || up;
@@ -206,6 +207,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
                     ui.set_width(WIDTH - 24.0);
                     let title = match (&pop.at, &between) {
                         (Spot::Join(path), _) => join_title(&root, path, &snap),
+                        (Spot::On(_, side), _) => side_title(*side, &name),
                         (_, Some(next)) => format!("Add between {name} and {next}"),
                         (_, None) => format!("Add after {name}"),
                     };
@@ -314,6 +316,15 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
             }
             Err(e) => app.refuse(&ctx, e.to_string()),
         }
+    }
+}
+
+/// What a button for a step's own path says: *If Rip fails*, *If Choose
+/// needs you*.
+pub fn side_title(side: drt_engine::Side, name: &str) -> String {
+    match side {
+        drt_engine::Side::Fails => format!("If {name} fails"),
+        drt_engine::Side::NeedsYou => format!("If {name} needs you"),
     }
 }
 

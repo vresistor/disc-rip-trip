@@ -42,6 +42,10 @@ pub enum ItemKind {
     /// Taken by a step that accepts anything but nothing (Hold, Notify),
     /// and what branches giving different kinds join into.
     Any,
+    /// One line about a step that failed or needs you, sent down that
+    /// step's own path. Only a step that says it takes one does: not
+    /// `Any`.
+    Message,
 }
 
 impl ItemKind {
@@ -50,7 +54,7 @@ impl ItemKind {
     /// Next disc); `AnyFile` takes every kind of file.
     pub fn accepts(self, given: ItemKind) -> bool {
         match self {
-            ItemKind::Any => given != ItemKind::Nothing,
+            ItemKind::Any => !matches!(given, ItemKind::Nothing | ItemKind::Message),
             ItemKind::AnyFile => given.is_file(),
             _ => self == given,
         }
@@ -66,6 +70,8 @@ impl ItemKind {
         matches!(self, ItemKind::Disc | ItemKind::AudioDisc | ItemKind::DataDisc | ItemKind::GameDisc | ItemKind::VideoDisc)
     }
 }
+
+const MESSAGE_FROM: &str = "message from";
 
 /// One unit of work. Items are identified by `id` across the whole run, so a
 /// join can tell that a FLAC file and an MP3 file are the same track.
@@ -109,6 +115,20 @@ impl Item {
     pub fn knowing(mut self, from: &Item) -> Self {
         self.context = from.context.clone();
         self
+    }
+
+    /// A message about the step `step` (by its name): `line` in its own
+    /// words, knowing what the run knows of the disc.
+    pub fn message(n: usize, step: &str, line: &str, context: Context) -> Self {
+        let mut m = Item::new(format!("message-{n}"), ItemKind::Message, line, None, None);
+        m.context = Arc::new(context);
+        m.context_mut().add(crate::context::Subject::Disc, MESSAGE_FROM, step, "the run");
+        m
+    }
+
+    /// The step a message is about, by name, and its line.
+    pub fn as_message(&self) -> Option<(&str, &str)> {
+        (self.kind == ItemKind::Message).then(|| (self.context.get(crate::context::Subject::Disc, MESSAGE_FROM).unwrap_or(""), self.label.as_str()))
     }
 
     /// What's known about it.

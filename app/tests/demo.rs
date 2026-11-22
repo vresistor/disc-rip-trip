@@ -83,7 +83,6 @@ fn make_app(e: &Env, reg: drt_engine::Registry, time_scale: f64, motion: bool) -
         open_folder: Arc::new(|_| Ok(())),
         pick_folder: Arc::new(|_| None),
         send_test: Arc::new(|_, _, _| Box::pin(async { Ok(vec![]) })),
-        alert: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
         open_tray: Arc::new(|_| Ok(())),
         connected: Arc::new(move || drives.clone()),
     };

@@ -57,15 +57,6 @@ fn main() -> eframe::Result<()> {
         }),
         // Simulated drives are always there; real ones as sysfs says.
         send_test: Arc::new(|desktop, server, topic| Box::pin(async move { drt_steps::real::tell::send_test(desktop, &server, &topic).await })),
-        alert: Arc::new(|to, title, body| {
-            Box::pin(async move {
-                use drt_steps::real::tell;
-                match to {
-                    drt_app::model::AlertTo::Desktop => tell::send(&title, &body).await.map(|_| ()),
-                    drt_app::model::AlertTo::Ntfy { server, topic } => tell::send_ntfy(&server, &topic, &title, &body, true).await,
-                }
-            })
-        }),
         // A simulated drive has no tray to open.
         open_tray: if simulate { Arc::new(|_| Ok(())) } else { Arc::new(drt_steps::real::open_tray) },
         connected: if simulate { Arc::new(|| vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()]) } else { Arc::new(|| drt_steps::real::drives().into_iter().map(|(name, _)| name).collect()) },
