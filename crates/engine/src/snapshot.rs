@@ -342,6 +342,9 @@ impl Snapshot {
 pub const TRAY_OPENED: &str = "Read stopped: tray opened";
 /// A step's detail when its read stopped so.
 pub const TRAY_DETAIL: &str = "Tray opened";
+/// The note of an item a step was still working on when the run was
+/// stopped: it's left, [`ItemState::Skipped`], neither done nor failed.
+pub const STOPPED: &str = "stopped";
 
 pub(crate) fn idle_status(preds: &[String], steps: &BTreeMap<String, StepView>) -> String {
     match preds.first().and_then(|p| steps.get(p)) {

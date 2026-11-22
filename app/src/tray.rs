@@ -2185,7 +2185,7 @@ pub fn rip_verdict(state: ItemState, note: &str) -> (String, Tone, String, Optio
             };
             (word.into(), Tone::Bad, String::new(), Some(why))
         }
-        ItemState::Skipped => ("Skipped".into(), Tone::Plain, String::new(), None),
+        ItemState::Skipped => (left_word(n).into(), Tone::Plain, String::new(), None),
         ItemState::Busy => {
             let mut c = if n.is_empty() { "reading".chars() } else { n.chars() };
             let word = c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default();
@@ -2240,7 +2240,7 @@ fn item_verdict(state: ItemState, note: &str) -> (String, Tone, String, Option<S
     match state {
         ItemState::Ok => ("Done".into(), Tone::Ok, n.to_owned(), None),
         ItemState::Bad => ("Failed".into(), Tone::Bad, String::new(), Some(if n.is_empty() { "Something went wrong".into() } else { cap(n) })),
-        ItemState::Skipped => ("Skipped".into(), Tone::Plain, String::new(), None),
+        ItemState::Skipped => (left_word(n).into(), Tone::Plain, String::new(), None),
         ItemState::Busy => (if n.is_empty() { "Working".into() } else { cap(n) }, Tone::Busy, String::new(), None),
         ItemState::Waiting => ("Waiting".into(), Tone::Plain, String::new(), None),
     }
@@ -2338,7 +2338,7 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
                             _ => ("Encoding".into(), Tone::Busy, String::new()),
                         },
                         ItemState::Bad => ("Failed".into(), Tone::Bad, it.note.clone()),
-                        ItemState::Skipped => ("Skipped".into(), Tone::Plain, String::new()),
+                        ItemState::Skipped => (left_word(&it.note).into(), Tone::Plain, String::new()),
                         ItemState::Waiting => ("Waiting".into(), Tone::Plain, String::new()),
                     });
                     r.attn = it.state == ItemState::Bad;
@@ -2628,6 +2628,16 @@ fn empty(ui: &mut Ui, p: &Pal, text: &str) {
 
 pub fn cap_pub(s: &str) -> String {
     cap(s)
+}
+
+/// What an item left undone says: *Stopped* when the run was stopped
+/// while it was being worked on, else *Skipped*.
+fn left_word(note: &str) -> &'static str {
+    if note.trim() == drt_engine::snapshot::STOPPED {
+        "Stopped"
+    } else {
+        "Skipped"
+    }
 }
 
 /// "fast" as "Fast", for the window; the value stays as it is.
@@ -3008,7 +3018,7 @@ pub fn dump_verdict(state: ItemState, note: &str) -> (String, String, Tone) {
             };
             (head, "unreadable".into(), Tone::Bad)
         }
-        ItemState::Skipped => ("Skipped".into(), "skipped".into(), Tone::Plain),
+        ItemState::Skipped => (left_word(n).into(), left_word(n).to_lowercase(), Tone::Plain),
         ItemState::Busy | ItemState::Waiting => ("Reading".into(), "read".into(), Tone::Busy),
     }
 }
@@ -3074,7 +3084,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
         Here { at: l.position(), t, since }
     });
     let (big, small) = match it.state {
-        ItemState::Skipped => ("Skipped".to_owned(), String::new()),
+        ItemState::Skipped => (left_word(&it.note).to_owned(), String::new()),
         ItemState::Busy if rereading.is_some() => (pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())), "re-read".to_owned()),
         ItemState::Busy => (pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())), word),
         ItemState::Bad => (it.note.split_whitespace().next().filter(|w| w.chars().all(|c| c.is_ascii_digit())).unwrap_or("!").to_owned(), word),
@@ -3132,6 +3142,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             // Needing you, the row says what's wrong, with what to do.
             let head = match it.state {
                 ItemState::Bad => "Not read cleanly",
+                ItemState::Skipped if it.note == drt_engine::snapshot::STOPPED => "Stopped",
                 ItemState::Skipped => "No image kept",
                 _ => &headline,
             };
@@ -3352,7 +3363,7 @@ fn title_verdict(state: ItemState, note: &str) -> (String, Tone, String, Option<
         ItemState::Ok => ("Read".into(), Tone::Ok, n.trim_start_matches('✓').trim().rsplit_once(", ").map_or(String::new(), |(_, size)| size.to_owned()), None),
         ItemState::Bad if n == drt_steps::real::TRAY_OPENED || n == drt_steps::real::NO_DISC => ("Not read".into(), Tone::Bad, String::new(), Some(cap(n))),
         ItemState::Bad => ("Not read".into(), Tone::Bad, String::new(), Some(cap(n.trim_start_matches("Couldn't copy the video: ")))),
-        ItemState::Skipped => ("Skipped".into(), Tone::Plain, String::new(), None),
+        ItemState::Skipped => (left_word(n).into(), Tone::Plain, String::new(), None),
         ItemState::Busy => {
             let pc = progress(n).0.map(|f| format!("{}%", (f * 100.0).floor())).unwrap_or_default();
             // Checking that the file is whole comes after reading: no
@@ -4467,6 +4478,18 @@ mod tests {
         assert_eq!(rip_verdict(ItemState::Bad, "").0, "Couldn't be read");
         assert_eq!(rip_verdict(ItemState::Bad, "something new").3.unwrap(), "Something new", "unknown notes shown as they are");
         assert_eq!(rip_verdict(ItemState::Busy, "re-reading 40%").0, "Re-reading 40%");
+    }
+
+    /// An item the run was stopped in the middle of says so, and nothing
+    /// of it looks busy; one left out is skipped.
+    #[test]
+    fn an_item_stopped_part_way_says_stopped_not_reading() {
+        let stopped = drt_engine::snapshot::STOPPED;
+        assert_eq!(dump_verdict(ItemState::Skipped, stopped), ("Stopped".into(), "stopped".into(), Tone::Plain));
+        assert_eq!(dump_verdict(ItemState::Skipped, "skipped").0, "Skipped");
+        for (w, t, _, _) in [rip_verdict(ItemState::Skipped, stopped), item_verdict(ItemState::Skipped, stopped), title_verdict(ItemState::Skipped, stopped)] {
+            assert_eq!((w.as_str(), t), ("Stopped", Tone::Plain));
+        }
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::item::{Item, ItemKind};
 use crate::lanes::Lanes;
 use crate::recipe::{Node, Recipe, Side};
 use crate::setting::{Scope, Setting, Settings};
-use crate::snapshot::{idle_status, Answer, Command, Snapshot, StepState, StepView};
+use crate::snapshot::{idle_status, Answer, Command, ItemState, Snapshot, StepState, StepView};
 use crate::step::{Cx, Inlet, Outlet, Registry, RetryRequest};
 use anyhow::{bail, Result};
 use futures::stream::{self, StreamExt};
@@ -382,7 +382,16 @@ impl Engine {
                 snap.finished = true;
                 snap.question = None;
                 let stopped = snap.stopped;
-                for v in snap.steps.values_mut().filter(|v| v.step == "drive" && !stopped && matches!(v.state, StepState::Busy | StepState::Idle | StepState::Ok)) {
+                for v in snap.steps.values_mut().filter(|v| v.step == "drive" && matches!(v.state, StepState::Busy | StepState::Idle | StepState::Ok)) {
+                    if stopped {
+                        // Not done, but no longer reading: as it was
+                        // before the read, the disc still in.
+                        if v.state == StepState::Busy {
+                            v.state = if v.status.is_empty() { StepState::Idle } else { StepState::Ok };
+                            v.detail.clear();
+                        }
+                        continue;
+                    }
                     v.state = StepState::Ok;
                     if v.status.is_empty() {
                         v.status = "Done".into();
@@ -396,7 +405,7 @@ impl Engine {
             // a look or another try.
             let clean = {
                 let snap = s.snap.lock().unwrap();
-                !snap.stopped && snap.steps.values().all(|v| v.state != StepState::Bad && v.count(crate::snapshot::ItemState::Bad) == 0)
+                !snap.stopped && snap.steps.values().all(|v| v.state != StepState::Bad && v.count(ItemState::Bad) == 0)
             };
             if clean && s.work.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&s.work) {
@@ -579,6 +588,17 @@ fn finish(cx: &Cx, result: Result<()>) {
             v.record.finished = Some(crate::setting::now());
         }
     });
+    if stopped {
+        // Whatever it was still working on, it isn't now: nothing it shows
+        // goes on saying it's reading, however the step came to its end.
+        cx.view(|v| {
+            for it in v.items.iter_mut().filter(|i| i.state == ItemState::Busy) {
+                it.state = ItemState::Skipped;
+                it.note = crate::snapshot::STOPPED.into();
+            }
+            v.now = None;
+        });
+    }
     cx.view(|v| match result {
         // Stopped: a step that hadn't started isn't done, it just never ran;
         // one that was working stopped. Neither turns green.
@@ -702,12 +722,12 @@ async fn watch_sides(s: Arc<Shared>, to: Vec<((String, Side), mpsc::Sender<Item>
 /// needing you, as is a question, or a hold once all is in. A tray opened
 /// by hand isn't news: whoever opened it is there.
 fn begins(side: Side, v: &StepView, was: Option<&StepView>) -> bool {
-    let holding = |v: &StepView| v.state == StepState::Bad && v.record.finished.is_none() && v.items.iter().any(|i| i.state == crate::snapshot::ItemState::Bad);
+    let holding = |v: &StepView| v.state == StepState::Bad && v.record.finished.is_none() && v.items.iter().any(|i| i.state == ItemState::Bad);
     let waits = |v: &StepView| match side {
         Side::Fails => v.state == StepState::Bad && !holding(v),
         Side::NeedsYou => v.state == StepState::Needs || (v.state == StepState::Hold && !v.detail.is_empty()) || holding(v),
     };
-    let bad: Vec<_> = v.items.iter().filter(|i| i.state == crate::snapshot::ItemState::Bad).collect();
+    let bad: Vec<_> = v.items.iter().filter(|i| i.state == ItemState::Bad).collect();
     let tray = v.detail == crate::snapshot::TRAY_DETAIL || (!bad.is_empty() && bad.iter().all(|i| i.note == crate::snapshot::TRAY_OPENED));
     // Bad already (holding a track that's then settled, say), it hasn't
     // begun to fail now.
