@@ -320,8 +320,11 @@ impl App {
             if !fresh && was.is_some_and(|w| w != st) && matches!(st, StepState::Ok | StepState::Bad | StepState::Needs) {
                 self.cues.insert(id.clone(), (st, self.now));
             }
-            // Follow goes to the latest change, a step that asks first.
-            if !fresh && was.is_some_and(|w| w != st) && matches!(st, StepState::Busy | StepState::Ok | StepState::Bad | StepState::Needs) {
+            // Follow goes to the latest change, a step that asks first. The
+            // Drive's tile shows the drive, busy whenever any step reads it,
+            // so only its asking or failing is worth going to.
+            let drive_only_busy = v.step == "drive" && !matches!(st, StepState::Bad | StepState::Needs);
+            if !fresh && !drive_only_busy && was.is_some_and(|w| w != st) && matches!(st, StepState::Busy | StepState::Ok | StepState::Bad | StepState::Needs) {
                 let asking = self.follow_last.as_ref().is_some_and(|(f, _)| f != id && self.cue_seen.get(f) == Some(&StepState::Needs));
                 if st == StepState::Needs || !asking {
                     self.follow_last = Some((id.clone(), self.now));

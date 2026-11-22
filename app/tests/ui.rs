@@ -5232,3 +5232,25 @@ fn the_plus_on_each_cards_edge_has_its_path_buttons_above_and_below() {
     h.run_steps(2);
     shot(&mut h, "edit-pluses-games");
 }
+
+/// The Drive's tile is busy whenever anything reads the drive: Follow
+/// doesn't keep going back to it.
+#[test]
+fn follow_doesnt_go_back_to_the_drive() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    app_mut(&mut h).set_follow(true);
+    click(&mut h, "Start");
+    let mut seen = vec![];
+    for _ in 0..400 {
+        h.step();
+        if let Some(f) = app(&h).followed() {
+            seen.push(f.to_owned());
+        }
+        if matches!(app(&h).tray, Some(Tray::Question { .. })) {
+            break;
+        }
+    }
+    assert!(!seen.is_empty(), "it followed something");
+    assert!(seen.iter().all(|f| f != "drive"), "{seen:?}");
+}
