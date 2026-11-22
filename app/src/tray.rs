@@ -3103,7 +3103,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             let doing = if v.detail.is_empty() || crawling { "Reading".to_owned() } else { v.detail.split(" · ").next().unwrap_or("").to_owned() };
             let times = app.m.reading(i, id).map(|r| r.times());
             let pass = passes.len().max(1);
-            now_reading(ui, p, &format!("Pass {pass} · {doing}"), &it.label, pct, times.filter(|_| !now_live.as_ref().is_some_and(|l| l.crawling)), t);
+            now_reading(ui, p, &format!("Pass {pass} · {doing}"), &it.label, pct, times, t);
             if let Some((at, of)) = crate::pace::sectors(&it.note) {
                 ring_note(ui, p, &format!("Sector {} of {}", thousands(at), thousands(of)));
             }

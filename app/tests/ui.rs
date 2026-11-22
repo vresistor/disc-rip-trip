@@ -2855,7 +2855,13 @@ fn a_scratched_disc_says_how_its_read_and_re_read_go() {
     until(&mut h, "the read to crawl", |a| live(a).is_some_and(|l| l.crawling && !l.rereading));
     open_id(&mut h, "g_rip");
     h.get_by_label(drt_steps::real::redumper::CRAWLING);
-    assert!(h.get_all_by_label_contains("The drive can't read parts of this disc").next().is_some(), "on the card");
+    // Its speed still said, however slow: on the card, and in the sidebar
+    // with why.
+    let card = snap(&h).steps["g_rip"].detail.clone();
+    assert_eq!(card, "The drive can't read parts of this disc · below 0.1×");
+    // The card short of room keeps the speed whole and the crawl's start.
+    h.get_by_label("Rip, The drive can't read parts of… · below 0.1×, Retries 20");
+    h.get_by_label("time left unknown · below 0.1× · slowed by read errors");
     shot(&mut h, "games-rip-crawling");
     // The re-read: how far through the bad sectors, where, which try,
     // what's come back.

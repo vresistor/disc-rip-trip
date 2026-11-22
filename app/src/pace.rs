@@ -5,6 +5,7 @@
 //! numbers count down rather than jump.
 
 use drt_engine::{ItemState, ItemView};
+use drt_steps::real::redumper::Live;
 use std::time::Instant;
 
 /// What's shown while Rip reads.
@@ -18,23 +19,33 @@ pub struct Reading {
     pub track_left: Option<String>,
     /// The disc's: *12 min*.
     pub disc_left: Option<String>,
-    /// The read speed: *8.2×*.
+    /// The read speed: *8.2×*, *stalled*.
     pub speed: Option<String>,
+    /// There's a speed, but no telling the time left from it.
+    pub left_unknown: bool,
+    /// What's slowing it: *slowed by read errors*.
+    pub why: Option<&'static str>,
 }
 
 impl Reading {
     /// The times and the speed, without the track: *0:56 left · disc 12
-    /// min left · 8.2×*.
+    /// min left · 8.2×*; *time left unknown · 1.2× · slowed by read
+    /// errors*.
     pub fn times(&self) -> String {
         let mut parts = vec![];
         if let Some(t) = &self.track_left {
             parts.push(format!("{t} left"));
+        } else if self.left_unknown {
+            parts.push("time left unknown".into());
         }
         if let Some(d) = &self.disc_left {
             parts.push(format!("disc {d} left"));
         }
         if let Some(s) = &self.speed {
             parts.push(s.clone());
+        }
+        if let Some(w) = self.why {
+            parts.push(w.into());
         }
         parts.join(" · ")
     }
@@ -67,6 +78,22 @@ pub fn left_text(secs: f32) -> String {
 pub fn speed_text(x: f32) -> String {
     format!("{x:.1}×")
 }
+
+/// A drive's speed as it reads, however slow: *0.4×*, *below 0.1×*,
+/// *stalled*; *stalled on read errors* when they're why.
+pub fn drive_speed_text(x: f32, errors_rising: bool) -> String {
+    match x {
+        0.0 if errors_rising => "stalled on read errors".into(),
+        0.0 => "stalled".into(),
+        x if x < 0.05 => "below 0.1×".into(),
+        x => speed_text(x),
+    }
+}
+
+/// A read hasn't moved for this long, by the clock here: stalled, though
+/// the drive has said nothing since (it says nothing while stuck on a
+/// sector).
+pub const STALLED_SECS: f32 = 20.0;
 
 /// Rip's own estimate for the disc, from the end of its detail: *Track 6
 /// · Fell in Love · about 4 min left* is 240 s; *40 s left*, 40.
@@ -170,6 +197,8 @@ pub struct Pace {
     speed: Steady,
     track: Steady,
     disc: Steady,
+    /// A drive's read: the sector it's at, and when it came to it.
+    sector: Option<(u64, Instant)>,
 }
 
 impl Pace {
@@ -245,7 +274,47 @@ impl Pace {
         // One item is the whole disc: its time left is the disc's.
         let disc = disc.filter(|_| items.len() > 1);
         let disc_left = disc.map(|d| self.disc.countdown(d, now));
-        Some(Reading { unit: "", track: n, track_left: track_left.map(left_text), disc_left: disc_left.map(left_text), speed: speed.map(speed_text) })
+        Some(Reading { unit: "", track: n, track_left: track_left.map(left_text), disc_left: disc_left.map(left_text), speed: speed.map(speed_text), ..Default::default() })
+    }
+}
+
+impl Pace {
+    /// What to show while redumper reads a disc through: the speed it's
+    /// reading at now, from its last half minute ([`Live::speed`]), and
+    /// the time left while that says anything; and whether read errors
+    /// are slowing it. Stalled once it hasn't moved for [`STALLED_SECS`].
+    pub fn drive(&mut self, l: &Live, now: Instant) -> Reading {
+        let since = match self.sector {
+            Some((at, t)) if at == l.at => t,
+            _ => {
+                self.sector = Some((l.at, now));
+                now
+            }
+        };
+        let stalled = now.duration_since(since).as_secs_f32() >= STALLED_SECS || l.speed == Some(0.0);
+        let speed = match l.speed.filter(|s| s.is_finite() && *s >= 0.0) {
+            _ if stalled => {
+                self.speed = Steady::default();
+                Some(0.0)
+            }
+            // Held within a tenth, so it doesn't flicker; a slow read's
+            // own small steps still show.
+            Some(s) => Some(self.speed.level(s, (0.1 * s).max(0.02), now)),
+            None => None,
+        };
+        let left = l.left_secs.filter(|_| !stalled).map(|s| self.track.countdown(s as f32, now));
+        if left.is_none() {
+            self.track = Steady::default();
+        }
+        Reading {
+            unit: "",
+            track: 1,
+            track_left: left.map(left_text),
+            disc_left: None,
+            left_unknown: speed.is_some() && left.is_none(),
+            why: (l.errors_rising && speed.is_some_and(|s| s > 0.0)).then_some("slowed by read errors"),
+            speed: speed.map(|s| drive_speed_text(s, l.errors_rising)),
+        }
     }
 }
 
@@ -319,6 +388,34 @@ mod tests {
         // A DVD's 2048-byte sectors: 2298496 of them are 3399 s at 1×.
         assert_eq!(seconds_at_1x("DVD", 2_298_496).map(|s| s.round()), Some(3399.0));
         assert_eq!(percent("7%, sector 160894 of 2298496"), Some(160_894.0 / 2_298_496.0));
+    }
+
+    #[test]
+    fn a_drives_read_says_its_speed_through_errors_and_stalls() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let live = |at: u64, speed: Option<f32>, errors_rising: bool, left_secs: Option<u64>| Live { at, of: 269_159, speed, errors_rising, left_secs, ..Default::default() };
+        let mut pace = Pace::default();
+        // The real read's lines (see redumper's tests): its first few
+        // seconds say nothing; into errors, half of 1×.
+        assert_eq!(pace.drive(&live(147_262, None, false, None), at(0)).times(), "");
+        assert_eq!(pace.drive(&live(153_834, Some(0.49), true, None), at(180)).times(), "time left unknown · 0.5× · slowed by read errors");
+        // Past them, quickly, a time left.
+        assert_eq!(pace.drive(&live(197_515, Some(4.853), false, Some(196)), at(300)).times(), "4 min left · 4.9×");
+        // Into them again, hardly moving.
+        assert_eq!(pace.drive(&live(197_913, Some(0.04), true, None), at(420)).times(), "time left unknown · below 0.1× · slowed by read errors");
+        // Nothing from the drive for 20 s: stalled, by the clock here.
+        assert_eq!(pace.drive(&live(197_913, Some(0.04), true, None), at(439)).speed.as_deref(), Some("below 0.1×"));
+        let r = pace.drive(&live(197_913, Some(0.04), true, None), at(440));
+        assert_eq!(r.times(), "time left unknown · stalled on read errors");
+        assert_eq!(r.why, None);
+        // Or by the drive's, no errors to blame.
+        assert_eq!(pace.drive(&live(197_914, Some(0.0), false, None), at(441)).times(), "time left unknown · stalled");
+        // Moving again: the speed straight away.
+        assert_eq!(pace.drive(&live(198_500, Some(1.2), false, Some(3000)), at(450)).times(), "50 min left · 1.2×");
+        // A slow read's small steps show; a wobble doesn't.
+        assert_eq!(pace.drive(&live(198_510, Some(1.25), false, Some(3000)), at(451)).speed.as_deref(), Some("1.2×"));
+        assert_eq!(pace.drive(&live(198_520, Some(0.6), false, Some(3000)), at(452)).speed.as_deref(), Some("0.6×"));
     }
 
     #[test]

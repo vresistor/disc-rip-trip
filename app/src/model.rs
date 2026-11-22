@@ -690,17 +690,22 @@ impl Model {
                 _ => part(n, "length"),
             };
             // What redumper is on just now: a re-read says where and how
-            // it's going itself (its pace isn't the disc's), and a crawl
-            // says so.
+            // it's going itself (its pace isn't the disc's); a read, its
+            // speed now, from its own lines.
             let live = v.now.clone().and_then(|n| serde_json::from_value::<drt_steps::real::redumper::Live>(n).ok()).filter(|_| dump && busy.is_some());
-            if let Some(l) = live.filter(|l| l.crawling || l.rereading) {
+            if let Some(l) = live.as_ref().filter(|l| l.rereading) {
                 paces.remove(&key);
-                v.detail = if l.rereading { l.card() } else { CRAWLING_CARD.to_owned() };
+                v.detail = l.card();
                 continue;
             }
+            let crawling = live.as_ref().is_some_and(|l| l.crawling);
             if busy.is_some() && reads {
                 let (pace, last) = paces.entry(key).or_default();
-                *last = pace.read(&v.items, &v.detail, length, std::time::Instant::now());
+                let now = std::time::Instant::now();
+                *last = match &live {
+                    Some(l) => Some(pace.drive(l, now)),
+                    None => pace.read(&v.items, &v.detail, length, now),
+                };
                 if let Some(r) = last {
                     if kind == "rip-video" {
                         r.unit = "Video";
@@ -720,6 +725,17 @@ impl Model {
                 if let Some(ctx) = &self.ctx {
                     ctx.request_repaint_after(std::time::Duration::from_secs(1));
                 }
+                // A crawl says so, with the speed: a card short of room
+                // keeps the speed whole and cuts the words before it.
+                if crawling {
+                    v.detail = match last.as_ref().and_then(|r| r.speed.as_ref()) {
+                        Some(s) => format!("{CRAWLING_CARD} · {s}"),
+                        None => CRAWLING_CARD.to_owned(),
+                    };
+                }
+            } else if crawling {
+                paces.remove(&key);
+                v.detail = CRAWLING_CARD.to_owned();
             } else {
                 paces.remove(&key);
                 if v.detail.is_empty() && v.state == StepState::Ok && kind == "rip" {

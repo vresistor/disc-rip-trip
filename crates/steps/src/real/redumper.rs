@@ -668,8 +668,17 @@ pub struct Live {
     pub done: u64,
     pub total: Option<u64>,
     pub recovered: u64,
-    /// The time left, once the pace says anything.
+    /// The time left, once the pace says anything. A read's is left out
+    /// while its speed says nothing of it: errors rising, or crawling.
     pub left_secs: Option<u64>,
+    /// A read's speed over the last half minute, as a multiple of 1×; 0
+    /// when it hasn't moved. Not known for its first few seconds.
+    #[serde(default)]
+    pub speed: Option<f32>,
+    /// A read's errors (the drive's, not the subchannel's) rose in the
+    /// last minute.
+    #[serde(default)]
+    pub errors_rising: bool,
     /// The read is crawling: the drive meets errors and hardly moves.
     pub crawling: bool,
     /// Bad sectors gone through, every try spent, since the last that came
@@ -814,6 +823,13 @@ pub fn thousands(n: u64) -> String {
 
 /// How long a crawl has to last before it's said: three minutes.
 pub const CRAWL_SECS: f64 = 180.0;
+/// A read's speed is taken over this long: half a minute of its lines.
+pub const SPEED_SECS: f64 = 30.0;
+/// Nor said before it has this long to go on.
+pub const SPEED_MIN_SECS: f64 = 3.0;
+/// A read's errors are rising if they rose in this long: a minute, since a
+/// drive stuck on a sector may print nothing for most of one.
+pub const ERRORS_SECS: f64 = 60.0;
 /// A read crawls below this share of a 1× read (a CD's 75 sectors a
 /// second): 5%, a twentieth of the slowest speed a drive reads at.
 pub const CRAWL_SHARE: f64 = 0.05;
@@ -824,7 +840,8 @@ pub const CRAWL_ONE_IN: u64 = 10;
 
 /// Follows a pass of redumper's from its progress lines, as [`Live`]: where
 /// it is, which try, what's come back, the time left, and whether it's
-/// crawling.
+/// crawling. A read's speed is its last half minute's, so a bad patch
+/// shows as it's read, and whether its errors are rising.
 ///
 /// A read (`dump`) crawls when for three minutes it has gone less than 5%
 /// as far as a 1× read would, and the drive's errors rose meanwhile: a
@@ -917,12 +934,6 @@ impl Watch {
                 Some(t) if l.done >= 5 && secs >= 60.0 => Some(((t - l.done) as f64 * secs / l.done as f64) as u64),
                 _ => None,
             };
-        }
-        if l.crawling {
-            return false;
-        }
-        let crawling = if l.rereading {
-            secs >= CRAWL_SECS && l.done >= CRAWL_TRIED && l.recovered * CRAWL_ONE_IN < l.done
         } else {
             // A line a second at most is enough to judge by.
             if self.window.back().is_none_or(|w| now - w.0 >= 1.0) {
@@ -931,6 +942,23 @@ impl Watch {
             while self.window.len() > 2 && now - self.window[1].0 >= CRAWL_SECS {
                 self.window.pop_front();
             }
+            // The speed now: from the line half a minute back (or the
+            // first, early on) to this one.
+            let back = |secs: f64| self.window.iter().rev().find(|w| now - w.0 >= secs).or(self.window.front()).copied().unwrap_or((now, at, errors));
+            let from = back(SPEED_SECS);
+            let span = now - from.0;
+            let sps = (span >= SPEED_MIN_SECS).then(|| at.saturating_sub(from.1) as f64 / span);
+            l.speed = sps.map(|s| (s / self.one_x) as f32);
+            l.errors_rising = errors > back(ERRORS_SECS).2;
+            // The time left at that speed, while it says anything of it.
+            l.left_secs = sps.filter(|s| *s >= CRAWL_SHARE * self.one_x && !l.errors_rising).map(|s| (of.saturating_sub(at) as f64 / s) as u64);
+        }
+        if l.crawling {
+            return false;
+        }
+        let crawling = if l.rereading {
+            secs >= CRAWL_SECS && l.done >= CRAWL_TRIED && l.recovered * CRAWL_ONE_IN < l.done
+        } else {
             let first = self.window.front().copied().unwrap_or((now, at, errors));
             let span = now - first.0;
             span >= CRAWL_SECS && ((at.saturating_sub(first.1)) as f64) < CRAWL_SHARE * self.one_x * span && errors > first.2
@@ -1306,6 +1334,66 @@ mod tests {
         }
         assert_eq!(w.live().recovered, 0);
         assert!(w.live().given_up, "{:?}", w.live());
+    }
+
+    /// Lines from a real read of a scratched CD, at the minutes they came.
+    const SCRATCHED: [(f64, &str); 4] = [
+        (0.0, "⠋ [ 54%] LBA: 147262/269159, errors: { SCSIs: 8820, C2s: 630, Q: 220 }"),
+        (180.0, "⠙ [ 57%] LBA: 153834/269159, errors: { SCSIs: 49392, C2s: 1525, Q: 285 }"),
+        (300.0, "⠹ [ 73%] LBA: 197515/269159, errors: { SCSIs: 49392, C2s: 1525, Q: 564 }"),
+        (420.0, "⠸ [ 73%] LBA: 197913/269159, errors: { SCSIs: 72912, C2s: 2239, Q: 596 }"),
+    ];
+
+    #[test]
+    fn a_scratched_reads_lines() {
+        let p = parse_progress(SCRATCHED[0].1).unwrap();
+        assert_eq!(p.at, Some((147_262, 269_159)));
+        assert_eq!(p.counts, [("SCSI".to_owned(), 8820), ("C2".to_owned(), 630), ("Q".to_owned(), 220)]);
+        assert_eq!(p.retry, None);
+        let p = parse_progress(SCRATCHED[3].1).unwrap();
+        assert_eq!((p.at, p.errors), (Some((197_913, 269_159)), 72_912 + 2239 + 596));
+    }
+
+    #[test]
+    fn a_reads_speed_is_its_last_half_minutes_even_through_errors() {
+        let mut w = Watch::read(75.0);
+        let mut seen = vec![];
+        for (t, l) in SCRATCHED {
+            w.line(&parse_progress(l).unwrap(), t);
+            let l = w.live();
+            seen.push((l.speed.map(|s| (s * 100.0).round() / 100.0), l.errors_rising, l.left_secs));
+        }
+        assert_eq!(seen[0], (None, false, None), "nothing to go on yet");
+        // 6572 sectors in three minutes, the drive's errors rising: half
+        // of 1×, and no time left said.
+        assert_eq!(seen[1], (Some(0.49), true, None));
+        // Then quickly, only the subchannel's counter rising: 4.9×, and
+        // 71644 sectors left at 364 a second.
+        assert_eq!(seen[2], (Some(4.85), false, Some(196)));
+        // Into errors again: 398 sectors in two minutes.
+        assert_eq!(seen[3], (Some(0.04), true, None));
+        // Stuck on one sector for 40 s: not moving, errors still risen.
+        w.line(&parse_progress(SCRATCHED[3].1).unwrap(), 460.0);
+        assert_eq!((w.live().speed, w.live().errors_rising, w.live().left_secs), (Some(0.0), true, None));
+        // Still not crawling: it read well within three minutes.
+        assert!(!w.live().crawling);
+    }
+
+    #[test]
+    fn a_crawling_reads_speed_is_still_followed() {
+        let line = |lba: u64, scsi: u64| parse_progress(&progress_line(lba, 269_159, true, scsi, 0)).unwrap();
+        let mut w = Watch::read(75.0);
+        for k in 0..10u64 {
+            w.line(&line(100_000 + k, k * SAMPLES), k as f64 * 30.0);
+        }
+        assert!(w.live().crawling);
+        // Off the scratch, at 8×: said as it is, the crawl still said.
+        for s in 1..=80u64 {
+            w.line(&line(100_009 + s * 600, 9 * SAMPLES), 270.0 + s as f64);
+        }
+        let l = w.live();
+        assert_eq!((l.speed, l.errors_rising, l.crawling), (Some(8.0), false, true));
+        assert!(l.left_secs.is_some());
     }
 
     #[test]
