@@ -285,6 +285,7 @@ impl Engine {
             raw: Mutex::default(),
             raw_file: Mutex::default(),
             tray: watch::channel(0).0,
+            sides: Mutex::default(),
             holding: watch::channel(0).0,
             work,
         });
@@ -353,8 +354,11 @@ impl Engine {
                 s.command(c);
             }
         });
-        let (end, ended) = oneshot::channel();
-        let watcher = (!to_sides.is_empty()).then(|| tokio::spawn(watch_sides(shared.clone(), to_sides, ended)));
+        let watcher = (!to_sides.is_empty()).then(|| {
+            let (tx, rx) = mpsc::unbounded_channel();
+            *shared.sides.lock().unwrap() = Some((to_sides.iter().map(|(k, _)| k.clone()).collect(), tx));
+            tokio::spawn(watch_sides(shared.clone(), to_sides, rx))
+        });
         let s = shared.clone();
         let done = tokio::spawn(async move {
             for t in tasks {
@@ -362,7 +366,7 @@ impl Engine {
             }
             // The rest is done: what's still to say is said, and the
             // paths for it close.
-            let _ = end.send(());
+            s.sides.lock().unwrap().take();
             if let Some(w) = watcher {
                 let _ = w.await;
             }
@@ -496,7 +500,12 @@ pub(crate) struct Shared {
     pub holding: watch::Sender<usize>,
     /// This run's working folder, made when first asked for.
     pub work: std::path::PathBuf,
+    /// The steps with a path for when they fail or need you, and where to
+    /// say one has begun to; gone once the rest of the run is done.
+    pub sides: Mutex<Option<SideWatch>>,
 }
+
+pub(crate) type SideWatch = (Vec<(String, Side)>, mpsc::UnboundedSender<(String, Side, StepView)>);
 
 /// How many lines of a tool's output are kept in memory, per step.
 pub const RAW_KEPT: usize = 2000;
@@ -525,6 +534,16 @@ impl Shared {
         let mut s = self.snap.lock().unwrap();
         f(&mut s);
         s.derive_waits();
+        // Each time a step with a path of its own begins to fail or need
+        // you, against how it was when last sent; however briefly.
+        if let Some((watched, tx)) = self.sides.lock().unwrap().as_ref() {
+            let before = self.tx.borrow();
+            for (id, side) in watched {
+                if let Some(v) = s.steps.get(id).filter(|v| !s.stopped && begins(*side, v, before.steps.get(id))) {
+                    let _ = tx.send((id.clone(), *side, v.clone()));
+                }
+            }
+        }
         self.tx.send_replace(s.clone());
     }
 
@@ -660,40 +679,21 @@ fn compile(node: &Node, preds: &[usize], g: &mut Vec<GNode>) -> Vec<usize> {
     }
 }
 
-/// Watches the run for a step with a path of its own beginning to fail
-/// or need you, and sends one message down that path each time it does:
-/// in the step's own words, knowing what the run knows of the disc. Ends
-/// once told the rest of the run is done, after a last look, closing the
-/// paths.
-async fn watch_sides(s: Arc<Shared>, to: Vec<((String, Side), mpsc::Sender<Item>)>, mut end: oneshot::Receiver<()>) {
-    let mut rx = s.tx.subscribe();
-    let mut before = rx.borrow_and_update().clone();
+/// Sends one message down a step's path each time it begins to fail or
+/// need you: in the step's own words, knowing what the run knows of the
+/// disc. Ends once the rest of the run is done, closing the paths.
+async fn watch_sides(s: Arc<Shared>, to: Vec<((String, Side), mpsc::Sender<Item>)>, mut begun: mpsc::UnboundedReceiver<(String, Side, StepView)>) {
     let mut n = 0;
-    loop {
-        let last = tokio::select! {
-            r = rx.changed() => r.is_err(),
-            _ = &mut end => true,
-        };
-        let now = rx.borrow_and_update().clone();
-        let begun: Vec<_> = to.iter().filter(|((id, side), _)| !now.stopped && now.steps.get(id).is_some_and(|v| begins(*side, v, before.steps.get(id)))).collect();
-        // A step says why just after it turns: let that land first.
-        let latest = if begun.is_empty() || last {
-            now.clone()
-        } else {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            s.tx.borrow().clone()
-        };
-        for ((id, side), tx) in begun {
-            // As it is now, if it still waits so; else as it turned.
-            let Some(v) = latest.steps.get(id).filter(|l| begins(*side, l, None)).or_else(|| now.steps.get(id)) else { continue };
-            n += 1;
-            let context = s.context.lock().unwrap().clone();
-            let _ = tx.send(Item::message(n, &v.name, &message_line(*side, v), context)).await;
-        }
-        before = now;
-        if last {
-            break;
-        }
+    while let Some((id, side, then)) = begun.recv().await {
+        // A step says why just after it turns: let that land first, and
+        // say it as it is then, if it still waits so.
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let latest = s.tx.borrow().steps.get(&id).filter(|l| begins(side, l, None)).cloned();
+        let v = latest.unwrap_or(then);
+        let Some((_, tx)) = to.iter().find(|(k, _)| *k == (id.clone(), side)) else { continue };
+        n += 1;
+        let context = s.context.lock().unwrap().clone();
+        let _ = tx.send(Item::message(n, &v.name, &message_line(side, &v), context)).await;
     }
 }
 
@@ -709,15 +709,19 @@ fn begins(side: Side, v: &StepView, was: Option<&StepView>) -> bool {
     };
     let bad: Vec<_> = v.items.iter().filter(|i| i.state == crate::snapshot::ItemState::Bad).collect();
     let tray = v.detail == crate::snapshot::TRAY_DETAIL || (!bad.is_empty() && bad.iter().all(|i| i.note == crate::snapshot::TRAY_OPENED));
-    waits(v) && !was.is_some_and(waits) && !tray
+    // Bad already (holding a track that's then settled, say), it hasn't
+    // begun to fail now.
+    let already = was.is_some_and(|w| waits(w) || (side == Side::Fails && w.state == StepState::Bad));
+    waits(v) && !already && !tray
 }
 
 /// What a message says: the step by name, then in its own words why it
 /// failed (*CHD: chdman isn't there*) or what it waits on you for (*Choose
 /// needs you: Which game is this?*).
 pub fn message_line(side: Side, v: &StepView) -> String {
-    // A question is its status; why it failed or holds, its detail.
-    let said = if v.detail.is_empty() || (v.state == StepState::Needs && !v.status.is_empty()) { &v.status } else { &v.detail };
+    // A question, or what's held, is its status; why it failed or holds a
+    // track, its detail.
+    let said = if v.detail.is_empty() || (matches!(v.state, StepState::Needs | StepState::Hold) && !v.status.is_empty()) { &v.status } else { &v.detail };
     let name = &v.name;
     match side {
         Side::Fails if said.is_empty() => format!("{name} failed"),

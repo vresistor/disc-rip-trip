@@ -65,6 +65,36 @@ impl Step for Asks {
     }
 }
 
+/// Holds the disc for you, then lets it go and stays failed, as a Rip
+/// does when you leave a track out; then, all in, holds as Hold does.
+struct Holds;
+
+#[async_trait]
+impl Step for Holds {
+    fn info(&self) -> StepInfo {
+        StepInfo::new("holds", "Rip", Group::Read, ItemKind::Disc, ItemKind::Disc)
+    }
+
+    async fn run(&self, mut inlet: Inlet, _outlet: Outlet, cx: Cx) -> Result<()> {
+        let Some(d) = inlet.recv().await else { return Ok(()) };
+        cx.item(&d, drt_engine::ItemState::Bad, "774 unreadable sectors");
+        cx.state(StepState::Bad);
+        cx.status("", "Couldn't read 774 sectors");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cx.item(&d, drt_engine::ItemState::Skipped, "skipped");
+        cx.status("Skipped", "");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cx.state(StepState::Hold);
+        cx.status("1 held", "");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cx.status("1 held", "All here");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cx.status("1 held", "All here");
+        cx.state(StepState::Ok);
+        Ok(())
+    }
+}
+
 /// Takes the disc, or a message: says each message it's given.
 struct Hears;
 
@@ -89,7 +119,7 @@ impl Step for Hears {
 
 fn engine() -> Engine {
     let mut reg = Registry::default();
-    reg.add(Start).add(Breaks).add(Asks).add(Hears);
+    reg.add(Start).add(Breaks).add(Asks).add(Hears).add(Holds);
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
     e.work_root = std::env::temp_dir().join(format!("drt-paths-{}", std::process::id()));
@@ -138,6 +168,16 @@ async fn a_question_goes_down_the_needs_you_path_and_the_run_goes_on() {
     assert_eq!(s.steps["t"].status, "0");
     assert_eq!(s.steps["end"].status, "0", "the disc went on as usual, with no message");
     assert_eq!(s.steps["c"].state, StepState::Ok);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn holding_is_needing_you_once_and_settling_it_is_no_failure() {
+    let e = engine();
+    let root = chain([Node::step("s", "start"), Node::step("rip", "holds").on(Side::Fails, Node::step("t", "hears")).on(Side::NeedsYou, Node::step("n", "hears"))]);
+    let s = run(&e, root, false).await;
+    assert_eq!(s.steps["t"].status, "0", "settled, not failed");
+    assert_eq!(s.steps["n"].status, "2", "the track held, then all in and held");
+    assert_eq!(s.steps["n"].detail, "Koudelka (Europe) (Disc 4) / Rip / Rip needs you: Couldn't read 774 sectors\nKoudelka (Europe) (Disc 4) / Rip / Rip needs you: 1 held");
 }
 
 #[test]
