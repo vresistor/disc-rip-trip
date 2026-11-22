@@ -2186,7 +2186,7 @@ fn tab_on(h: &Harness<Window>) -> Option<String> {
 
 /// The drive dropdown's choices, opened: each one's words.
 fn drive_options(h: &mut Harness<Window>) -> Vec<String> {
-    h.get_by_role(Role::ComboBox).click_accesskit();
+    h.get_all_by_role(Role::ComboBox).next().expect("the drive dropdown, first").click_accesskit();
     h.run_steps(2);
     let all: Vec<String> = h
         .get_all_by_role(Role::Button)
@@ -2200,7 +2200,7 @@ fn drive_options(h: &mut Harness<Window>) -> Vec<String> {
 /// Picks a drive in the dropdown.
 fn pick_drive(h: &mut Harness<Window>, d: &str) {
     if h.query_all_by_role(Role::Button).all(|n| !n.accesskit_node().label().is_some_and(|l| l.starts_with(d))) {
-        h.get_by_role(Role::ComboBox).click_accesskit();
+        h.get_all_by_role(Role::ComboBox).next().expect("the drive dropdown, first").click_accesskit();
         h.run_steps(2);
     }
     h.get_all_by_role(Role::Button).find(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with(d))).unwrap_or_else(|| panic!("no {d} to pick")).click();
@@ -3773,10 +3773,10 @@ fn the_drive_is_always_a_dropdown_with_one_drive_or_two() {
     let mut h = window(&e, None, true, 0.0);
     click_tile(&mut h, "Drive,");
     // One drive: still a dropdown, so it can be changed later.
-    h.get_by_role(Role::ComboBox);
+    h.get_all_by_role(Role::ComboBox).next().expect("the drive dropdown, first");
     let opts = drive_options(&mut h);
     assert_eq!(opts, [recipes::BLU_RAY.to_owned()], "{opts:?}");
-    h.get_by_role(Role::ComboBox).click_accesskit();
+    h.get_all_by_role(Role::ComboBox).next().expect("the drive dropdown, first").click_accesskit();
     h.run_steps(2);
     // Just its name: nothing said about there being only one.
     assert!(h.query_all_by_label_contains("Blu-ray drive").next().is_some());
@@ -3789,7 +3789,7 @@ fn the_drive_is_always_a_dropdown_with_one_drive_or_two() {
     let e = env();
     let mut h = window(&e, None, true, 0.0);
     click_tile(&mut h, "Drive,");
-    h.get_by_role(Role::ComboBox);
+    h.get_all_by_role(Role::ComboBox).next().expect("the drive dropdown, first");
     let opts = drive_options(&mut h);
     assert_eq!(opts.len(), 2, "{opts:?}");
 }
@@ -5484,4 +5484,19 @@ fn typing_is_saved_when_the_sidebar_closes() {
         _ => None,
     });
     assert_eq!(saved.as_deref(), Some("typed-not-entered"));
+}
+
+#[test]
+fn a_sector_order_found_by_testing_shows_on_the_drive_and_resets_to_be_found_again() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    let i = app(&h).sel;
+    let drive = app(&h).m.drive(i);
+    app(&h).m.engine.settings.lock().unwrap().set_drive(&drive, "sector_order", Setting::detected(Value::from("DATA_SUB_C2"), "found by testing"));
+    click_tile(&mut h, "Drive,");
+    h.run_steps(2);
+    assert!(h.query_all_by_label_contains("found by testing").next().is_some());
+    h.get_by_label("Reset How this drive hands over each sector").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(app(&h).m.engine.settings.lock().unwrap().drive(&drive, "sector_order"), Setting::Default);
 }

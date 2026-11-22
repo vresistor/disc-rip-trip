@@ -61,12 +61,20 @@ pub struct Options {
     /// The same value for the dump and every re-read of it: redumper
     /// places what it reads by it.
     pub read_offset: Option<i64>,
+    /// The order the drive hands over each sector's data, subchannel and
+    /// C2 in ([`ORDERS`]), when it was found by testing or chosen: for a
+    /// drive redumper doesn't know, whose own guess can be wrong and then
+    /// shows errors on every sector. `None`: redumper's own.
+    pub sector_order: Option<String>,
 }
 
 pub fn dump_args(o: &Options, t: &Target) -> Vec<String> {
     let mut a = vec!["dump".into(), format!("--drive={}", o.drive), format!("--retries={}", o.retries)];
-    // Generic drives have their sector order probed. Almost every drive is one.
-    a.push("--auto-detect".into());
+    // Generic drives have their sector order probed, unless it's known.
+    // Almost every drive is one.
+    if o.sector_order.is_none() {
+        a.push("--auto-detect".into());
+    }
     // Only when there's nothing to resume: redumper refuses to start over a
     // `.state` without it, and a resumable dump shouldn't be read again.
     if !t.file("state").is_file() {
@@ -76,6 +84,7 @@ pub fn dump_args(o: &Options, t: &Target) -> Vec<String> {
         a.push(format!("--speed={s}"));
     }
     a.extend(o.offset_arg());
+    a.extend(o.order_arg());
     a.extend(t.args());
     a
 }
@@ -83,6 +92,10 @@ pub fn dump_args(o: &Options, t: &Target) -> Vec<String> {
 impl Options {
     fn offset_arg(&self) -> Option<String> {
         self.read_offset.map(|o| format!("--drive-read-offset={o}"))
+    }
+
+    fn order_arg(&self) -> Option<String> {
+        self.sector_order.as_ref().map(|o| format!("--drive-sector-order={o}"))
     }
 }
 
@@ -92,6 +105,7 @@ pub fn refine_args(o: &Options, t: &Target) -> Vec<String> {
         a.push(format!("--speed={s}"));
     }
     a.extend(o.offset_arg());
+    a.extend(o.order_arg());
     a.extend(t.args());
     a
 }
@@ -103,6 +117,157 @@ pub fn split_args(t: &Target, force: bool) -> Vec<String> {
     }
     a.extend(t.args());
     a
+}
+
+// ---- finding a drive's sector order ----------------------------------------------------------
+
+/// The orders a drive can hand over a sector's parts in, redumper's names.
+pub const ORDERS: [&str; 4] = ["DATA_C2_SUB", "DATA_SUB_C2", "DATA_SUB", "DATA_C2"];
+
+/// The orders tried, best first: with C2 (which says which samples the
+/// drive couldn't read) before without. Without subchannel redumper can't
+/// place what it reads, so DATA_C2 is never tried.
+pub const TRY_ORDERS: [&str; 3] = ["DATA_SUB_C2", "DATA_C2_SUB", "DATA_SUB"];
+
+/// The stretches of a disc tried, in turn: the first sectors, and further
+/// in when none of the orders read those cleanly (a mark at the start).
+pub const PROBE_RANGES: [(u64, u64); 2] = [(0, 300), (5000, 5300)];
+
+/// An order in words: *data, then subchannel, then C2*.
+pub fn order_words(order: &str) -> String {
+    match order {
+        "DATA_C2_SUB" => "data, then C2, then subchannel",
+        "DATA_SUB_C2" => "data, then subchannel, then C2",
+        "DATA_SUB" => "data, then subchannel, with no C2",
+        "DATA_C2" => "data, then C2, with no subchannel",
+        o => o,
+    }
+    .to_owned()
+}
+
+/// What the log and Rip say of the order used: *This drive hands over
+/// data, then subchannel, then C2 (found by testing)*.
+pub fn order_line(order: &str, from: &str) -> String {
+    format!("{ORDER_LINE} {} ({from})", order_words(order))
+}
+
+/// How [`order_line`] starts, to find it in a log.
+pub const ORDER_LINE: &str = "This drive hands over";
+
+/// A short read for finding the order: `range` with no retries, in the
+/// `order` given, or redumper's own (`None`).
+pub fn probe_args(drive: &str, order: Option<&str>, range: (u64, u64), t: &Target) -> Vec<String> {
+    let mut a = vec!["dump".into(), format!("--drive={drive}"), "--retries=0".into()];
+    match order {
+        Some(o) => a.push(format!("--drive-sector-order={o}")),
+        None => a.push("--auto-detect".into()),
+    }
+    a.extend([format!("--lba-start={}", range.0), format!("--lba-end={}", range.1), "--overwrite".into()]);
+    a.extend(t.args());
+    a
+}
+
+/// Whether redumper said it doesn't know the drive, and so guessed.
+pub fn unknown_drive(output: &str) -> bool {
+    output.contains("drive not found in the database")
+}
+
+/// The order redumper used, from its `configuration:` line.
+pub fn order_used(output: &str) -> Option<String> {
+    let l = output.lines().map(str::trim).find(|l| l.starts_with("configuration:"))?;
+    let at = l.find("sector order:")? + "sector order:".len();
+    let o = l[at..].split([',', ')']).next()?.trim();
+    ORDERS.contains(&o).then(|| o.to_owned())
+}
+
+/// A short read's errors by name (`SCSI`, `C2`, `Q`): its summary's, else
+/// its last progress line's. `None` when it shows neither.
+pub fn probe_errors(output: &str) -> Option<Vec<(String, u64)>> {
+    if let Some(at) = output.find("media errors:") {
+        let counts: Vec<(String, u64)> = output[at..]
+            .lines()
+            .skip(1)
+            .map_while(|l| {
+                let (name, n) = l.trim().split_once(':')?;
+                Some((name.trim().to_owned(), n.split_whitespace().next()?.parse().ok()?))
+            })
+            .collect();
+        if !counts.is_empty() {
+            return Some(counts);
+        }
+    }
+    output.lines().rev().find_map(parse_progress).map(|p| p.counts).filter(|c| !c.is_empty())
+}
+
+/// Whether a short read in an order read cleanly: it ran, and shows no
+/// error of any kind. A wrong order shows Q (subchannel) or C2 errors on
+/// nearly every sector.
+pub fn probe_clean(output: &str, ok: bool) -> bool {
+    ok && probe_errors(output).is_some_and(|c| c.iter().all(|(_, n)| *n == 0))
+}
+
+/// What finding the order came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Found {
+    /// redumper knows the drive, and its order: nothing to find.
+    Known,
+    /// The order that read cleanly.
+    Order(String),
+    /// None did: redumper's guess it is.
+    Nothing,
+}
+
+/// Finds the order a drive redumper doesn't know hands over sectors in, by
+/// short reads through `read` (`order`, `range`; giving what redumper
+/// printed and whether it succeeded): first in redumper's own, which
+/// says whether it knows the drive; then each of [`TRY_ORDERS`] in turn,
+/// over each of [`PROBE_RANGES`] until one reads cleanly. One with C2 is
+/// taken as soon as it does; DATA_SUB only when neither with C2 does on
+/// any stretch. Each read is told to `note`, for the log.
+pub async fn find_order<F, Fut>(mut read: F, mut note: impl FnMut(String)) -> Result<Found>
+where
+    F: FnMut(Option<String>, (u64, u64)) -> Fut,
+    Fut: std::future::Future<Output = Result<(String, bool)>>,
+{
+    let (first, ok) = read(None, PROBE_RANGES[0]).await?;
+    if !unknown_drive(&first) {
+        return Ok(Found::Known);
+    }
+    let guess = order_used(&first);
+    let (a, b) = PROBE_RANGES[0];
+    note(format!("test read of sectors {a}–{b} as redumper guessed ({}): {}", guess.as_deref().unwrap_or("its own order"), probe_summary(&first, ok)));
+    let mut without_c2 = None;
+    for range in PROBE_RANGES {
+        for order in TRY_ORDERS {
+            let clean = match (&guess, range == PROBE_RANGES[0]) {
+                (Some(g), true) if g == order => probe_clean(&first, ok),
+                _ => {
+                    let (out, ok) = read(Some(order.to_owned()), range).await?;
+                    let clean = probe_clean(&out, ok);
+                    note(format!("test read of sectors {}–{} as {order}: {}", range.0, range.1, probe_summary(&out, ok)));
+                    clean
+                }
+            };
+            if clean && order == "DATA_SUB" {
+                without_c2.get_or_insert(order);
+            } else if clean {
+                return Ok(Found::Order(order.to_owned()));
+            }
+        }
+        if without_c2.is_some() {
+            break;
+        }
+    }
+    Ok(without_c2.map(|o| Found::Order(o.to_owned())).unwrap_or(Found::Nothing))
+}
+
+/// A short read's errors for the log: *SCSI 0, C2 6140, Q 299*.
+fn probe_summary(out: &str, ok: bool) -> String {
+    match probe_errors(out) {
+        Some(c) => c.iter().map(|(n, k)| format!("{n} {k}")).collect::<Vec<_>>().join(", ") + if ok { "" } else { ", and redumper stopped" },
+        None if ok => "no error counts".into(),
+        None => "redumper stopped".into(),
+    }
 }
 
 /// Runs one redumper command in the dump's folder. Gives what it printed
@@ -1808,17 +1973,129 @@ error: data errors detected, unable to continue
     #[test]
     fn the_commands_for_each_phase() {
         let t = Target { dir: PathBuf::from("/nonexistent/work/image"), name: "MY_DISC".into() };
-        let o = Options { drive: "/dev/sr0".into(), retries: 20, speed: None, read_offset: None };
+        let o = Options { drive: "/dev/sr0".into(), retries: 20, speed: None, read_offset: None, sector_order: None };
         assert_eq!(dump_args(&o, &t), ["dump", "--drive=/dev/sr0", "--retries=20", "--auto-detect", "--overwrite", "--image-path=/nonexistent/work/image", "--image-name=MY_DISC"]);
         // The drive's offset, when known, for the dump and its re-reads alike.
         let known = Options { read_offset: Some(-472), ..o.clone() };
         assert!(dump_args(&known, &t).contains(&"--drive-read-offset=-472".to_owned()));
         assert!(refine_args(&known, &t).contains(&"--drive-read-offset=-472".to_owned()));
         assert!(!dump_args(&o, &t).iter().any(|a| a.starts_with("--drive-read-offset")));
+        // A sector order found or chosen, for both; redumper's own guess not asked for.
+        let ordered = Options { sector_order: Some("DATA_SUB_C2".into()), ..o.clone() };
+        assert!(dump_args(&ordered, &t).contains(&"--drive-sector-order=DATA_SUB_C2".to_owned()));
+        assert!(!dump_args(&ordered, &t).contains(&"--auto-detect".to_owned()));
+        assert!(refine_args(&ordered, &t).contains(&"--drive-sector-order=DATA_SUB_C2".to_owned()));
+        assert!(!dump_args(&o, &t).iter().any(|a| a.starts_with("--drive-sector-order")));
         let o = Options { speed: Some(8), retries: 0, ..o };
         assert!(refine_args(&o, &t).contains(&"--retries=1".to_owned()), "refine with no retries does nothing");
         assert!(refine_args(&o, &t).contains(&"--speed=8".to_owned()));
         assert_eq!(split_args(&t, true)[..3], ["split", "--overwrite", "--force-split"]);
+    }
+
+    /// A short read's output, as redumper prints it, for a drive it does or
+    /// doesn't know, in `order`, with these errors.
+    fn probe_out(known: bool, order: &str, c2: u64, q: u64) -> String {
+        let db = if known { "" } else { "warning: drive not found in the database\n" };
+        let kind = if known { "PLEXTOR" } else { "GENERIC" };
+        format!(
+            "redumper (build: b744)\n{db}drive information\n  configuration: {kind} (read offset: +0, C2 shift: 0, pre-gap start: +0, read method: BE, sector order: {order})\n*** DUMP (time check: 0s)\n[100%] LBA:    300/300, errors: {{ SCSIs: 0, C2s: {c2}, Q: {q} }}\nmedia errors: \n  SCSI: 0 samples\n  C2: {c2} samples\n  Q: {q}\n*** END (time check: 3s)\n"
+        )
+    }
+
+    /// The orders as the Lite-On eHAU324 reads a good disc in them.
+    fn ehau324(order: Option<&str>) -> String {
+        match order.unwrap_or("DATA_C2_SUB") {
+            o @ "DATA_C2_SUB" => probe_out(false, o, 6140, 299),
+            o @ ("DATA_SUB_C2" | "DATA_SUB") => probe_out(false, o, 0, 0),
+            o => probe_out(false, o, 0, 299),
+        }
+    }
+
+    async fn find_with(answer: impl Fn(Option<&str>, (u64, u64)) -> String) -> (Found, Vec<(Option<String>, (u64, u64))>, Vec<String>) {
+        let tried = std::cell::RefCell::new(vec![]);
+        let mut notes = vec![];
+        let found = find_order(
+            |o, r| {
+                let out = answer(o.as_deref(), r);
+                tried.borrow_mut().push((o, r));
+                async move { Ok((out, true)) }
+            },
+            |n| notes.push(n),
+        )
+        .await
+        .unwrap();
+        (found, tried.into_inner(), notes)
+    }
+
+    #[test]
+    fn a_short_read_s_errors_by_name() {
+        let out = ehau324(None);
+        assert!(unknown_drive(&out));
+        assert_eq!(order_used(&out).as_deref(), Some("DATA_C2_SUB"));
+        assert_eq!(probe_errors(&out).unwrap(), [("SCSI".to_owned(), 0), ("C2".to_owned(), 6140), ("Q".to_owned(), 299)]);
+        assert!(!probe_clean(&out, true));
+        assert!(probe_clean(&ehau324(Some("DATA_SUB_C2")), true));
+        assert!(!probe_clean(&ehau324(Some("DATA_SUB_C2")), false), "one that stopped proves nothing");
+        // Only a progress line: its counts.
+        assert_eq!(probe_errors("[100%] LBA:    300/300, errors: { SCSIs: 0, C2s: 3, Q: 0 }").unwrap()[1], ("C2".to_owned(), 3));
+        assert_eq!(probe_errors("error: no disc"), None);
+        assert_eq!(order_line("DATA_SUB_C2", "found by testing"), "This drive hands over data, then subchannel, then C2 (found by testing)");
+    }
+
+    #[tokio::test]
+    async fn the_order_is_found_by_testing_an_unknown_drive() {
+        let (found, tried, notes) = find_with(|o, _| ehau324(o)).await;
+        assert_eq!(found, Found::Order("DATA_SUB_C2".into()));
+        // redumper's own guess first, then the best order, which read cleanly.
+        assert_eq!(tried, [(None, (0, 300)), (Some("DATA_SUB_C2".into()), (0, 300))]);
+        assert!(notes[0].contains("DATA_C2_SUB") && notes[0].contains("C2 6140, Q 299"), "{notes:?}");
+        assert!(probe_args("/dev/sr0", Some("DATA_SUB_C2"), (0, 300), &Target { dir: "/t".into(), name: "test".into() }).starts_with(&[
+            "dump".to_owned(),
+            "--drive=/dev/sr0".into(),
+            "--retries=0".into(),
+            "--drive-sector-order=DATA_SUB_C2".into(),
+            "--lba-start=0".into(),
+            "--lba-end=300".into()
+        ]));
+    }
+
+    #[tokio::test]
+    async fn an_order_with_c2_is_preferred_and_one_without_is_the_last_resort() {
+        // Only DATA_C2_SUB and DATA_SUB read cleanly: DATA_C2_SUB, with C2.
+        let (found, _, _) = find_with(|o, _| match o.unwrap_or("DATA_C2") {
+            o @ ("DATA_C2_SUB" | "DATA_SUB") => probe_out(false, o, 0, 0),
+            o => probe_out(false, o, 10, 299),
+        })
+        .await;
+        assert_eq!(found, Found::Order("DATA_C2_SUB".into()));
+        // Only DATA_SUB: taken, once neither with C2 read cleanly.
+        let (found, _, _) = find_with(|o, _| match o.unwrap_or("DATA_C2") {
+            o @ "DATA_SUB" => probe_out(false, o, 0, 0),
+            o => probe_out(false, o, 10, 299),
+        })
+        .await;
+        assert_eq!(found, Found::Order("DATA_SUB".into()));
+        // redumper's guess right: taken from its own read, with no other.
+        let (found, tried, _) = find_with(|o, _| probe_out(false, o.unwrap_or("DATA_SUB_C2"), 0, 0)).await;
+        assert_eq!((found, tried.len()), (Found::Order("DATA_SUB_C2".into()), 1));
+    }
+
+    #[tokio::test]
+    async fn a_marked_start_is_tested_further_in_and_nothing_clean_is_said() {
+        // Errors in the first sectors whatever the order: further in, DATA_SUB_C2.
+        let (found, tried, _) = find_with(|o, r| probe_out(false, o.unwrap_or("DATA_C2_SUB"), if r.0 == 0 || o != Some("DATA_SUB_C2") { 5 } else { 0 }, 0)).await;
+        assert_eq!(found, Found::Order("DATA_SUB_C2".into()));
+        assert_eq!(tried.last().unwrap(), &(Some("DATA_SUB_C2".into()), PROBE_RANGES[1]));
+        let (found, tried, _) = find_with(|o, _| probe_out(false, o.unwrap_or("DATA_C2_SUB"), 5, 5)).await;
+        assert_eq!(found, Found::Nothing);
+        // Every order over each stretch, redumper's guess standing for its own at the start.
+        assert_eq!(tried.len(), TRY_ORDERS.len() * PROBE_RANGES.len());
+    }
+
+    #[tokio::test]
+    async fn a_drive_redumper_knows_isn_t_tested() {
+        let (found, tried, _) = find_with(|o, _| probe_out(true, o.unwrap_or("DATA_C2_SUB"), 0, 0)).await;
+        assert_eq!((found, tried.len()), (Found::Known, 1));
     }
 
     #[test]

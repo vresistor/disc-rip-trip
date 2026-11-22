@@ -1291,7 +1291,9 @@ fn setting(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, spec: &ParamSpec, focu
         return;
     }
     let mut commit: Option<serde_json::Value> = None;
-    let yours = app.m.is_yours(i, id, spec, app.m.builtin(i).as_ref()) && !app.invalid.contains_key(&key);
+    // A drive setting found by testing (its sector order) can be reset to be found again.
+    let found = spec.scope == Scope::Drive && !spec.findable && matches!(set, Setting::Detected { .. });
+    let yours = (app.m.is_yours(i, id, spec, app.m.builtin(i).as_ref()) || found) && !app.invalid.contains_key(&key);
     let reset = field_reset(
         ui,
         p,
@@ -3245,6 +3247,11 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     }
     let key = format!("{}/dump", v.step);
     let clicked = rows(app, ui, p, &key, list, "", t);
+    // How the drive was read, when redumper was told: found by testing, or yours.
+    if let Some(l) = log.iter().find(|l| l.starts_with(drt_steps::real::redumper::ORDER_LINE)) {
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(RichText::new(*l).font(font(12.5, 400)).color(p.muted)).wrap());
+    }
     // Every sector, under what needs you and the passes.
     if let Some(m) = sectors_map {
         ui.add_space(8.0);

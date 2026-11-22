@@ -129,7 +129,7 @@ fn find_drive(name: &str) -> Option<String> {
 #[async_trait]
 impl Step for Drive {
     fn info(&self) -> StepInfo {
-        StepInfo::new("drive", "Drive", Group::Source, ItemKind::Nothing, ItemKind::Disc).from_param("drive").param(drive_param()).param(offset_param())
+        StepInfo::new("drive", "Drive", Group::Source, ItemKind::Nothing, ItemKind::Disc).from_param("drive").param(drive_param()).param(offset_param()).param(sector_order_param())
     }
 
     async fn find(&self, key: &str, drive: &str, measure: bool) -> Option<(Value, String)> {
@@ -374,6 +374,18 @@ pub fn offset_param() -> ParamSpec {
         .only_with(&["rip"])
         .on_card_as("Offset", &[], signed_offset)
         .help("How early or late this drive reads audio. Found for you, and needed to check each track.")
+}
+
+/// The order the drive hands over each sector's parts in, for redumper:
+/// found by testing (and kept here) on a drive redumper doesn't know, or
+/// one of the four. Shared with the simulated step.
+pub fn sector_order_param() -> ParamSpec {
+    ParamSpec::new(data::SECTOR_ORDER, "How this drive hands over each sector", ParamKind::Choice(&[data::FIND_ORDER, "DATA_SUB_C2", "DATA_C2_SUB", "DATA_SUB", "DATA_C2"]))
+        .on_drive()
+        .default(data::FIND_ORDER)
+        .section("Advanced")
+        .labels(&["Find it by testing", "Data, then subchannel, then C2", "Data, then C2, then subchannel", "Data, then subchannel, with no C2", "Data, then C2, with no subchannel"])
+        .help("For game and data discs. Only drives redumper doesn't know need it; a short test read finds it.")
 }
 
 /// Rip's first read, shared with the simulated step.

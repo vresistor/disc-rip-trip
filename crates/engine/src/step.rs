@@ -504,6 +504,21 @@ impl Cx {
         spec.resolve_at(&setting, self.flow.as_deref())
     }
 
+    /// A setting stored on the recipe's drive, whichever step's it is:
+    /// what an earlier rip found out about the drive (the order redumper
+    /// should read it in). Default when there's no drive.
+    pub fn on_drive(&self, key: &str) -> Setting<Value> {
+        self.shared.settings.lock().unwrap().drive(&self.shared.drive, key)
+    }
+
+    /// Records what was found out about the recipe's drive, for every
+    /// later rip on it. Nothing when the recipe has no drive.
+    pub fn remember_on_drive(&self, key: &str, value: Value, source: &str) {
+        if !self.shared.drive.is_empty() {
+            self.shared.settings.lock().unwrap().set_drive(&self.shared.drive, key, Setting::detected(value, source));
+        }
+    }
+
     pub fn text(&self, key: &str) -> String {
         match self.param(key) {
             Some(Value::String(s)) => s,

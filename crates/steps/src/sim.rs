@@ -75,7 +75,11 @@ struct Drive;
 #[async_trait]
 impl Step for Drive {
     fn info(&self) -> StepInfo {
-        StepInfo::new("drive", "Drive", Group::Source, ItemKind::Nothing, ItemKind::Disc).from_param("drive").param(crate::real::drive_param()).param(crate::real::offset_param())
+        StepInfo::new("drive", "Drive", Group::Source, ItemKind::Nothing, ItemKind::Disc)
+            .from_param("drive")
+            .param(crate::real::drive_param())
+            .param(crate::real::offset_param())
+            .param(crate::real::sector_order_param())
     }
 
     async fn find(&self, key: &str, drive: &str, _measure: bool) -> Option<(serde_json::Value, String)> {

@@ -530,8 +530,66 @@ pub fn rip_options(c: &Context) -> Result<redumper::Options> {
         retries: get(RIP_RETRIES).and_then(|v| v.parse().ok()).unwrap_or(20),
         speed: get(RIP_SPEED).and_then(|v| v.parse().ok()),
         read_offset: read_offset(c),
+        sector_order: c.get(Subject::Disc, SECTOR_ORDER).map(str::to_owned),
     })
 }
+
+/// The drive setting, and the fact on a dump, of the order the drive hands
+/// over each sector's parts in ([`redumper::ORDERS`]), or `find`.
+pub const SECTOR_ORDER: &str = "sector_order";
+pub const FIND_ORDER: &str = "find";
+
+/// The order Rip reads a CD in, and where it came from: the drive's own
+/// setting when it holds one (yours, or found by testing an earlier disc);
+/// else, for a drive redumper doesn't know, found now by short test reads
+/// of this disc, and kept on the drive. `None`: redumper's own, for a
+/// drive it knows, a DVD or Blu-ray (which have no such order), or when no
+/// order read cleanly.
+pub async fn sector_order(cx: &Cx, disc: &Item, drive: &str) -> Result<Option<(String, String)>> {
+    if matches!(disc.context().get(Subject::Disc, "media"), Some("DVD" | "HD DVD" | "Blu-ray")) {
+        return Ok(None);
+    }
+    let set = cx.on_drive(SECTOR_ORDER);
+    if let Some(o) = set.resolve(None).and_then(|v| v.as_str().map(str::to_owned)).filter(|o| redumper::ORDERS.contains(&o.as_str())) {
+        let from = match set.provenance() {
+            "yours" => "your choice",
+            p => p,
+        };
+        return Ok(Some((o, from.to_owned())));
+    }
+    let t = redumper::Target { dir: cx.work()?.join("order-test"), name: "test".into() };
+    cx.status("", "Testing how the drive reads");
+    let found = redumper::find_order(
+        |order, range| {
+            let (cx, t, drive) = (cx.clone(), t.clone(), drive.to_owned());
+            async move {
+                let args = redumper::probe_args(&drive, order.as_deref(), range, &t);
+                let hold = cx.drive_read();
+                let r = redumper::run(&args, &t, hold.stop(), |_| {}).await;
+                if hold.tray_opened() {
+                    bail!("the tray was opened");
+                }
+                r
+            }
+        },
+        |line| cx.log(line),
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(&t.dir);
+    match found? {
+        redumper::Found::Known => Ok(None),
+        redumper::Found::Order(o) => {
+            cx.remember_on_drive(SECTOR_ORDER, Value::from(o.clone()), FOUND_BY_TESTING);
+            Ok(Some((o, FOUND_BY_TESTING.into())))
+        }
+        redumper::Found::Nothing => {
+            cx.log("No order the drive could hand over its data in read the test sectors cleanly, so redumper's own guess is used");
+            Ok(None)
+        }
+    }
+}
+
+pub const FOUND_BY_TESTING: &str = "found by testing";
 
 /// Whether ripping a dump again and combining the rips can help: a CD
 /// image redumper made, as a cue sheet and raw sectors, each of which has
@@ -628,7 +686,7 @@ impl Step for Image {
         let t = redumper::Target { dir: cx.work()?.join("image"), name };
         let speed = cx.text("speed").trim_end_matches('×').parse().ok();
         let read_offset = read_offset(disc.context());
-        let opts = redumper::Options { drive: dev, retries: cx.param("retries").and_then(|v| v.as_u64()).unwrap_or(20) as u32, speed, read_offset };
+        let mut opts = redumper::Options { drive: dev, retries: cx.param("retries").and_then(|v| v.as_u64()).unwrap_or(20) as u32, speed, read_offset, sector_order: None };
         if let Some(o) = read_offset {
             cx.log(format!("the drive's read offset, {o:+}, given to redumper"));
         }
@@ -646,6 +704,13 @@ impl Step for Image {
         let mut dumped = false;
         let mut outcome = {
             let _drive = cx.lane(LaneKind::Drive).await;
+            if let Some((order, from)) = sector_order(&cx, &disc, &opts.drive).await? {
+                let line = redumper::order_line(&order, &from);
+                cx.log(&line);
+                cx.status("", line);
+                item.context_mut().add(Subject::Disc, SECTOR_ORDER, order.clone(), &from);
+                opts.sector_order = Some(order);
+            }
             let o = self.read_disc_from(&cx, &item, &t, &opts, &mut out, &mut dumped).await?;
             cx.drive_says(StepState::Idle, "Waiting", "");
             o
@@ -1069,6 +1134,21 @@ pub async fn place_dump(main: &Path, dir: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_and_fix_rips_again_in_the_order_rip_used() {
+        let dev = std::env::current_dir().unwrap().join("../../target/drt-test-rip-options-drive");
+        std::fs::write(&dev, "").unwrap();
+        let mut c = Context::default();
+        c.add(Subject::Disc, "device", dev.display().to_string(), "the drive");
+        assert_eq!(rip_options(&c).unwrap().sector_order, None);
+        c.add(Subject::Disc, SECTOR_ORDER, "DATA_SUB_C2", FOUND_BY_TESTING);
+        let o = rip_options(&c).unwrap();
+        assert_eq!(o.sector_order.as_deref(), Some("DATA_SUB_C2"));
+        let t = redumper::Target { dir: "/nonexistent".into(), name: "x".into() };
+        assert!(redumper::dump_args(&o, &t).contains(&"--drive-sector-order=DATA_SUB_C2".to_owned()));
+        std::fs::remove_file(dev).unwrap();
+    }
 
     /// A CD's `.state` as redumper writes it at +103: the lead-in not
     /// read, then a byte a sample of each sector in `marks`.
