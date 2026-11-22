@@ -434,6 +434,10 @@ impl App {
     }
 
     pub fn select(&mut self, i: usize) {
+        // What was typed in the sidebar is the recipe's being left.
+        if i != self.sel {
+            self.save_typed();
+        }
         // Leaving unsaved edits asks first, in the header.
         if i != self.sel && self.m.dirty(self.sel) {
             self.leave_to = Some(i);
@@ -457,6 +461,7 @@ impl App {
     }
 
     pub fn open(&mut self, t: Tray) {
+        self.save_typed();
         self.selected = None;
         self.buffers.clear();
         self.invalid.clear();
@@ -500,7 +505,35 @@ impl App {
         }
     }
 
+    /// Saves what was typed into a setting's box but not yet saved (no
+    /// Enter, no click elsewhere), before the sidebar closes or changes:
+    /// closing it or clicking another card mustn't throw typing away. Only
+    /// what reads as the setting's kind; a box showing why it can't be
+    /// saved stays unsaved.
+    pub fn save_typed(&mut self) {
+        let i = self.sel;
+        let typed: Vec<(String, String, String)> =
+            self.buffers.iter().filter(|(k, _)| !self.invalid.contains_key(*k)).filter_map(|(k, v)| k.split_once('/').map(|(id, key)| (id.to_owned(), key.to_owned(), v.clone()))).collect();
+        for (id, key, text) in typed {
+            let Some(info) = self.m.info(i, &id) else { continue };
+            let Some(spec) = info.params.iter().find(|s| s.key == key) else { continue };
+            if !matches!(spec.kind, drt_engine::ParamKind::Text | drt_engine::ParamKind::Number | drt_engine::ParamKind::Folder) {
+                continue;
+            }
+            let shown = self.m.shown_value(i, &id, spec).map(|v| crate::model::value_text(&v)).unwrap_or_default();
+            if text.trim() == shown.trim() {
+                continue;
+            }
+            if let Some(v) = crate::model::text_value(&spec.kind, &text) {
+                if let Err(e) = self.m.set_param(i, &id, spec.key, v) {
+                    eprintln!("couldn't save {key}: {e}");
+                }
+            }
+        }
+    }
+
     pub fn close_tray(&mut self) {
+        self.save_typed();
         self.confirm_remove = None;
         if let Some(Tray::Question { step }) = &self.tray {
             let run = self.m.shown_run(self.sel).map_or(0, |r| r.id);

@@ -5254,3 +5254,29 @@ fn follow_doesnt_go_back_to_the_drive() {
     assert!(!seen.is_empty(), "it followed something");
     assert!(seen.iter().all(|f| f != "drive"), "{seen:?}");
 }
+
+/// A topic typed and left without Enter is saved when the sidebar closes.
+#[test]
+fn typing_is_saved_when_the_sidebar_closes() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    let i = app(&h).m.recipes.iter().position(|r| r.name == "Archive everything").unwrap();
+    app_mut(&mut h).select(i);
+    h.run_steps(3);
+    open_id(&mut h, "a_tell");
+    if h.query_all_by_role(Role::Tab).count() > 0 {
+        tab(&mut h, "Settings");
+    }
+    let field = h.get_by_label_contains("ntfy topic");
+    field.focus();
+    h.run_steps(2);
+    h.get_by_label_contains("ntfy topic").type_text("typed-not-entered");
+    h.run_steps(2);
+    app_mut(&mut h).close_tray();
+    h.run_steps(2);
+    let saved = app(&h).m.recipes[i].root.steps().into_iter().find_map(|n| match n {
+        Node::Step { id, params, .. } if id == "a_tell" => params.get("ntfy_topic").and_then(|s| s.resolve(None)).and_then(|v| v.as_str().map(str::to_owned)),
+        _ => None,
+    });
+    assert_eq!(saved.as_deref(), Some("typed-not-entered"));
+}
