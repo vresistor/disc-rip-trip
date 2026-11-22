@@ -209,7 +209,14 @@ pub fn parse_progress(line: &str) -> Option<Progress> {
         Some((a.trim().parse().ok()?, of.parse().ok()?))
     });
     let retry = line.find("retry:").and_then(|k| line[k + 6..].trim_start().chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok());
-    Some(Progress { fraction: (percent / 100.0).clamp(0.0, 1.0), detail, errors, counts, at, retry })
+    // From the sector it's at where the line says, not redumper's whole
+    // percent: in a bad patch one percent is thousands of sectors and
+    // minutes, and a whole percent sits still that long.
+    let fraction = match at {
+        Some((a, of)) if of > 0 => (a as f32 / of as f32).clamp(0.0, 1.0),
+        _ => (percent / 100.0).clamp(0.0, 1.0),
+    };
+    Some(Progress { fraction, detail, errors, counts, at, retry })
 }
 
 /// The counters in a progress line's braces, each `name: count`; taking
@@ -1347,11 +1354,16 @@ mod tests {
     #[test]
     fn progress_lines_from_a_cd_and_a_dvd() {
         let p = parse_progress(CD_LINE).unwrap();
-        assert!((p.fraction - 0.42).abs() < 1e-4);
+        // From the sector, not the whole percent beside it.
+        assert!((p.fraction - 12345.0 / 317787.0).abs() < 1e-6);
         assert_eq!(p.detail, "sector 12345 of 317787");
         assert_eq!(p.errors, 0, "the 2 in C2s is not an error");
         let p = parse_progress(DVD_LINE).unwrap();
-        assert!((p.fraction - 0.07).abs() < 1e-4);
+        assert!((p.fraction - 1234567.0 / 2298496.0).abs() < 1e-6);
+        // A bad patch: the sector moves, the whole percent doesn't.
+        let a = parse_progress("| [ 54%] LBA: 147262/269159, errors: { SCSIs: 8820, C2s: 630, Q: 220 }").unwrap();
+        let b = parse_progress("| [ 54%] LBA: 147702/269159, errors: { SCSIs: 37632, C2s: 1385, Q: 331 }").unwrap();
+        assert!(b.fraction > a.fraction);
         assert_eq!(p.detail, "sector 1234567 of 2298496");
         let p = parse_progress("⠋ [ 88%] LBA:  99999/317787, errors: { SCSIs: 3, C2s: 12, Q: 0 }").unwrap();
         assert_eq!(p.errors, 15);
@@ -1370,7 +1382,7 @@ mod tests {
         // From the terminal, with its spinner and escape codes, and the
         // share of the sector read so far after the try.
         let p = parse_progress(&format!("\x1b[2K\x1b[1G⠙ {REFINE_LINE}, data:  97%")).unwrap();
-        assert_eq!((p.at, p.retry, (p.fraction * 100.0).round()), (Some((147_223, 269_159)), Some(19), 54.0));
+        assert_eq!((p.at, p.retry, (p.fraction * 100.0).round()), (Some((147_223, 269_159)), Some(19), 55.0), "147,223 of 269,159 is 54.7%");
         // The first read of a sector has no try, nor has a read of the disc.
         let p = parse_progress("⠋ [ 54%] LBA: 147223/269159, errors: { SCSIs: 455112, C2s: 10553, Q: 2241 }").unwrap();
         assert_eq!(p.retry, None);
@@ -1728,7 +1740,7 @@ error: data errors detected, unable to continue
         let p = parse_progress("⠋ [ 88%] LBA:  99999/317787, errors: { SCSIs: 3, C2s: 12, Q: 0 }").unwrap();
         assert_eq!(p.counts, [("SCSI".to_owned(), 3), ("C2".to_owned(), 12), ("Q".to_owned(), 0)]);
         assert_eq!(errors_text(&p.counts), "SCSI 3, C2 12");
-        assert_eq!(progress_note(&p), "88%, sector 99999 of 317787, 15 errors");
+        assert_eq!(progress_note(&p), "31%, sector 99999 of 317787, 15 errors");
         let line = progress_line(1_234_567, 2_298_496, false, 0, 2);
         let p = parse_progress(&line).unwrap();
         assert_eq!((p.detail.as_str(), errors_text(&p.counts)), ("sector 1234567 of 2298496", "EDC 2".to_owned()));
