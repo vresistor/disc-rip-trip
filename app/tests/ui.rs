@@ -5094,8 +5094,29 @@ fn follow_is_switched_on_remembered_and_dragged_off() {
     assert!(!app(&h).follow, "zooming by hand turns Follow off");
 }
 
+/// In a window too small for a card at 100%, Follow zooms in only as far
+/// as the card still fits, with room round it.
+#[test]
+fn follow_in_a_small_window_zooms_in_as_far_as_the_card_fits() {
+    let e = env();
+    let mut h = window_on(&e, simulated(None), true, 0.0, egui::vec2(1280.0, 270.0), 1.0);
+    app_mut(&mut h).follow = true;
+    app_mut(&mut h).set_view(0, (0.2, egui::vec2(20.0, 20.0)));
+    click(&mut h, "Start");
+    until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
+    h.run_steps(60);
+    let a = app(&h);
+    let c = a.canvas_rect();
+    let card = a.layout(0).tile(&snap(&h).question.unwrap().0).unwrap().rect;
+    let v = a.views_of(0);
+    assert!(v.zoom > 0.5 && v.zoom < 1.0, "as far in as it fits: {}", v.zoom);
+    let (min, max) = (v.pan + egui::vec2(card.x, card.y) * v.zoom, v.pan + egui::vec2(card.right(), card.y + card.h) * v.zoom);
+    assert!(min.x >= 0.0 && min.y >= 0.0 && max.x <= c.width() && max.y <= c.height(), "and it's all in view");
+}
+
 /// With Follow on, the canvas goes to where things are happening, even
-/// from far off and zoomed in; with it off, it stays where you left it.
+/// from far off and zoomed in, and zoomed out it comes in to the cards'
+/// own size, where they read; with it off, it stays where you left it.
 #[test]
 fn follow_brings_the_latest_step_into_view() {
     fn inside(a: &App, step: &str) -> bool {
@@ -5125,7 +5146,13 @@ fn follow_brings_the_latest_step_into_view() {
         let v = a.views_of(0);
         if on {
             assert!(inside(a, &last), "{last} is in view with Follow on");
-            assert!(v.zoom <= 2.0, "it only zooms out");
+            assert_eq!(v.zoom, 2.0, "zoomed in by hand, it fits, so it stays");
+            // Zoomed far out, it comes in to 100%, and no further.
+            app_mut(&mut h).set_view(0, (0.4, egui::vec2(40.0, 40.0)));
+            h.run_steps(120);
+            let a = app(&h);
+            assert!((a.views_of(0).zoom - 1.0).abs() < 0.001, "readable: {}", a.views_of(0).zoom);
+            assert!(inside(a, &last));
         } else {
             assert!(!inside(a, &last), "{last} is left alone with Follow off");
             assert_eq!((v.zoom, v.pan), (2.0, egui::vec2(40.0, 40.0)), "without Follow, the view stays");

@@ -371,12 +371,21 @@ impl App {
         }
         let from = self.glide.filter(|g| g.0 == i).map_or(self.views_of(i), |g| g.2);
         let mut to = from;
-        // Zoom out only if the tile is too big for the canvas as it is.
+        // Readable: zoomed out further than the cards' own size, in to
+        // it (or as near as the canvas has room for); too big for the
+        // canvas, out until it fits. Zoomed in by hand, left so.
         let room = (area.x - 48.0) / tp.rect.w;
         let room = room.min((area.y - 48.0) / tp.rect.h);
-        if to.zoom > room {
+        let want = if to.zoom > room {
+            room
+        } else if to.zoom < 1.0 {
+            room.min(1.0)
+        } else {
+            to.zoom
+        };
+        if (want - to.zoom).abs() > 0.001 {
             let c = egui::Pos2::ZERO + area / 2.0;
-            to.zoom_about(egui::Pos2::ZERO, c, room);
+            to.zoom_about(egui::Pos2::ZERO, c, want);
         }
         to.reveal(tp.rect, area);
         if (to.pan - from.pan).length() > 0.5 || (to.zoom - from.zoom).abs() > 0.001 {
