@@ -780,6 +780,15 @@ impl Reread for Disc {
         for l in fix::log_lines(&fixed, tries) {
             cx.log(l);
         }
+        // The map of the disc as fixing found it: each sector that failed
+        // its checks, put right or not.
+        if fixed.other_disc.is_none() {
+            let sectors = super::combine::layout(&main).map(|ts| ts.iter().map(|t| (t.start.max(0) as u64) + t.size / super::combine::SECTOR as u64).max().unwrap_or(0)).unwrap_or(0);
+            let found: Vec<(u64, crate::map::Mark)> =
+                fixed.bad.iter().map(|s| (s.lba.max(0) as u64, if matches!(s.outcome, fix::Outcome::Fixed { .. }) { crate::map::Mark::Recovered } else { crate::map::Mark::Wrong })).collect();
+            let sectors = sectors.max(found.iter().map(|f| f.0 + 1).max().unwrap_or(0));
+            cx.map(serde_json::to_value(crate::map::SectorMap::checked(sectors, &found, true)).ok());
+        }
         let roms = self.rehash(cx, dump).await?;
         for r in &roms {
             cx.log(format!("after fixing: <rom name=\"{}\" size=\"{}\" crc=\"{}\" md5=\"{}\" sha1=\"{}\" />", r.name, r.size, r.crc, r.md5, r.sha1));

@@ -12,6 +12,7 @@ pub mod model;
 pub mod motion;
 pub mod pace;
 pub mod popover;
+pub mod sectormap;
 pub mod store;
 pub mod theme;
 pub mod tray;

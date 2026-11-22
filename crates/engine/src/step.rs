@@ -692,6 +692,12 @@ impl Cx {
         self.view(|v| v.record.report = report);
     }
 
+    /// The disc's map of sectors as this step sees it now, for the sidebar
+    /// (`None` takes it away).
+    pub fn map(&self, map: Option<Value>) {
+        self.view(|v| v.record.map = map);
+    }
+
     /// A file this step wrote; its size is read now (one already noted
     /// with a size keeps it if the file can't be read).
     pub fn made(&self, path: &std::path::Path) {

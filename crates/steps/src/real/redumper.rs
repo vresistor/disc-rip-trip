@@ -650,6 +650,150 @@ pub fn bad_sectors(state: &Path) -> std::io::Result<Vec<u64>> {
     Ok(out)
 }
 
+/// redumper's `.state` file as a map of the disc, kept up to date while it
+/// reads ([`crate::map`]). redumper (b744, `common.ixx`) writes one byte a
+/// sample for a CD, from the lead-in (LBA −45,150), and one a sector for a
+/// DVD or Blu-ray, from LBA 0: 0 not read (`ERROR_SKIP`), 1 a C2 error,
+/// 2 to 4 read (with C2 or SCSI errors switched off, or cleanly). A CD
+/// sector's samples are written `read offset` samples early
+/// (`cd_dump.ixx`, `write_entry` with the drive's offset), so sector *n*
+/// starts at byte (n + 45,150) · 588 − offset.
+///
+/// Reading the file whole each time would be 150 MB every few seconds:
+/// instead, while redumper reads the disc through, only what it's read
+/// since last time is read, from a little behind where it was (what it
+/// writes may not be on disk yet); while it re-reads, only the sectors
+/// still bad. Not read past where the drive is, so a sector not reached
+/// is never shown as unreadable.
+pub struct StateScan {
+    path: PathBuf,
+    /// Bytes a sector, and the first sector the file has.
+    per: u64,
+    first: i64,
+    /// Samples redumper wrote each sector early by: the drive's offset.
+    shift: i64,
+    cd: bool,
+    pub sectors: crate::map::Sectors,
+    /// Sectors before this are settled: read again only when re-read.
+    settled: u64,
+    /// Where the drive was at the last look.
+    at: u64,
+}
+
+/// How far behind the drive a read is looked at again: what redumper read
+/// there may still be on its way to the file.
+const UNSETTLED: u64 = 600;
+
+impl StateScan {
+    /// The `.state` of `t`'s dump, the disc `sectors` long, read at
+    /// `read_offset`.
+    pub fn new(t: &Target, sectors: u64, read_offset: i64, cd: bool) -> StateScan {
+        let (per, first, shift) = if cd { (SAMPLES, STATE_START, read_offset) } else { (1, 0, 0) };
+        StateScan { path: t.file("state"), per, first, shift, cd, sectors: crate::map::Sectors::new(sectors), settled: 0, at: 0 }
+    }
+
+    /// The map as it is, with the drive at `at` while it reads.
+    pub fn map(&self, reading: bool) -> crate::map::SectorMap {
+        self.sectors.map(reading.then_some(self.at), self.cd)
+    }
+
+    /// A read of the disc through, the drive now at `at` of `of`: what's
+    /// been read since the last look. `done` once the read has ended,
+    /// when what it couldn't read is surely so.
+    pub fn read_to(&mut self, at: u64, of: u64, done: bool) -> std::io::Result<()> {
+        self.sectors.grow(of);
+        self.at = self.at.max(at).min(self.sectors.len());
+        let from = self.settled;
+        let to = self.at;
+        if to > from {
+            self.look(from, to, |m, lba, end| match m {
+                // Not on disk yet, or not yet written so near the drive.
+                None if !done => crate::map::Mark::NotRead,
+                Some(crate::map::Mark::Unreadable) if !done && lba + UNSETTLED >= end => crate::map::Mark::NotRead,
+                None => crate::map::Mark::Unreadable,
+                Some(m) => m,
+            })?;
+        }
+        self.settled = if done { to } else { to.saturating_sub(UNSETTLED).max(from) };
+        Ok(())
+    }
+
+    /// A re-read, the drive at `at`: the sectors still bad looked at
+    /// again; those now read are marked as come back. A re-read goes
+    /// through the disc in order, so only those it has passed since the
+    /// last look; all of them once it's `done`. The first look reads the
+    /// whole disc as far as it was read, if nothing has yet.
+    pub fn reread(&mut self, at: u64, of: u64, done: bool) -> std::io::Result<()> {
+        if self.settled == 0 {
+            self.read_to(of, of, true)?;
+            self.at = 0;
+        }
+        let (lo, hi) = if done { (0, u64::MAX) } else { (self.at.min(at).saturating_sub(UNSETTLED), at + 1) };
+        self.at = at;
+        let bad: Vec<u64> = self.sectors.bad().filter(|l| (lo..hi).contains(l)).collect();
+        let mut k = 0;
+        while k < bad.len() {
+            // Bad sectors near each other read as one stretch.
+            let mut j = k;
+            while j + 1 < bad.len() && bad[j + 1] - bad[j] <= 32 {
+                j += 1;
+            }
+            let (from, to) = (bad[k], bad[j] + 1);
+            let was: Vec<crate::map::Mark> = (from..to).map(|l| self.sectors.get(l)).collect();
+            self.look(from, to, |m, lba, _| {
+                let before = was[(lba - from) as usize];
+                match m.unwrap_or(crate::map::Mark::Unreadable) {
+                    crate::map::Mark::Good if before.is_bad() => crate::map::Mark::Recovered,
+                    // What was fine stays as it was marked.
+                    _ if !before.is_bad() => before,
+                    now => now,
+                }
+            })?;
+            k = j + 1;
+        }
+        Ok(())
+    }
+
+    /// Reads sectors `from` to `to` (not in) of the file, marking each by
+    /// `mark` with what the file says of it (None past its end), its LBA
+    /// and `to`.
+    fn look(&mut self, from: u64, to: u64, mark: impl Fn(Option<crate::map::Mark>, u64, u64) -> crate::map::Mark) -> std::io::Result<()> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(&self.path)?;
+        let len = f.metadata()?.len() as i64;
+        const CHUNK: u64 = 4096;
+        let mut buf = vec![0u8; (CHUNK * self.per) as usize];
+        let mut lba = from;
+        while lba < to {
+            let n = CHUNK.min(to - lba);
+            let start = (lba as i64 - self.first) * self.per as i64 - self.shift;
+            let want = (n * self.per) as usize;
+            // The file's part of it: none before its start, none past its end.
+            let lo = start.clamp(0, len);
+            let hi = (start + want as i64).clamp(0, len);
+            let got = (hi - lo) as usize;
+            f.seek(SeekFrom::Start(lo as u64))?;
+            f.read_exact(&mut buf[..got])?;
+            for k in 0..n {
+                let (a, b) = (start + (k * self.per) as i64, start + ((k + 1) * self.per) as i64);
+                // Past the file's end: not written yet.
+                let said = (b <= len).then(|| {
+                    let s = &buf[(a.max(lo) - lo) as usize..(b - lo).max(0) as usize];
+                    match s.iter().min().copied().unwrap_or(0) {
+                        0 => crate::map::Mark::Unreadable,
+                        1 => crate::map::Mark::C2,
+                        _ => crate::map::Mark::Good,
+                    }
+                });
+                let l = lba + k;
+                self.sectors.set(l, mark(said, l, to));
+            }
+            lba += n;
+        }
+        Ok(())
+    }
+}
+
 /// What Rip is doing just now, while redumper reads or re-reads: for the
 /// card and the sidebar ([`drt_engine::StepView::now`]).
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1434,6 +1578,86 @@ mod tests {
         std::fs::write(dir.join("D.state"), b).unwrap();
         assert_eq!(bad_sectors(&dir.join("D.state")).unwrap(), [3, 4, 7]);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A CD's `.state` as redumper writes it: the lead-in not read, then
+    /// `marks` (a state byte a sector), each sector's samples `shift` early.
+    fn state_file(path: &Path, marks: &[u8], shift: usize) {
+        let mut b = vec![0u8; 45_150 * 588 - shift];
+        for m in marks {
+            b.extend(std::iter::repeat_n(*m, 588));
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn the_state_file_is_mapped_as_it_s_read_and_re_read() {
+        use crate::map::Mark;
+        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/state-scan");
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = Target { dir: dir.clone(), name: "D".into() };
+        // Read as far as 1,500 of 2,000, at +103: 100 unreadable, 200 with
+        // a C2 error, 1,400 zeros not yet written so near the drive.
+        let mut marks = vec![4u8; 1_500];
+        marks[100] = 0;
+        marks[200] = 1;
+        marks[1_400] = 0;
+        state_file(&t.file("state"), &marks, 103);
+        let mut s = StateScan::new(&t, 2_000, 103, true);
+        s.read_to(1_500, 2_000, false).unwrap();
+        assert_eq!([s.sectors.get(99), s.sectors.get(100), s.sectors.get(101), s.sectors.get(200)], [Mark::Good, Mark::Unreadable, Mark::Good, Mark::C2]);
+        assert_eq!((s.sectors.get(1_400), s.sectors.get(1_500), s.sectors.get(1_999)), (Mark::NotRead, Mark::NotRead, Mark::NotRead));
+        let m = s.map(true);
+        assert_eq!((m.total(Mark::Unreadable), m.total(Mark::C2), m.total(Mark::NotRead)), (1, 1, 501));
+        assert_eq!(m.at, Some(1_500));
+        // Read to its end: 1,400 was written good after all; the rest,
+        // never written, couldn't be read.
+        marks[1_400] = 4;
+        marks.extend([4u8; 400]);
+        state_file(&t.file("state"), &marks, 103);
+        s.read_to(1_900, 2_000, false).unwrap();
+        s.read_to(2_000, 2_000, true).unwrap();
+        assert_eq!((s.sectors.get(1_400), s.sectors.get(1_950)), (Mark::Good, Mark::Unreadable));
+        // A re-read: 100 comes back; 200 doesn't.
+        marks[100] = 4;
+        state_file(&t.file("state"), &marks, 103);
+        s.reread(200, 2_000, true).unwrap();
+        assert_eq!((s.sectors.get(100), s.sectors.get(200), s.sectors.get(99)), (Mark::Recovered, Mark::C2, Mark::Good));
+        // A scan begun at the re-read reads the disc whole first.
+        let mut fresh = StateScan::new(&t, 2_000, 103, true);
+        fresh.reread(200, 2_000, false).unwrap();
+        assert_eq!((fresh.sectors.get(100), fresh.sectors.get(200), fresh.sectors.get(1_950)), (Mark::Good, Mark::C2, Mark::Unreadable));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A real `.state`: a damaged PlayStation disc read to about sector
+    /// 199,210 of 269,159 at +103, then stopped. Not in the repository
+    /// (143 MB): `DRT_STATE_FIXTURE` names it, or it's looked for where
+    /// the flatpak keeps its runs.
+    #[test]
+    #[ignore]
+    fn a_real_state_file_shows_a_spot_once_per_turn() {
+        use crate::map::Mark;
+        let path = std::env::var("DRT_STATE_FIXTURE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap()).join(".var/app/io.github.vresistor.DiscRipTrip/cache/disc-rip-trip/runs/playstation-1795362157/image/KOUDELKA_4.state"));
+        let t = Target { dir: path.parent().unwrap().to_owned(), name: path.file_stem().unwrap().to_string_lossy().into_owned() };
+        let began = std::time::Instant::now();
+        let mut s = StateScan::new(&t, 269_159, 103, true);
+        s.read_to(199_210, 269_159, true).unwrap();
+        let m = s.map(false);
+        eprintln!("scanned in {:?}", began.elapsed());
+        // As redumper's own count: 355,152 samples unread, 604 sectors.
+        assert_eq!(m.total(Mark::Unreadable), 604);
+        assert_eq!(m.total(Mark::NotRead), 269_159 - 199_210);
+        eprintln!("{} good, {} unreadable, {} with C2; first runs {:?}", m.total(Mark::Good), m.total(Mark::Unreadable), m.total(Mark::C2), &m.runs[..8]);
+        let g = crate::map::Geometry::CD;
+        eprintln!("spots: {:?}", crate::map::once_per_turn(&m.runs, &g));
+        eprintln!("{:?}\n{:?}", crate::map::where_line(&m), crate::map::turn_line(&m));
+        // Two places, each once per turn: 16.3 sectors a turn at 4.4 cm,
+        // 18.1 at 4.9 cm, both 2.5% over the nominal turn (a disc pressed
+        // at about 1.27 m/s).
+        assert_eq!(crate::map::turn_line(&m).as_deref(), Some("Errors repeat once per turn: single spots about 4.4 cm and 4.9 cm out, not whole rings."));
     }
 
     #[test]

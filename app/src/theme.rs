@@ -28,6 +28,9 @@ pub struct Pal {
     pub bad_soft: Color32,
     pub busy: Color32,
     pub busy_soft: Color32,
+    /// Recovered: bad once, read right on a later try. Apart from good's
+    /// green and busy's blue.
+    pub teal: Color32,
     pub pending: Color32,
     pub c_src: Color32,
     pub c_read: Color32,
@@ -64,6 +67,7 @@ impl Pal {
             bad_soft: hex(0xf5dcd9),
             busy: hex(0x3b6fe0),
             busy_soft: hex(0xe3ebfb),
+            teal: hex(0x0e8a91),
             pending: hex(0x8a939f),
             c_src: hex(0x6b7a8f),
             c_read: hex(0x3b6fe0),
@@ -95,6 +99,7 @@ impl Pal {
             bad_soft: hex(0x3d2120),
             busy: hex(0x7d9cf2),
             busy_soft: hex(0x1f2a44),
+            teal: hex(0x4cc9d0),
             pending: hex(0x707b88),
             // Step colours of its own, that read on dark (4.9:1 and up).
             c_src: hex(0x8e9cb0),

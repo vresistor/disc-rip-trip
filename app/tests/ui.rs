@@ -4208,14 +4208,10 @@ enum At {
     Wrong,
 }
 
-/// redumper's first read of a CD as Image logs it, its progress lines fed
-/// through the real trail: `n` places with errors, spread from `from` to
-/// `to` (shares of the disc), stopping at `upto`. Gives the counts at the end.
-fn slips(cx: &drt_engine::Cx, n: u64, from: f64, to: f64, upto: u64) -> (u64, u64) {
-    use drt_steps::real::redumper;
-    let mut trail = redumper::ErrorTrail::new();
-    trail.line("*** DUMP (time check: 0s)");
-    cx.log("*** DUMP (time check: 0s)");
+/// Where [`slips`] puts its `n` places with errors, spread from `from` to
+/// `to` (shares of the disc), bunched towards the middle; in order. Every
+/// third the drive couldn't read; the others had C2 errors.
+fn slip_places(n: u64, from: f64, to: f64) -> Vec<u64> {
     let mut seed = 0x2545_f491u64;
     let mut places: Vec<u64> = (0..n)
         .map(|_| {
@@ -4228,6 +4224,46 @@ fn slips(cx: &drt_engine::Cx, n: u64, from: f64, to: f64, upto: u64) -> (u64, u6
         })
         .collect();
     places.sort_unstable();
+    places
+}
+
+/// A held Rip's map of the disc, as Image would make it from redumper's
+/// `.state`: the places [`slips`] logged, and a spot met once per turn
+/// (as a scratch is, 2% off the nominal turn, as on a real disc), read up
+/// to `upto`; re-read and put right once `reread`, all but `left` of the
+/// spot's sectors.
+fn held_map(n: u64, from: f64, to: f64, upto: u64, reread: bool, left: usize) -> drt_steps::map::SectorMap {
+    use drt_steps::map::{Geometry, Mark, Sectors};
+    let mut s = Sectors::new(CD_SECTORS);
+    for k in 0..upto.min(CD_SECTORS) {
+        s.set(k, Mark::Good);
+    }
+    let fixed = |m: Mark| if reread { Mark::Recovered } else { m };
+    for (k, at) in slip_places(n, from, to).into_iter().enumerate().filter(|(_, at)| *at < upto) {
+        s.set(at, fixed(if k % 3 == 0 { Mark::Unreadable } else { Mark::C2 }));
+    }
+    if n > 0 {
+        let start = (0.3 * CD_SECTORS as f64) as u64;
+        let turn = Geometry::CD.per_turn(start as f64) * 1.02;
+        let spot: Vec<u64> = (0..30).filter(|k| k % 7 != 3).map(|k| start + (k as f64 * turn).round() as u64).collect();
+        for (j, at) in spot.iter().enumerate().filter(|(_, at)| **at < upto) {
+            for x in [*at, at + 1] {
+                s.set(x, if j >= spot.len() - left && x == *at { Mark::Unreadable } else { fixed(Mark::Unreadable) });
+            }
+        }
+    }
+    s.map((upto < CD_SECTORS).then_some(upto), true)
+}
+
+/// redumper's first read of a CD as Image logs it, its progress lines fed
+/// through the real trail: `n` places with errors, spread from `from` to
+/// `to` (shares of the disc), stopping at `upto`. Gives the counts at the end.
+fn slips(cx: &drt_engine::Cx, n: u64, from: f64, to: f64, upto: u64) -> (u64, u64) {
+    use drt_steps::real::redumper;
+    let mut trail = redumper::ErrorTrail::new();
+    trail.line("*** DUMP (time check: 0s)");
+    cx.log("*** DUMP (time check: 0s)");
+    let places = slip_places(n, from, to);
     let (mut scsi, mut c2, mut next) = (0u64, 0u64, 0usize);
     let mut at = 0u64;
     while at <= upto {
@@ -4302,10 +4338,12 @@ impl HeldRip {
             At::Reading => {
                 // Errors met so far, up to where it is, then reading on.
                 slips(cx, 160, 0.10, 0.70, 141_500);
+                cx.map(serde_json::to_value(held_map(160, 0.10, 0.70, 141_500 + 150 * 18, false, 0)).ok());
                 Self::read(cx, &item, 141_500, 4.5, 2, 37).await;
             }
             At::Clean => {
                 slips(cx, 0, 0.0, 1.0, CD_SECTORS);
+                cx.map(serde_json::to_value(held_map(0, 0.0, 1.0, CD_SECTORS, false, 0)).ok());
                 for l in ["media errors:", "SCSI: 0 samples", "C2: 0 samples", "Q: 0", "*** SPLIT (time check: 0s)", "*** INFO (time check: 0s)", "*** END (time check: 1s)"] {
                     cx.log(l);
                 }
@@ -4315,6 +4353,7 @@ impl HeldRip {
             }
             At::Wrong => {
                 let (scsi, c2) = slips(cx, 200, 0.10, 0.70, CD_SECTORS);
+                cx.map(serde_json::to_value(held_map(200, 0.10, 0.70, CD_SECTORS, true, 0)).ok());
                 for l in [
                     "media errors:".to_owned(),
                     format!("SCSI: {scsi} samples"),
@@ -4339,12 +4378,14 @@ impl HeldRip {
             }
             At::Done | At::Failed => {
                 slips(cx, 120, 0.15, 0.55, CD_SECTORS);
+                cx.map(serde_json::to_value(held_map(120, 0.15, 0.55, CD_SECTORS, false, 0)).ok());
                 for l in ["media errors:", "SCSI: 105840 samples", "C2: 211731 samples", "Q: 2641", "*** END (time check: 348s)"] {
                     cx.log(l);
                 }
                 cx.status("", "Re-reading bad parts");
                 cx.log("*** REFINE (time check: 52s)");
                 tokio::time::sleep(Duration::from_millis(1100)).await;
+                cx.map(serde_json::to_value(held_map(120, 0.15, 0.55, CD_SECTORS, true, if self.at == At::Done { 0 } else { 3 })).ok());
                 if self.at == At::Done {
                     for l in [
                         "correction statistics:",
@@ -4521,13 +4562,20 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                     assert!(times.ends_with('×'), "{times}");
                     h.get_by_label_contains("Sector 14");
                     assert!(row_says(&h, &["Read the disc", "SCSI 2, C2 37", "Reading"]), "the errors so far");
-                    // Where they were met, from Rip's own log.
-                    h.get_by_label("Most read errors between 22% and 41%");
+                    // Every sector as a map: how far it's read, what's
+                    // wrong where, and how far from the centre.
+                    h.get_by_label("Map of the disc: 144,060 good · 58 with C2 errors · 82 unreadable · 188,799 not read yet");
+                    h.get_by_label("Bad sectors about 3.2–3.3 cm and 3.4–4.3 cm from the centre");
+                    h.get_by_label("Errors repeat once per turn: a single spot about 3.9 cm out, not a whole ring.");
+                    assert!(h.query_by_label_contains("Most read errors").is_none(), "said in centimetres, under the map");
                 }
                 ("data" | "game", At::Done) => {
                     h.get_by_label("The disc, 682 MB read");
                     h.get_by_label("Bad parts re-read");
-                    h.get_by_label("Most read errors between 23% and 45%");
+                    // Every bad part put right, and where they were.
+                    h.get_by_label("Map of the disc: 332,827 good · 172 recovered on a re-read");
+                    h.get_by_label("Sectors re-read about 3.5–4.7 cm from the centre");
+                    h.get_by_label("Errors repeat once per turn: a single spot about 3.9 cm out, not a whole ring.");
                     assert!(row_says(&h, &["Read the disc", "SCSI 105840, C2 211731", "Errors"]));
                     assert!(row_says(&h, &["Re-read bad parts", "All put right"]));
                     assert!(row_says(&h, &["Check every sector", "None wrong"]));
@@ -4537,6 +4585,8 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                 }
                 ("data" | "game", At::Failed) => {
                     h.get_by_label("The disc, 3 unreadable");
+                    let map = h.get_by_label_contains("Map of the disc: ").accesskit_node().label().unwrap();
+                    assert!(map.contains(" recovered on a re-read · 3 unreadable"), "{map}");
                     assert!(row_says(&h, &[label, "3 sectors couldn't be read"]));
                     assert!(row_says(&h, &["Re-read bad parts", "SCSI 1764 left", "Some left"]));
                     assert!(row_says(&h, &["Write the tracks", "3 skipped"]));
@@ -4580,10 +4630,14 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
             h.get_by_label("The disc, 682 MB read");
             h.get_by_label("Read cleanly");
             assert!(h.query_by_label_contains("bad sector").is_none() && h.query_by_label_contains("read errors").is_none());
+            h.get_by_label("Map of the disc: 332,999 good");
+            assert!(h.query_by_label_contains("Bad sectors").is_none() && h.query_by_label_contains("once per turn").is_none());
         } else {
             h.get_by_label("The disc, 682 MB not clean");
             h.get_by_label("25 sectors came back wrong");
-            h.get_by_label("Most between 54% and 67% of the way through");
+            // The sectors found wrong from Rip's log, over its map.
+            h.get_by_label("Map of the disc: 332,722 good · 252 recovered on a re-read · 25 came back wrong");
+            h.get_by_label("Bad sectors about 4.5 cm and 4.7–5.1 cm from the centre");
             assert!(h.query_by_label_contains("25 bad sectors").is_none(), "the count is in the headline once");
         }
         shot(&mut h, &format!("rip-game-{word}{tag}"));

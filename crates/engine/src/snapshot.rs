@@ -115,6 +115,11 @@ pub struct StepRecord {
     /// it; no step does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<serde_json::Value>,
+    /// The disc as a map of its sectors, block by block, as this step last
+    /// saw it read (`drt_steps::map::SectorMap`): Rip's and Check's. Only
+    /// the window reads it; no step does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map: Option<serde_json::Value>,
     /// Files it wrote, with their sizes.
     #[serde(default)]
     pub files: Vec<Made>,

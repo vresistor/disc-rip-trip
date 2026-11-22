@@ -8,6 +8,7 @@
 pub mod choose;
 pub mod game_sim;
 pub mod hold;
+pub mod map;
 pub mod real;
 pub mod recipes;
 pub mod sim;

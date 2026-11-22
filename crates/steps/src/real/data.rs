@@ -226,6 +226,8 @@ impl Image {
         // A re-read getting nowhere is stopped by itself, as the tray stops it.
         let give_up = std::sync::Arc::new(tokio::sync::Notify::new());
         let mut gave_up = false;
+        // The map of the disc from redumper's `.state`, while it reads.
+        let mut map = MapWatch::new(item, t, &args);
         let stop = {
             let (hold, give_up) = (&hold, give_up.clone());
             async move {
@@ -244,6 +246,7 @@ impl Image {
                 cx.drive_says(StepState::Busy, p, "");
             }
             if let Some(p) = redumper::parse_progress(line) {
+                map.line(cx, &p);
                 if let Some(w) = watch.as_mut() {
                     follow(cx, item, w, &p, began.elapsed().as_secs_f64());
                     if w.live().given_up && !gave_up {
@@ -263,6 +266,7 @@ impl Image {
         if let Some(l) = trail.finish() {
             cx.log(l);
         }
+        map.finish(cx);
         cx.now(None);
         let (text, ok) = match ran {
             Err(_) if gave_up && !cx.stopped() && !hold.tray_opened() => {
@@ -361,6 +365,85 @@ impl Image {
         let ok = self.phase(cx, item, t, redumper::refine_args(opts, t), &mut text).await?;
         out.push_str(&text);
         Ok((!ok && !redumper::gave_up(&text)).then(|| redumper::unexpected_note(&text)))
+    }
+}
+
+/// The map of the disc ([`crate::map`]) while redumper reads it or
+/// re-reads what's bad, from its `.state` beside the image: looked at
+/// every few seconds as progress lines come, and once more at the pass's
+/// end. Only a pass that reads the drive has one.
+struct MapWatch {
+    rereading: bool,
+    offset: i64,
+    cd: bool,
+    target: redumper::Target,
+    scan: Option<redumper::StateScan>,
+    last: Option<std::time::Instant>,
+    at: (u64, u64),
+}
+
+/// How often the map is looked at again while reading.
+const MAP_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
+
+impl MapWatch {
+    fn new(item: &Item, t: &redumper::Target, args: &[String]) -> Option<MapWatch> {
+        let rereading = match args.first().map(String::as_str) {
+            Some("dump") => false,
+            Some("refine") => true,
+            _ => return None,
+        };
+        // At the offset redumper was told; without one, it uses its own
+        // list's, which is at most a few sectors off.
+        let offset = args.iter().find_map(|a| a.strip_prefix("--drive-read-offset=")?.parse().ok()).unwrap_or(0);
+        let cd = matches!(item.context().get(Subject::Disc, "media").unwrap_or("CD"), "CD" | "CD-ROM");
+        Some(MapWatch { rereading, offset, cd, target: t.clone(), scan: None, last: None, at: (0, 0) })
+    }
+
+    fn look(&mut self, reading: bool) -> std::io::Result<()> {
+        let (at, of) = self.at;
+        if of == 0 {
+            return Ok(());
+        }
+        let scan = self.scan.get_or_insert_with(|| redumper::StateScan::new(&self.target, of, self.offset, self.cd));
+        if self.rereading {
+            scan.reread(at, of, !reading)
+        } else {
+            scan.read_to(at, of, !reading)
+        }
+    }
+
+    fn publish(&self, cx: &Cx, reading: bool) {
+        if let Some(s) = &self.scan {
+            cx.map(serde_json::to_value(s.map(reading)).ok());
+        }
+    }
+}
+
+trait MapLines {
+    fn line(&mut self, cx: &Cx, p: &redumper::Progress);
+    fn finish(&mut self, cx: &Cx);
+}
+
+impl MapLines for Option<MapWatch> {
+    fn line(&mut self, cx: &Cx, p: &redumper::Progress) {
+        let Some(m) = self.as_mut() else { return };
+        let Some(at) = p.at else { return };
+        m.at = at;
+        if m.last.is_some_and(|l| l.elapsed() < MAP_EVERY) {
+            return;
+        }
+        m.last = Some(std::time::Instant::now());
+        // No `.state` yet, or one it can't read: no map, and the read goes on.
+        if m.look(true).is_ok() {
+            m.publish(cx, true);
+        }
+    }
+
+    fn finish(&mut self, cx: &Cx) {
+        let Some(m) = self.as_mut() else { return };
+        if m.look(false).is_ok() {
+            m.publish(cx, false);
+        }
     }
 }
 

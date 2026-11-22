@@ -271,6 +271,13 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     if let Some(m) = crate::compare::mismatch(&v) {
         crate::compare::show(ui, p, &m);
     }
+    // Check's own re-reads and fixes, as a map of the disc.
+    if v.step == "check" {
+        if let Some(m) = v.record.map.clone().and_then(|j| serde_json::from_value::<drt_steps::map::SectorMap>(j).ok()).filter(|m| !m.is_empty()) {
+            heading(ui, p, if m.checks_only { "Sectors checked, from the centre out" } else { "Every sector, from the centre out" });
+            crate::sectormap::show(ui, p, &m, t);
+        }
+    }
     // A choice: the one chosen, and why; the others below it.
     if let Some(d) = &v.record.decided {
         let options = options_of(&v, ctx.as_ref());
@@ -2286,7 +2293,10 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
             vec![]
         }
         "rip" => rip(app, ru, p, id, &v, &info, ctx.as_ref(), t),
-        "image" | "game-rip" => dump_rip(app, ru, p, id, &v, &info, t),
+        "image" | "game-rip" => {
+            let map = sector_map(snap, &v);
+            dump_rip(app, ru, p, id, &v, &info, map.as_ref(), t)
+        }
         "rip-video" => video_rip(app, ru, p, id, &v, &info, ctx.as_ref(), t),
         "lyrics" => {
             lyrics(app, ru, p, id, &v, ctx.as_ref(), t);
@@ -3018,7 +3028,7 @@ fn thousands(n: u64) -> String {
 /// row, with the errors it met. Only what Rip itself knows: whether the
 /// image matches Redump is Check's to say.
 #[allow(clippy::too_many_arguments)]
-fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, t: f64) -> Vec<(String, String)> {
+fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, sectors_map: Option<&drt_steps::map::SectorMap>, t: f64) -> Vec<(String, String)> {
     let Some(it) = v.items.first().cloned() else {
         empty(ui, p, "Nothing read yet");
         return vec![];
@@ -3072,11 +3082,15 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     let map = drt_steps::real::redumper::disc_map(log.iter().copied());
     let sectors = if map.sectors > 0 { map.sectors } else { crate::pace::sectors(&it.note).map_or(0, |s| s.1) };
     let put_right = passes.iter().any(|p| p.kind == drt_steps::real::redumper::PassKind::Reread) && drt_steps::real::redumper::left_after(&passes, passes.len().saturating_sub(1)) == 0;
-    let ticks = disc_ticks(p, &map, sectors, put_right && !busy);
+    // With a map of every sector under it, the ring keeps to how far and
+    // what it came to: where things went wrong is the map's to show.
+    let ticks = if sectors_map.is_some() { vec![] } else { disc_ticks(p, &map, sectors, put_right && !busy) };
     // The ring in the verdict's colour; but sectors found wrong, red
     // across it, are the verdict, and stand out only on a plain ring.
     let cell = if matches!(cell, crate::card::Cell::Bad | crate::card::Cell::Needs) && !map.wrong.is_empty() { crate::card::Cell::Done } else { cell };
-    let where_line = map_line(&map, sectors, busy);
+    // Where things went wrong, in centimetres under the map when it knows
+    // them; else as shares of the disc beside the ring.
+    let where_line = if sectors_map.is_some_and(|m| m.geometry().is_some()) { None } else { map_line(&map, sectors, busy) };
     let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
     let shown = big.clone();
     let mut stop = false;
@@ -3148,6 +3162,11 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             }
         }
     });
+    if let Some(m) = sectors_map {
+        heading(ui, p, "Every sector, from the centre out");
+        crate::sectormap::show(ui, p, m, t);
+        ui.add_space(12.0);
+    }
     if stop {
         if app.m.shows_newest(i) {
             app.m.stop(i);
@@ -3229,6 +3248,30 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     }
     let key = format!("{}/dump", v.step);
     rows(app, ui, p, &key, list, "", t)
+}
+
+/// The map of a game or data disc's sectors for Rip's sidebar: as Rip
+/// read it, with the sectors its check of every sector found wrong over
+/// it (from its log); then what Check and fix did after, if it has: a
+/// re-read of its own in place of Rip's, or the sectors it fixed over it.
+/// None when no step made one (a run from before maps, a simulated step).
+fn sector_map(snap: &Snapshot, v: &StepView) -> Option<drt_steps::map::SectorMap> {
+    use drt_steps::map::{Mark, SectorMap};
+    let of = |s: &StepView| s.record.map.clone().and_then(|j| serde_json::from_value::<SectorMap>(j).ok()).filter(|m| !m.is_empty());
+    let mut m = of(v);
+    if let Some(m) = m.as_mut().filter(|m| !m.checks_only) {
+        let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
+        let wrong: Vec<(u64, Mark)> = drt_steps::real::redumper::disc_map(log.iter().copied()).wrong.iter().flat_map(|w| w.from..=w.to).take(200_000).map(|l| (l, Mark::Wrong)).collect();
+        m.overlay(&wrong);
+    }
+    for c in snap.steps.values().filter(|s| s.step == "check") {
+        match (of(c), m.as_mut()) {
+            (Some(cm), Some(m)) if cm.checks_only => m.overlay(&cm.found()),
+            (Some(cm), _) => m = Some(cm),
+            _ => {}
+        }
+    }
+    m
 }
 
 /// The marks on a game or data disc's ring: where the drive reported
