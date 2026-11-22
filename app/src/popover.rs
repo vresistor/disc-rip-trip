@@ -134,7 +134,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     };
     // What a step put the other way would go beside, or in front of.
     let next = next_names(&root, &pop.at, &snap).unwrap_or_default();
-    let plus_r = 13.0 * v.zoom;
+    let plus_r = drt_layout::PLUS_R * v.zoom;
     // A click anywhere else closes it (the + itself toggles it).
     let outside = ctx.input(|inp| inp.pointer.any_pressed() && inp.pointer.interact_pos().is_some_and(|at| !app.popover_rect.contains(at) && at.distance(plus) > plus_r + 2.0));
     if outside {

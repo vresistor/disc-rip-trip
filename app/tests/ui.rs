@@ -1702,7 +1702,7 @@ fn plus_at(h: &Harness<Window>, after: &str) -> (egui::Pos2, f32) {
     let lay = a.layout(a.sel);
     let (_, (x, y)) = lay.pluses.iter().find(|(id, _)| id == after).unwrap().clone();
     let v = a.views_of(a.sel);
-    (a.canvas_rect().min + v.pan + egui::vec2(x, y) * v.zoom, 13.0 * v.zoom)
+    (a.canvas_rect().min + v.pan + egui::vec2(x, y) * v.zoom, drt_layout::PLUS_R * v.zoom)
 }
 
 #[test]
@@ -1963,7 +1963,7 @@ fn a_folder_s_names_follow_what_reaches_it() {
     assert_eq!(card_says(&mut h, "lib1")[1], "Names Artist / Album / 01 - Title");
     // A game's CHD: a folder for the game under its system, and only the
     // image layouts and tokens.
-    h.get_by_label_contains("Games").click();
+    h.get_by_label_contains("Games, ").click();
     h.run_steps(2);
     open_tile(&mut h, "Library,");
     h.get_by_value("System / Game");
@@ -5160,4 +5160,75 @@ fn follow_brings_the_latest_step_into_view() {
             assert_eq!((v.zoom, v.pan), (2.0, egui::vec2(40.0, 40.0)), "without Follow, the view stays");
         }
     }
+}
+
+/// In edit mode each card's right edge has its +, big enough to hit, and
+/// just above and below it a button for each path the step can take: if
+/// it fails, if it needs you. A path's line leaves from there. On a games
+/// recipe that ends a disc beside other branches, what hears of Rip sits
+/// just under Rip, with the line back to the drive under that.
+#[test]
+fn the_plus_on_each_cards_edge_has_its_path_buttons_above_and_below() {
+    use drt_engine::recipe::{branches, chain};
+    use drt_engine::Side;
+    let e = env();
+    let mut all = recipes::all();
+    for r in all.iter_mut().filter(|r| r.name == "Games") {
+        let s = Node::step;
+        r.root = chain([
+            s("g_drive", "drive"),
+            s("g_disc", "game-disc"),
+            s("g_rip", "game-rip").on(Side::Fails, s("g_tell_fails", "tell")).on(Side::NeedsYou, s("g_tell_needs", "tell")),
+            s("g_check", "check"),
+            s("g_redump", "redump"),
+            s("g_choose", "game-choose"),
+            branches([
+                chain([s("g_chd", "chd"), s("g_lib", "folder").labelled("Library").with("folder", "~/Games/Compressed"), branches([s("g_sbi", "libcrypt"), s("g_m3u", "m3u")])]),
+                s("g_tell", "tell").with("when", "always"),
+                s("g_next", "next-disc"),
+                chain([s("g_keep", "keep"), s("g_full", "folder").with("folder", "~/Games/Full")]),
+            ]),
+        ]);
+    }
+    Store::new(e.dir.path().join("config")).save_recipes(&all).unwrap();
+    let mut h = window_at(&e, None, true, 0.0, egui::vec2(1280.0, 800.0), 1.0);
+    click(&mut h, "Edit");
+    // CDs: the + on Rip's edge, and Rip's buttons right above and below it.
+    let lay = app(&h).layout(app(&h).sel);
+    let plus = h.get_by_label("Add after Rip").rect();
+    let (fails, needs) = (h.get_by_label("If Rip fails").rect(), h.get_by_label("If Rip needs you").rect());
+    assert!(plus.width() >= 32.0 && plus.height() >= 32.0, "a + big enough to hit: {plus:?}");
+    assert!(fails.width() >= 22.0 && fails.width() < plus.width(), "a path button smaller than its +: {fails:?}");
+    let rip = lay.tile("rip").unwrap().rect;
+    let v = app(&h).views_of(app(&h).sel);
+    let edge = app(&h).canvas_rect().left() + v.pan.x + rip.right() * v.zoom;
+    for b in [fails, needs] {
+        assert!((b.center().x - edge).abs() < 1.0, "on Rip's right edge: {b:?} vs {edge}");
+        assert!((b.center().x - plus.center().x).abs() < 1.0);
+    }
+    assert!(fails.bottom() <= plus.top() && plus.bottom() <= needs.top(), "above and below: {fails:?} {plus:?} {needs:?}");
+    shot(&mut h, "edit-pluses-cds");
+    let pan = v.pan;
+    let i = app(&h).sel;
+    app_mut(&mut h).set_view(i, (0.5, pan));
+    h.run_steps(2);
+    shot(&mut h, "edit-pluses-cds-50");
+    // Games, with Notify on Rip's paths.
+    h.get_by_label_contains("Games, ").click();
+    h.run_steps(2);
+    let i = app(&h).sel;
+    let lay = app(&h).layout(i);
+    let rip = lay.tile("g_rip").unwrap().rect;
+    for id in ["g_tell_fails", "g_tell_needs"] {
+        let t = lay.tile(id).unwrap().rect;
+        assert!(t.y - (rip.y + rip.h) < 128.0, "{id} just under Rip");
+    }
+    let low = lay.tiles.iter().map(|t| t.rect.y + t.rect.h).fold(0.0, f32::max);
+    assert!(lay.loops[0].iter().any(|p| p.1 > low), "the line back under everything");
+    click(&mut h, "Edit");
+    click(&mut h, "Fit to window");
+    shot(&mut h, "edit-pluses-games-fit");
+    app_mut(&mut h).set_view(i, (1.0, egui::vec2(-400.0, -300.0)));
+    h.run_steps(2);
+    shot(&mut h, "edit-pluses-games");
 }

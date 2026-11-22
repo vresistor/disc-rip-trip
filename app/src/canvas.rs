@@ -2,9 +2,9 @@
 //! with one transform (pan, zoom) applied to every coordinate and every
 //! size, text included, so zooming scales the whole picture uniformly.
 
-use crate::theme::{font, kind_icon, mix, Pal};
+use crate::theme::{font, mix, Pal};
 use drt_engine::{Snapshot, Spot, StepState};
-use drt_layout::Layout;
+use drt_layout::{Layout, PLUS_R, SIDE_R};
 use egui::epaint::{CubicBezierShape, PathShape, RectShape};
 use egui::{pos2, vec2, Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
 
@@ -218,23 +218,6 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
         painter.add(PathShape::convex_polygon(vec![tip, base + side * half, base - side * half], p.faint, Stroke::NONE));
     }
 
-    // A step's paths for when it fails or needs you: thin, dashed, in the
-    // colour of that state, kept quiet.
-    for sw in &lay.side_wires {
-        let pts: Vec<Pos2> = sw.path.iter().map(|&(x, y)| at(x, y)).collect();
-        if pts.len() < 2 {
-            continue;
-        }
-        let col = side_colour(p, sw.side);
-        painter.extend(Shape::dashed_line(&rounded(&pts, 12.0 * z), Stroke::new(1.5 * z, col), 5.0 * z, 4.0 * z));
-        let tip = pts[pts.len() - 1];
-        let dir = (tip - pts[pts.len() - 2]).normalized();
-        let side = vec2(-dir.y, dir.x);
-        let (len, half) = (8.0 * z, 4.5 * z);
-        let base = tip - dir * len;
-        painter.add(PathShape::convex_polygon(vec![tip, base + side * half, base - side * half], col, Stroke::NONE));
-    }
-
     // Tiles, then the notches that point into the next tile over them.
     let mut click = None;
     let mut notches = Vec::new();
@@ -352,6 +335,25 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
         painter.add(PathShape::convex_polygon(pts, fill, Stroke::NONE));
         painter.add(PathShape::line(vec![pos2(c.x, c.y - h), pos2(c.x + h, c.y), pos2(c.x, c.y + h)], Stroke::new(z, p.line)));
     }
+    // A step's paths for when it fails or needs you: thin, dashed, in the
+    // colour of that state, kept quiet. Over the cards, as each runs down
+    // the edge of its own from its button, with a dot where it leaves.
+    for sw in &lay.side_wires {
+        let pts: Vec<Pos2> = sw.path.iter().map(|&(x, y)| at(x, y)).collect();
+        if pts.len() < 2 {
+            continue;
+        }
+        let col = side_colour(p, sw.side);
+        painter.circle_filled(pts[0], 2.5 * z, col);
+        painter.extend(Shape::dashed_line(&rounded(&pts, 12.0 * z), Stroke::new(1.5 * z, col), 5.0 * z, 4.0 * z));
+        let tip = pts[pts.len() - 1];
+        let dir = (tip - pts[pts.len() - 2]).normalized();
+        let side = vec2(-dir.y, dir.x);
+        let (len, half) = (8.0 * z, 4.5 * z);
+        let base = tip - dir * len;
+        painter.add(PathShape::convex_polygon(vec![tip, base + side * half, base - side * half], col, Stroke::NONE));
+    }
+
     // The + after each strip, while editing.
     if marks.editing {
         let after = |id: &str| Spot::After(id.to_owned());
@@ -366,7 +368,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
                     v.name.clone()
                 }
             });
-            let hit = Rect::from_center_size(c, vec2(26.0, 26.0) * z);
+            let hit = Rect::from_center_size(c, Vec2::splat(2.0 * PLUS_R + 2.0) * z);
             let resp = ui.interact(hit, ui.scope_id().with(("plus", id)), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, format!("Add after {name}")));
             if plus(&painter, c, z, p, &resp, marks.plus_open == Some(&after(id))) {
@@ -382,7 +384,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
                 continue;
             }
             let c = at(j.at.0, j.at.1);
-            let hit = Rect::from_center_size(c, vec2(26.0, 26.0) * z);
+            let hit = Rect::from_center_size(c, Vec2::splat(2.0 * PLUS_R + 2.0) * z);
             let resp = ui.interact(hit, ui.scope_id().with(("join", &j.path)), Sense::click());
             let open = marks.plus_open == Some(&spot);
             // Lines in from each branch's end: always where no wire meets
@@ -401,8 +403,9 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
                 click = Some(Click::Plus(spot));
             }
         }
-        // On each card's foot, a small button for each path it can take
-        // besides its usual one: if it fails, if it needs you.
+        // On each card's right edge, just above and below its +, a button
+        // for each path it can take besides its usual one: if it fails
+        // (above), if it needs you (below).
         for (id, side, (x, y)) in &lay.side_buttons {
             let spot = Spot::On(id.clone(), *side);
             if marks.dead.contains(&spot) {
@@ -411,7 +414,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
             let c = at(*x, *y);
             let name = snap.steps.get(id).map_or(id.clone(), |v| v.name.clone());
             let label = crate::popover::side_title(*side, &name);
-            let hit = Rect::from_center_size(c, vec2(20.0, 20.0) * z);
+            let hit = Rect::from_center_size(c, Vec2::splat(2.0 * SIDE_R + 2.0) * z);
             let resp = ui.interact(hit, ui.scope_id().with(("side", id, *side)), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &label));
             let on = marks.plus_open == Some(&spot);
@@ -419,38 +422,31 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
             let (fill, fg, line) = if on {
                 (col, p.raised, col)
             } else if resp.hovered() {
-                (mix(col, 0.12, p.raised), col, col)
+                (mix(col, 0.14, p.raised), col, col)
             } else {
-                (p.raised, mix(col, 0.8, p.faint), p.line)
+                (p.raised, col, mix(col, 0.55, p.line))
             };
-            painter.circle(c, 8.5 * z, fill, Stroke::new(1.0 * z, line));
-            painter.extend(side_icon(*side, c, 10.0 * z, fg));
+            painter.circle(c, SIDE_R * z, fill, Stroke::new(2.0 * z, line));
+            painter.extend(side_icon(*side, c, 12.0 * z, fg));
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             let resp = resp.on_hover_text(&label);
             if resp.clicked() {
                 click = Some(Click::Plus(spot));
             }
         }
-        // A smaller, quieter + on each seam inside a strip, to put a step
-        // between two: it adds in line after the tile on its left.
+        // A + on each seam inside a strip, to put a step between two: it
+        // adds in line after the tile on its left.
         for (id, (x, y)) in lay.seams.iter().filter(|(id, _)| !marks.dead.contains(&after(id))) {
             let c = at(*x, *y);
             let name_of = |id: &str| snap.steps.get(id).map_or(id.to_owned(), |v| v.name.clone());
             let right = lay.tiles.iter().position(|t| t.id == *id).and_then(|k| lay.tiles.get(k + 1)).map(|t| name_of(&t.id)).unwrap_or_default();
-            let hit = Rect::from_center_size(c, vec2(20.0, 20.0) * z);
+            let hit = Rect::from_center_size(c, Vec2::splat(2.0 * PLUS_R + 2.0) * z);
             let resp = ui.interact(hit, ui.scope_id().with(("seam", id)), Sense::click());
             let label = format!("Add between {} and {right}", name_of(id));
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &label));
-            let on = marks.plus_open == Some(&after(id));
-            let (fill, fg, line) = if on {
-                (p.action, p.action_ink, p.action)
-            } else if resp.hovered() {
-                (mix(p.ink, 0.05, p.raised), p.ink, p.faint)
-            } else {
-                (p.raised, p.faint, p.line)
-            };
-            painter.circle(c, 8.5 * z, fill, Stroke::new(1.0 * z, line));
-            painter.extend(kind_icon("plus", c - vec2(5.5, 5.5) * z, 11.0 * z, fg));
-            if resp.clicked() {
+            if plus(&painter, c, z, p, &resp, marks.plus_open == Some(&after(id))) {
                 click = Some(Click::Plus(after(id)));
             }
         }
@@ -472,27 +468,48 @@ fn side_colour(p: &Pal, side: drt_engine::Side) -> Color32 {
 }
 
 /// A warning sign for *If it fails*, Notify's bell for *If it needs you*,
-/// `size` across, centred on `c`.
+/// `size` across, centred on `c`, drawn bold to read at a button's size.
 fn side_icon(side: drt_engine::Side, c: Pos2, size: f32, col: Color32) -> Vec<Shape> {
     let h = size / 2.0;
+    let st = Stroke::new(size * 0.15, col);
     match side {
         drt_engine::Side::Fails => {
-            let st = Stroke::new(size * 0.13, col);
-            let (top, l, r) = (c + vec2(0.0, -h), c + vec2(-h, h * 0.8), c + vec2(h, h * 0.8));
-            vec![Shape::closed_line(vec![top, r, l], st), Shape::line_segment([c + vec2(0.0, -h * 0.3), c + vec2(0.0, h * 0.25)], st), Shape::circle_filled(c + vec2(0.0, h * 0.55), size * 0.07, col)]
+            let (top, l, r) = (c + vec2(0.0, -h * 0.95), c + vec2(-h, h * 0.8), c + vec2(h, h * 0.8));
+            vec![Shape::closed_line(vec![top, r, l], st), Shape::line_segment([c + vec2(0.0, -h * 0.3), c + vec2(0.0, h * 0.2)], st), Shape::circle_filled(c + vec2(0.0, h * 0.5), size * 0.08, col)]
         }
-        drt_engine::Side::NeedsYou => kind_icon("tell", c - vec2(h, h), size, col),
+        drt_engine::Side::NeedsYou => {
+            // A bell: its dome, its rim, its clapper.
+            let dome = vec![
+                c + vec2(-h * 0.6, h * 0.45),
+                c + vec2(-h * 0.6, -h * 0.15),
+                c + vec2(-h * 0.3, -h * 0.75),
+                c + vec2(h * 0.3, -h * 0.75),
+                c + vec2(h * 0.6, -h * 0.15),
+                c + vec2(h * 0.6, h * 0.45),
+            ];
+            vec![Shape::line(dome, st), Shape::line_segment([c + vec2(-h * 0.9, h * 0.45), c + vec2(h * 0.9, h * 0.45)], st), Shape::circle_filled(c + vec2(0.0, h * 0.82), size * 0.1, col)]
+        }
     }
 }
 
-/// A + after a strip or where branches meet: a circle with a plus, filled
-/// in the action colour while its menu is open. Gives whether it was
-/// clicked.
+/// A + on a strip's end, a seam or where branches meet: a bold circle
+/// with a thick plus, filled in the action colour while its menu is open.
+/// Gives whether it was clicked.
 fn plus(painter: &egui::Painter, c: Pos2, z: f32, p: &Pal, resp: &egui::Response, on: bool) -> bool {
-    let (fill, fg, line) = if on { (p.action, p.action_ink, p.action) } else { (p.raised, p.muted, p.line) };
-    let fill = if resp.hovered() && !on { mix(p.ink, 0.05, fill) } else { fill };
-    painter.circle(c, 13.0 * z, fill, Stroke::new(1.5 * z, line));
-    painter.extend(kind_icon("plus", c - vec2(8.0, 8.0) * z, 16.0 * z, fg));
+    let (fill, fg, line) = if on {
+        (p.action, p.action_ink, p.action)
+    } else if resp.hovered() {
+        (mix(p.action, 0.1, p.raised), p.action, p.action)
+    } else {
+        (p.raised, mix(p.ink, 0.8, p.raised), mix(p.ink, 0.35, p.line))
+    };
+    if resp.hovered() {
+        painter.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    painter.circle(c, PLUS_R * z, fill, Stroke::new(2.0 * z, line));
+    let (len, th) = (14.0 * z, 3.2 * z);
+    let bar = |w: f32, h: f32| Shape::Rect(RectShape::filled(Rect::from_center_size(c, vec2(w, h)), CornerRadius::same((th / 2.0).round().min(255.0) as u8), fg));
+    painter.extend([bar(len, th), bar(th, len)]);
     resp.clicked()
 }
 

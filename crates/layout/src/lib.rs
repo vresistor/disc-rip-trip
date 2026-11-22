@@ -183,11 +183,30 @@ pub struct SideWire {
     pub path: Vec<(f32, f32)>,
 }
 
-/// Where on a card's foot a path for `side` leaves, from its left.
+/// How big a + is, at 100%: its radius. Seams, strip ends and joins all
+/// share it.
+pub const PLUS_R: f32 = 16.0;
+/// A path button's radius, beside a +.
+pub const SIDE_R: f32 = 11.0;
+
+/// Where a step's button for `side` goes: on its card's right edge, just
+/// above (if it fails) or below (if it needs you) the + there.
+pub fn side_button(r: Rect, side: Side) -> (f32, f32) {
+    let d = PLUS_R + 5.0 + SIDE_R;
+    match side {
+        Side::Fails => (r.right(), r.mid_y() - d),
+        Side::NeedsYou => (r.right(), r.mid_y() + d),
+    }
+}
+
+/// Where a path for `side` runs down its own card, just inside the right
+/// edge, to leave by its foot: if it fails on the inside, as what hears of
+/// that goes to the left of what hears it needs you, so neither line
+/// crosses the other.
 pub fn side_x(r: Rect, side: Side) -> f32 {
     match side {
-        Side::Fails => r.right() - 48.0,
-        Side::NeedsYou => r.right() - 24.0,
+        Side::Fails => r.right() - 9.0,
+        Side::NeedsYou => r.right() - 4.0,
     }
 }
 
@@ -204,17 +223,26 @@ impl Layout {
         let (fx, sx) = (f.x + f.w / 2.0, start.x + start.w / 2.0);
         // Does anything stand in a vertical line's way, from `y` down?
         let blocked = |x: f32, y: f32| self.tiles.iter().any(|t| t.rect != f && t.rect.x < x && x < t.rect.x + t.rect.w && t.rect.y + t.rect.h > y);
-        let path = if !blocked(fx, f.y + f.h) {
+        // Up into the start from under it; or, with what hears of the
+        // start's own paths in the way, round them and in at its left.
+        let into = if self.tiles.iter().any(|t| t.rect != start && t.rect.x < sx && sx < t.rect.right() && t.rect.y > start.y && t.rect.y < below) {
+            let x = start.x - 16.0;
+            vec![(x, below), (x, start.mid_y()), (start.x, start.mid_y())]
+        } else {
+            vec![(sx, below), (sx, start.y + start.h)]
+        };
+        let mut path = if !blocked(fx, f.y + f.h) {
             // Straight down from under the step.
-            vec![(fx, f.y + f.h), (fx, below), (sx, below), (sx, start.y + start.h)]
+            vec![(fx, f.y + f.h), (fx, below)]
         } else {
             // Something is below it: leave from its side and drop through
             // the gap beside it (the right if it's clear, else the left).
             let mid = f.y + f.h / 2.0;
             let gap = 16.0;
             let (edge, x) = if !blocked(f.x + f.w + gap, mid) { (f.x + f.w, f.x + f.w + gap) } else { (f.x, f.x - gap) };
-            vec![(edge, mid), (x, mid), (x, below), (sx, below), (sx, start.y + start.h)]
+            vec![(edge, mid), (x, mid), (x, below)]
         };
+        path.extend(into);
         self.loops.push(path);
         self.height = self.height.max(below + 16.0);
     }
@@ -227,82 +255,149 @@ pub fn layout_with_loops(root: &Node, m: Metrics, loops_back: impl Fn(&str) -> b
     let leads_back = |n: &Node| n.ids().into_iter().any(&loops_back);
     let mut l = layout_ordered(root, m, &leads_back);
     let ids: Vec<String> = l.tiles.iter().map(|t| t.id.clone()).filter(|id| loops_back(id)).collect();
-    for id in ids {
-        l.loop_back(&id);
-    }
-    add_sides(&mut l, root, m);
+    add_sides(&mut l, root, m, &ids);
     l
 }
 
 pub fn layout(root: &Node, m: Metrics) -> Layout {
     let mut l = layout_ordered(root, m, &|_| false);
-    add_sides(&mut l, root, m);
+    add_sides(&mut l, root, m, &[]);
     l
 }
 
-/// The paths for when a step fails or needs you, after everything else
-/// (the start stays the first tile): each what hears of it in a row at
-/// the bottom, under the step where there's room, its line on a lane of
-/// its own above that row.
-fn add_sides(l: &mut Layout, root: &Node, m: Metrics) {
+/// The paths for when a step fails or needs you, and the lines back to
+/// the start (the start stays the first tile). What hears of a step goes
+/// in a row just under it where nothing of the recipe stands below it;
+/// the lines back run under that; and whatever couldn't go near its step
+/// goes in a row under everything. Each path runs down its own card's
+/// right edge from its button, out by its foot, along a lane of its own
+/// above its row, and down into what hears of it.
+fn add_sides(l: &mut Layout, root: &Node, m: Metrics, loops: &[String]) {
     let main: Vec<TilePlace> = l.tiles.clone();
-    let mut paths: Vec<(Rect, &str, Side, &Node)> = vec![];
+    let mut paths: Vec<(Rect, &str, Side, Layout)> = vec![];
     for n in root.steps() {
         let Node::Step { id, .. } = n else { continue };
         let Some(t) = main.iter().find(|t| t.id == *id) else { continue };
         for s in Side::BOTH {
             match n.side(s) {
-                Some(path) => paths.push((t.rect, id, s, path)),
-                None => l.side_buttons.push((id.clone(), s, (side_x(t.rect, s), t.rect.y + t.rect.h))),
+                Some(path) => paths.push((t.rect, id, s, layout(path, m))),
+                None => l.side_buttons.push((id.clone(), s, side_button(t.rect, s))),
             }
         }
-    }
-    if paths.is_empty() {
-        return;
     }
     paths.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then(a.0.y.total_cmp(&b.0.y)));
-    let below = main.iter().map(|t| t.rect.y + t.rect.h).chain(l.loops.iter().flatten().map(|p| p.1)).fold(0.0, f32::max) + 32.0;
-    let lane = |k: usize| below + 16.0 * k as f32;
-    let row = lane(paths.len() - 1) + 32.0;
-    // Is the way down at `x`, from `y0` to `y1`, clear of every card but
-    // the step's own?
-    let blocked = |x: f32, y0: f32, y1: f32| main.iter().any(|t| t.rect.x < x && x < t.rect.right() && t.rect.y < y1 && t.rect.y + t.rect.h > y0);
-    let across = |x0: f32, x1: f32, y: f32| main.iter().any(|t| t.rect.x < x0.max(x1) && x0.min(x1) < t.rect.right() && t.rect.y < y && y < t.rect.y + t.rect.h);
-    let mut cursor = f32::MIN;
-    for (k, (r, from, side, path)) in paths.into_iter().enumerate() {
-        let sub = layout(path, m);
-        let x = r.x.max(cursor);
-        cursor = x + sub.width;
-        let first = l.tiles.len();
-        for t in &sub.tiles {
-            l.tiles.push(TilePlace { id: t.id.clone(), rect: Rect { x: t.rect.x + x, y: t.rect.y + row, ..t.rect }, in_strip: t.in_strip });
-        }
-        let shift = |p: (f32, f32)| (p.0 + x, p.1 + row);
-        for w in &sub.wires {
-            l.wires.push(Wire { from: shift(w.from), bend: shift(w.bend), c1: shift(w.c1), c2: shift(w.c2), to: shift(w.to), ..w.clone() });
-        }
-        let into = l.tiles[first].clone();
-        let (sx, foot, y) = (side_x(r, side), r.y + r.h, lane(k));
-        // Straight down; else down into the gap below the card, along to
-        // the nearest clear way down, and down that.
-        let mut pts = vec![(sx, foot)];
-        if blocked(sx, foot, y) {
-            let mid = foot + m.vgap / 2.0;
-            let off = if side == Side::Fails { 12.0 } else { 24.0 };
-            let mut ways: Vec<f32> = main.iter().flat_map(|t| [t.rect.x - off, t.rect.right() + off]).collect();
-            ways.sort_by(|a, b| (a - sx).abs().total_cmp(&(b - sx).abs()));
-            if let Some(gx) = ways.into_iter().find(|&gx| !across(sx, gx, mid) && !blocked(gx, mid, y)) {
-                pts.extend([(sx, mid), (gx, mid)]);
+    // Does anything of the recipe stand under `x0..x1`, lower than `y`?
+    let under = |x0: f32, x1: f32, y: f32| main.iter().any(|t| t.rect.x < x1 && x0 < t.rect.right() && t.rect.y + t.rect.h > y + 0.5);
+    // A path goes far when something stands under it, or when a far one's
+    // line comes down where it would be.
+    let mut far_at = vec![false; paths.len()];
+    let near_xs = |far_at: &[bool]| {
+        let ways: Vec<f32> = paths.iter().zip(far_at).filter(|(_, f)| **f).map(|(p, _)| way_down(p.0, p.2, &main, f32::MAX, m).last().unwrap().0).collect();
+        let mut cursor = f32::MIN;
+        let mut xs = vec![None; paths.len()];
+        // A step's paths side by side: from under its left edge on, or,
+        // with something there, ending under its right edge.
+        let ks: Vec<usize> = (0..paths.len()).filter(|k| !far_at[*k]).collect();
+        for group in ks.chunk_by(|a, b| paths[*a].1 == paths[*b].1) {
+            let r = paths[group[0]].0;
+            let fits = |n: usize, x: f32| {
+                let x1 = x + group[..n].iter().map(|k| paths[*k].3.width).sum::<f32>() - m.gap;
+                let (x0, x1) = (r.x.min(x), r.right().max(x1));
+                x >= cursor && !under(x0, x1, r.y + r.h) && !ways.iter().any(|&g| x0 - 8.0 < g && g < x1 + 8.0)
+            };
+            let all: f32 = group.iter().map(|k| paths[*k].3.width).sum::<f32>() - m.gap;
+            let found = [r.x.max(cursor), r.right() - all].into_iter().find(|&x| fits(group.len(), x)).map(|x| (group.len(), x));
+            let Some((n, mut x)) = found.or_else(|| fits(1, r.x.max(cursor)).then(|| (1, r.x.max(cursor)))) else { continue };
+            for &k in &group[..n] {
+                xs[k] = Some(x);
+                x += paths[k].3.width;
             }
+            cursor = x;
         }
-        let last = pts.last().unwrap().0;
-        let cx = into.rect.x + into.rect.w / 2.0;
-        pts.extend([(last, y), (cx, y), (cx, into.rect.y)]);
-        pts.dedup();
-        l.side_wires.push(SideWire { from_step: from.to_owned(), to_step: into.id.clone(), side, path: pts });
-        l.width = l.width.max(cursor + m.gap);
+        xs
+    };
+    let xs = loop {
+        let xs = near_xs(&far_at);
+        let now: Vec<bool> = xs.iter().map(Option::is_none).collect();
+        if now == far_at {
+            break xs;
+        }
+        far_at = now;
+    };
+    let mut near = vec![];
+    let mut far = vec![];
+    for (p, x) in paths.into_iter().zip(xs) {
+        match x {
+            Some(x) => near.push((x, p)),
+            None => far.push(p),
+        }
     }
-    l.height = l.height.max(row + m.tile_h);
+    if !near.is_empty() {
+        let floor = near.iter().map(|(_, p)| p.0.y + p.0.h).fold(0.0, f32::max) + 32.0;
+        let row = floor + 16.0 * (near.len() - 1) as f32 + 32.0;
+        for (k, (x, p)) in near.into_iter().enumerate() {
+            place_side(l, p, x, row, floor + 16.0 * k as f32, &main, m);
+        }
+    }
+    for id in loops {
+        l.loop_back(id);
+    }
+    if far.is_empty() {
+        return;
+    }
+    let others: Vec<TilePlace> = l.tiles.clone();
+    let below = others.iter().map(|t| t.rect.y + t.rect.h).chain(l.loops.iter().flatten().map(|p| p.1)).fold(0.0, f32::max) + 32.0;
+    let row = below + 16.0 * (far.len() - 1) as f32 + 32.0;
+    let mut cursor = f32::MIN;
+    for (k, p) in far.into_iter().enumerate() {
+        let x = p.0.x.max(cursor);
+        cursor = x + p.3.width;
+        place_side(l, p, x, row, below + 16.0 * k as f32, &others, m);
+    }
+}
+
+/// A path's line from its button down its card, out by its foot and on
+/// down to `lane`: straight; else into the gap below the card, along to
+/// the nearest clear way down past `around`, and down that.
+fn way_down(r: Rect, side: Side, around: &[TilePlace], lane: f32, m: Metrics) -> Vec<(f32, f32)> {
+    // Is the way down at `x`, from `y0` to `y1`, clear?
+    let blocked = |x: f32, y0: f32, y1: f32| around.iter().any(|t| t.rect.x < x && x < t.rect.right() && t.rect.y < y1 && t.rect.y + t.rect.h > y0);
+    let across = |x0: f32, x1: f32, y: f32| around.iter().any(|t| t.rect.x < x0.max(x1) && x0.min(x1) < t.rect.right() && t.rect.y < y && y < t.rect.y + t.rect.h);
+    let (sx, foot) = (side_x(r, side), r.y + r.h);
+    let mut pts = vec![(sx, side_button(r, side).1), (sx, foot)];
+    if blocked(sx, foot, lane) {
+        let mid = foot + m.vgap / 2.0;
+        let off = if side == Side::Fails { 12.0 } else { 24.0 };
+        let mut ways: Vec<f32> = around.iter().flat_map(|t| [t.rect.x - off, t.rect.right() + off]).collect();
+        ways.sort_by(|a, b| (a - sx).abs().total_cmp(&(b - sx).abs()));
+        if let Some(gx) = ways.into_iter().find(|&gx| !across(sx, gx, mid) && !blocked(gx, mid, lane)) {
+            pts.extend([(sx, mid), (gx, mid)]);
+        }
+    }
+    pts
+}
+
+/// Puts what hears of one step's path at `x` in the row at `row`, and its
+/// line: down the step's card, out by its foot, round any of `around`
+/// below it, along at `lane` and down into it.
+fn place_side(l: &mut Layout, (r, from, side, sub): (Rect, &str, Side, Layout), x: f32, row: f32, lane: f32, around: &[TilePlace], m: Metrics) {
+    let first = l.tiles.len();
+    for t in &sub.tiles {
+        l.tiles.push(TilePlace { id: t.id.clone(), rect: Rect { x: t.rect.x + x, y: t.rect.y + row, ..t.rect }, in_strip: t.in_strip });
+    }
+    let shift = |p: (f32, f32)| (p.0 + x, p.1 + row);
+    for w in &sub.wires {
+        l.wires.push(Wire { from: shift(w.from), bend: shift(w.bend), c1: shift(w.c1), c2: shift(w.c2), to: shift(w.to), ..w.clone() });
+    }
+    let into = l.tiles[first].clone();
+    let mut pts = way_down(r, side, around, lane, m);
+    let last = pts.last().unwrap().0;
+    let cx = into.rect.x + into.rect.w / 2.0;
+    pts.extend([(last, lane), (cx, lane), (cx, into.rect.y)]);
+    pts.dedup();
+    l.side_wires.push(SideWire { from_step: from.to_owned(), to_step: into.id.clone(), side, path: pts });
+    l.width = l.width.max(x + sub.width + m.gap);
+    l.height = l.height.max(row + sub.height);
 }
 
 /// The layout, with the branches `last` picks drawn after their siblings.
@@ -526,6 +621,102 @@ mod tests {
         None
     }
 
+    /// The step a line back leaves from: the card its first point is on.
+    fn path_owner(l: &Layout, path: &[(f32, f32)]) -> String {
+        let (x, y) = path[0];
+        l.tiles.iter().find(|t| t.rect.x <= x && x <= t.rect.right() && t.rect.y <= y && y <= t.rect.y + t.rect.h).map(|t| t.id.clone()).unwrap_or_default()
+    }
+
+    /// Does any leg of `a` cross any leg of `b`? (Legs run straight across
+    /// or down.)
+    fn lines_cross(a: &[(f32, f32)], b: &[(f32, f32)]) -> bool {
+        a.windows(2).any(|p| {
+            b.windows(2).any(|q| {
+                let ((x0, y0), (x1, y1)) = (p[0], p[1]);
+                let ((u0, v0), (u1, v1)) = (q[0], q[1]);
+                x0.min(x1) <= u0.max(u1) && u0.min(u1) <= x0.max(x1) && y0.min(y1) <= v0.max(v1) && v0.min(v1) <= y0.max(y1)
+            })
+        })
+    }
+
+    /// A games recipe that ends a disc in a branch beside others: what
+    /// hears of Rip goes just under Rip, not under the line back, which
+    /// runs under it and crosses neither it nor its lines.
+    #[test]
+    fn what_hears_of_a_step_goes_just_under_it_and_the_line_back_under_that() {
+        use drt_engine::recipe::{branches, chain};
+        let s = |id: &str, k: &str| Node::step(id, k);
+        let shaped = |rip: Node| {
+            chain([
+                s("d", "drive"),
+                s("g", "game-disc"),
+                rip,
+                s("c", "check"),
+                s("rd", "redump"),
+                s("ch", "game-choose"),
+                branches([
+                    chain([s("chd", "chd"), s("f1", "folder"), branches([s("cp", "libcrypt"), s("m3u", "m3u")])]),
+                    s("t", "tell"),
+                    s("nx", "next-disc"),
+                    chain([s("pi", "plain"), s("f2", "folder")]),
+                ]),
+            ])
+        };
+        for rip in [
+            s("r", "game-rip").on(Side::Fails, s("tf", "tell")),
+            s("r", "game-rip").on(Side::NeedsYou, s("tn", "tell")),
+            s("r", "game-rip").on(Side::Fails, s("tf", "tell")).on(Side::NeedsYou, s("tn", "tell")),
+        ] {
+            let l = layout_with_loops(&shaped(rip), Metrics::default(), |id| id == "nx");
+            let r = l.tile("r").unwrap().rect;
+            assert!(!l.side_wires.is_empty());
+            for w in &l.side_wires {
+                let into = l.tile(&w.to_step).unwrap().rect;
+                assert!(into.y - (r.y + r.h) < 128.0, "{} just under Rip: {:?}", w.to_step, into);
+                assert!(r.x <= into.x && into.x < r.right() + 352.0, "{} under Rip: {:?}", w.to_step, into);
+                let others = Layout { tiles: l.tiles.iter().filter(|t| t.id != w.to_step).cloned().collect(), ..Layout::default() };
+                assert_eq!(crosses(&others, &w.path, "r"), None);
+                for path in &l.loops {
+                    assert!(!lines_cross(&w.path, path), "{}'s line crosses the line back", w.to_step);
+                }
+            }
+            for path in &l.loops {
+                assert_eq!(crosses(&l, path, "nx"), None, "the line back");
+                let low = l.tiles.iter().map(|t| t.rect.y + t.rect.h).fold(0.0, f32::max);
+                assert!(path.iter().any(|p| p.1 > low), "under everything");
+            }
+            for (a, ta) in l.tiles.iter().enumerate() {
+                for tb in &l.tiles[a + 1..] {
+                    let (x, y) = (ta.rect, tb.rect);
+                    assert!(x.right() <= y.x + 0.5 || y.right() <= x.x + 0.5 || x.y + x.h <= y.y + 0.5 || y.y + y.h <= x.y + 0.5, "{} on {}", ta.id, tb.id);
+                }
+            }
+        }
+    }
+
+    /// On the CD recipe, with a branch beside Rip's paths' place: they
+    /// go to its left instead, still just under Rip, and their lines cross
+    /// neither each other nor the line back.
+    #[test]
+    fn a_steps_paths_go_to_its_left_when_its_right_is_taken() {
+        let mut root = recipes::cd().root;
+        let n = root.find_mut("rip").unwrap();
+        *n = n.clone().on(Side::Fails, Node::step("tf", "tell")).on(Side::NeedsYou, Node::step("tn", "tell"));
+        let l = layout_with_loops(&root, Metrics::default(), |id| id == "next");
+        let r = l.tile("rip").unwrap().rect;
+        let next = l.tile("next").unwrap().rect;
+        for id in ["tf", "tn"] {
+            let t = l.tile(id).unwrap().rect;
+            assert!(t.y < next.y + next.h, "{id} just under Rip, beside Next disc: {t:?}");
+            assert!(t.right() <= r.right() + 0.5, "{id} to the left: {t:?}");
+        }
+        let (a, b) = (&l.side_wires[0].path, &l.side_wires[1].path);
+        assert!(!lines_cross(&a[1..], &b[1..]), "{a:?} {b:?}");
+        for w in &l.side_wires {
+            assert!(l.loops.iter().all(|p| !lines_cross(&w.path, p)), "{:?}", w.path);
+        }
+    }
+
     #[test]
     fn a_steps_own_paths_go_round_every_card_into_a_row_below() {
         let m = Metrics::default();
@@ -538,16 +729,17 @@ mod tests {
             }
             let l = layout_with_loops(&root, m, |id| id.ends_with("next"));
             assert_eq!(l.side_wires.len(), 2 * ids.len(), "{}", r.name);
-            let main_bottom = l.tiles.iter().filter(|t| ids.contains(&t.id)).map(|t| t.rect.y + t.rect.h).fold(0.0, f32::max);
             for w in &l.side_wires {
                 let into = l.tile(&w.to_step).unwrap().rect;
-                assert!(into.y > main_bottom, "{} sits below everything", w.to_step);
-                assert_eq!(*w.path.last().unwrap(), (into.x + into.w / 2.0, into.y), "into the top of {}", w.to_step);
-                // Leaves its own card's foot and crosses no other.
                 let from = l.tile(&w.from_step).unwrap().rect;
-                assert_eq!(w.path[0], (side_x(from, w.side), from.y + from.h));
+                assert!(into.y > from.y + from.h, "{} sits below {}", w.to_step, w.from_step);
+                assert_eq!(*w.path.last().unwrap(), (into.x + into.w / 2.0, into.y), "into the top of {}", w.to_step);
+                // Leaves by its button on its own card's right edge, down
+                // that edge and out by its foot, and crosses no other card.
+                assert_eq!(w.path[0], (side_x(from, w.side), side_button(from, w.side).1));
+                assert_eq!(w.path[1], (side_x(from, w.side), from.y + from.h));
                 let others = Layout { tiles: l.tiles.iter().filter(|t| t.id != w.to_step).cloned().collect(), ..Layout::default() };
-                assert_eq!(crosses(&others, &w.path, &w.from_step), None, "{}: {} → {}", r.name, w.from_step, w.to_step);
+                assert_eq!(crosses(&others, &w.path, &w.from_step), None, "{}: {} → {} {:?} {:?}", r.name, w.from_step, w.to_step, w.path, l.tiles.iter().map(|t| (&t.id, t.rect)).collect::<Vec<_>>());
             }
             // No two cards overlap.
             for (a, ta) in l.tiles.iter().enumerate() {
@@ -557,6 +749,10 @@ mod tests {
                 }
             }
             assert!(l.width >= l.tiles.iter().map(|t| t.rect.right()).fold(0.0, f32::max));
+            for path in &l.loops {
+                let from = path_owner(&l, path);
+                assert_eq!(crosses(&l, path, &from), None, "{}: the line back", r.name);
+            }
         }
         // A step with both paths has no buttons left; one with none, two.
         let root = drt_engine::recipe::chain([Node::step("d", "drive"), Node::step("r", "rip").on(Side::Fails, Node::step("t", "tell"))]);
