@@ -606,7 +606,11 @@ pub fn combinable(dump: &Item) -> bool {
 pub async fn rip_again(cx: &Cx, dump: &Item, dir: PathBuf) -> Result<PathBuf> {
     let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
     let t = redumper::Target { dir, name: main.file_stem().unwrap_or_default().to_string_lossy().into_owned() };
-    let opts = rip_options(dump.context())?;
+    let mut opts = rip_options(dump.context())?;
+    // A dump from before Rip kept the order: the one kept on the drive since.
+    if opts.sector_order.is_none() {
+        opts.sector_order = cx.on_drive(SECTOR_ORDER).resolve(None).and_then(|v| v.as_str().map(str::to_owned)).filter(|o| redumper::ORDERS.contains(&o.as_str()));
+    }
     let mut out = String::new();
     {
         let _drive = cx.lane(LaneKind::Drive).await;

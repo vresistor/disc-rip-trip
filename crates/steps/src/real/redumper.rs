@@ -199,11 +199,11 @@ pub fn probe_errors(output: &str) -> Option<Vec<(String, u64)>> {
     output.lines().rev().find_map(parse_progress).map(|p| p.counts).filter(|c| !c.is_empty())
 }
 
-/// Whether a short read in an order read cleanly: it ran, and shows no
-/// error of any kind. A wrong order shows Q (subchannel) or C2 errors on
-/// nearly every sector.
+/// Whether a short read in an order read cleanly: it ran, counted Q
+/// (subchannel) errors and C2 errors, and shows no error of any kind. A
+/// wrong order shows Q or C2 errors on nearly every sector.
 pub fn probe_clean(output: &str, ok: bool) -> bool {
-    ok && probe_errors(output).is_some_and(|c| c.iter().all(|(_, n)| *n == 0))
+    ok && probe_errors(output).is_some_and(|c| ["Q", "C2"].iter().all(|k| c.iter().any(|(n, _)| n == k)) && c.iter().all(|(_, n)| *n == 0))
 }
 
 /// What finding the order came to.
@@ -2040,6 +2040,46 @@ error: data errors detected, unable to continue
         assert_eq!(probe_errors("[100%] LBA:    300/300, errors: { SCSIs: 0, C2s: 3, Q: 0 }").unwrap()[1], ("C2".to_owned(), 3));
         assert_eq!(probe_errors("error: no disc"), None);
         assert_eq!(order_line("DATA_SUB_C2", "found by testing"), "This drive hands over data, then subchannel, then C2 (found by testing)");
+    }
+
+    /// The Lite-On eHAU324's real test read of a good PlayStation disc as
+    /// DATA_C2_SUB, trimmed.
+    const EHAU324_C2_SUB: &str = "redumper (build: b744)
+
+arguments: dump --drive=/dev/sr0 --drive-sector-order=DATA_C2_SUB --lba-start=0 --lba-end=300 --retries=0
+warning: drive not found in the database
+warning: using generic drive
+
+drive information
+  path: /dev/sr0
+  inquiry: ATAPI - eHAU324 A (revision level: 5L1Q, vendor specific: 2009/10/08 08:49)
+  configuration: GENERIC (read offset: +6, C2 shift: 0, pre-gap start: +0, read method: BE, sector order: DATA_C2_SUB)
+  profile: CD-ROM
+
+*** DUMP (time check: 0s)
+
+disc TOC:
+  track 1 {  data }
+    index 01 { LBA:      0, MSF: 00:02:00 }
+
+media errors: 
+  SCSI: 0 samples
+  C2: 6166 samples
+  Q: 300
+
+*** END (time check: 4s)
+";
+
+    #[test]
+    fn a_real_test_read_in_the_wrong_order() {
+        assert!(unknown_drive(EHAU324_C2_SUB));
+        assert_eq!(order_used(EHAU324_C2_SUB).as_deref(), Some("DATA_C2_SUB"));
+        assert_eq!(probe_errors(EHAU324_C2_SUB).unwrap(), [("SCSI".to_owned(), 0), ("C2".to_owned(), 6166), ("Q".to_owned(), 300)]);
+        assert!(!probe_clean(EHAU324_C2_SUB, true));
+        let right = EHAU324_C2_SUB.replace("C2: 6166", "C2: 0").replace("Q: 300", "Q: 0");
+        assert!(probe_clean(&right, true));
+        // Counts with no Q or C2 among them prove nothing.
+        assert!(!probe_clean("media errors: \n  SCSI: 0 samples\n", true));
     }
 
     #[tokio::test]
