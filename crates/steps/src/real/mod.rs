@@ -26,6 +26,7 @@ pub mod place;
 pub mod playstation;
 pub mod redump;
 pub mod redumper;
+pub mod renames;
 pub mod replaygain;
 pub mod tell;
 pub mod tool;

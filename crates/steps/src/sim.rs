@@ -1023,8 +1023,10 @@ impl Step for Keep {
         while let Some(dump) = inlet.recv().await {
             cx.item(&dump, ItemState::Ok, "3 files");
             cx.status(crate::real::media::size(DATA_BYTES), "");
-            let path = dump.path.clone();
-            outlet.send(dump.becomes(ItemKind::ImageFile, path)).await;
+            // Named as Redump names it, as the real one does.
+            let ext = dump.path.as_deref().and_then(|p| p.extension()).map_or("cue".into(), |e| e.to_string_lossy().into_owned());
+            let name = crate::template::safe(&data::dump_fields(dump.context()).name);
+            outlet.send(dump.becomes(ItemKind::ImageFile, Some(PathBuf::from(format!("{name}.{ext}"))))).await;
         }
         Ok(())
     }

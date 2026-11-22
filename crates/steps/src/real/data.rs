@@ -708,13 +708,101 @@ impl Step for Keep {
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
         while let Some(dump) = inlet.recv().await {
             let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
-            let n = redumper::dump_files(&main).len();
+            // Named for what Check found, else the label, as the CHD is.
+            let name = super::safe(&dump_fields(dump.context()).name);
+            let dir = cx.work()?.join("keep");
+            let named = {
+                let (main, dir) = (main.clone(), dir.clone());
+                tokio::task::spawn_blocking(move || name_set(&main, &dir, &name)).await?
+            };
+            let named = match named {
+                Ok(m) => m,
+                Err(e) => {
+                    if cx.stopped() {
+                        return Err(e);
+                    }
+                    cx.item(&dump, ItemState::Bad, format!("Couldn't name the files: {e}"));
+                    cx.log(format!("plain image: {e}"));
+                    continue;
+                }
+            };
+            let n = redumper::dump_files(&named).len();
+            cx.log(format!("plain image: {} ({n} files)", named.display()));
             cx.item(&dump, ItemState::Ok, format!("{n} files"));
-            cx.status(image_size(&main), "");
-            outlet.send(dump.becomes(ItemKind::ImageFile, Some(main))).await;
+            cx.status(image_size(&named), "");
+            outlet.send(dump.becomes(ItemKind::ImageFile, Some(named))).await;
         }
         Ok(())
     }
+}
+
+/// Each file of a dump and the name Redump gives it, for a disc called
+/// `name`: `name.cue`; one track `name.bin`, several `name (Track 1).bin`
+/// on, as `name (Track 01).bin` from ten tracks up (every entry in
+/// Redump's PlayStation list is named so); `name.iso`; `name.log`.
+pub fn redump_names(main: &Path, name: &str) -> Vec<(PathBuf, String)> {
+    let files = redumper::dump_files(main);
+    let ext = |f: &Path| f.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let tracks = files.iter().filter(|f| ext(f) == "bin").count();
+    let width = if tracks >= 10 { 2 } else { 1 };
+    let mut n = 0;
+    files
+        .into_iter()
+        .map(|f| {
+            let new = match ext(&f).as_str() {
+                "bin" if tracks > 1 => {
+                    n += 1;
+                    format!("{name} (Track {n:0width$}).bin")
+                }
+                e => format!("{name}.{e}"),
+            };
+            (f, new)
+        })
+        .collect()
+}
+
+/// A cue sheet with each FILE line naming its file's new name: the name
+/// between the quotes changed, every other byte as it was (line ends
+/// included). Names not in `names` stay.
+pub fn rename_in_cue(cue: &str, names: &[(String, String)]) -> String {
+    let mut out = String::with_capacity(cue.len());
+    for line in cue.split_inclusive('\n') {
+        let t = line.trim_start();
+        let lead = &line[..line.len() - t.len()];
+        let renamed = t.strip_prefix("FILE \"").and_then(|rest| {
+            let (old, after) = rest.split_once('"')?;
+            let new = &names.iter().find(|(o, _)| o == old)?.1;
+            Some(format!("{lead}FILE \"{new}\"{after}"))
+        });
+        out.push_str(renamed.as_deref().unwrap_or(line));
+    }
+    out
+}
+
+/// Puts a dump's files into `dir` under Redump's names for `name`
+/// ([`redump_names`]): each linked where it can be (no second copy of a
+/// disc), else copied; the cue sheet written anew to name the tracks by
+/// theirs. The dump stays as it is, for the steps that read it. Gives the
+/// new main file.
+pub fn name_set(main: &Path, dir: &Path, name: &str) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let names = redump_names(main, name);
+    let pairs: Vec<(String, String)> = names.iter().map(|(f, n)| (f.file_name().unwrap_or_default().to_string_lossy().into_owned(), n.clone())).collect();
+    let mut new_main = None;
+    for (f, n) in &names {
+        let to = dir.join(n);
+        let _ = std::fs::remove_file(&to);
+        if f == main {
+            new_main = Some(to.clone());
+        }
+        if f.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")) {
+            let cue = std::fs::read_to_string(f)?;
+            std::fs::write(&to, rename_in_cue(&cue, &pairs))?;
+        } else if std::fs::hard_link(f, &to).is_err() {
+            std::fs::copy(f, &to)?;
+        }
+    }
+    new_main.ok_or_else(|| anyhow!("{} isn't part of the dump", main.display()))
 }
 
 /// Copies a dump's files into `dir`, each under a temporary name first, so
@@ -821,6 +909,59 @@ mod tests {
         assert_eq!(says("Jellyfin"), "Jellyfin");
         assert_eq!(says(template::DEFAULT), "Artist / Album / 01 - Title");
         assert_eq!(says("{year}/{title}"), "{year}/{title}");
+    }
+
+    #[test]
+    fn a_plain_image_is_named_as_redump_names_it() {
+        let base = std::env::current_dir().unwrap().join("../../target/drt-test/redump-names");
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("image");
+        std::fs::create_dir_all(&src).unwrap();
+        // One track, as redumper names it, the cue's lines ending CRLF.
+        std::fs::write(src.join("KOUDELKA_1.cue"), "FILE \"KOUDELKA_1.bin\" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n").unwrap();
+        std::fs::write(src.join("KOUDELKA_1.bin"), "data").unwrap();
+        std::fs::write(src.join("KOUDELKA_1.log"), "log").unwrap();
+        std::fs::write(src.join("KOUDELKA_1.scram"), "work").unwrap();
+        let out = base.join("keep");
+        let main = name_set(&src.join("KOUDELKA_1.cue"), &out, "Koudelka (Europe) (Disc 1)").unwrap();
+        assert_eq!(main, out.join("Koudelka (Europe) (Disc 1).cue"));
+        let cue = std::fs::read_to_string(&main).unwrap();
+        assert_eq!(cue, "FILE \"Koudelka (Europe) (Disc 1).bin\" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n");
+        assert_eq!(std::fs::read_to_string(out.join("Koudelka (Europe) (Disc 1).bin")).unwrap(), "data");
+        assert_eq!(std::fs::read_to_string(out.join("Koudelka (Europe) (Disc 1).log")).unwrap(), "log");
+        let mut there: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        there.sort();
+        assert_eq!(there.len(), 3, "{there:?}");
+        assert!(src.join("KOUDELKA_1.bin").is_file(), "the dump stays for the steps that read it");
+        // Done again (a second disc of the same name), it replaces them.
+        name_set(&src.join("KOUDELKA_1.cue"), &out, "Koudelka (Europe) (Disc 1)").unwrap();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn several_tracks_are_numbered_as_redump_numbers_them() {
+        let base = std::env::current_dir().unwrap().join("../../target/drt-test/redump-tracks");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cue = |n: usize| (1..=n).map(|k| format!("FILE \"disc (Track {k}).bin\" BINARY\n  TRACK {k:02} AUDIO\n")).collect::<String>();
+        for n in [2, 12] {
+            std::fs::write(base.join("disc.cue"), cue(n)).unwrap();
+            let names: Vec<String> = redump_names(&base.join("disc.cue"), "Alien Trilogy (Germany)").into_iter().map(|(_, n)| n).collect();
+            assert_eq!(names[0], "Alien Trilogy (Germany).cue");
+            assert_eq!(names.len(), n + 1);
+            if n == 2 {
+                assert_eq!(names[1..], ["Alien Trilogy (Germany) (Track 1).bin", "Alien Trilogy (Germany) (Track 2).bin"]);
+            } else {
+                assert_eq!(names[1], "Alien Trilogy (Germany) (Track 01).bin");
+                assert_eq!(names[12], "Alien Trilogy (Germany) (Track 12).bin");
+            }
+        }
+        let pairs = [("disc (Track 1).bin".to_owned(), "G (Track 1).bin".to_owned())];
+        assert_eq!(rename_in_cue("FILE \"disc (Track 1).bin\" BINARY\nFILE \"other.bin\" BINARY\n", &pairs), "FILE \"G (Track 1).bin\" BINARY\nFILE \"other.bin\" BINARY\n");
+        // An ISO is the name and .iso.
+        std::fs::write(base.join("DVD.iso"), "").unwrap();
+        assert_eq!(redump_names(&base.join("DVD.iso"), "Encarta").into_iter().map(|(_, n)| n).collect::<Vec<_>>(), ["Encarta.iso"]);
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[tokio::test]

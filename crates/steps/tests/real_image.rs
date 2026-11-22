@@ -109,12 +109,15 @@ async fn a_dump_redump_knows_is_checked_made_into_a_chd_and_filed() {
     // The CHD is named for Redump's name and filed in a folder of it.
     let filed = b.join("Images/Myst & Riven (Europe)/Myst & Riven (Europe).chd");
     assert!(filed.is_file(), "{}", s.steps["lib"].items[0].note);
-    // Kept as is: the image and its log together, not redumper's working files.
+    // Kept whole: the image and its log together, under Redump's names,
+    // not redumper's working files.
     let kept = std::fs::read_dir(b.join("Kept")).unwrap().next().unwrap().unwrap().path();
     assert!(kept.file_name().unwrap().to_string_lossy().ends_with(" MYSTRIVEN"), "{kept:?}");
     let mut names: Vec<String> = std::fs::read_dir(&kept).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();
-    assert_eq!(names, ["MYSTRIVEN (Track 1).bin", "MYSTRIVEN (Track 2).bin", "MYSTRIVEN.cue", "MYSTRIVEN.log"]);
+    assert_eq!(names, ["Myst & Riven (Europe) (Track 1).bin", "Myst & Riven (Europe) (Track 2).bin", "Myst & Riven (Europe).cue", "Myst & Riven (Europe).log"]);
+    let cue = std::fs::read_to_string(kept.join("Myst & Riven (Europe).cue")).unwrap();
+    assert_eq!(drt_steps::real::redumper::cue_files(&cue), ["Myst & Riven (Europe) (Track 1).bin", "Myst & Riven (Europe) (Track 2).bin"]);
     std::fs::remove_dir_all(b).unwrap();
 }
 

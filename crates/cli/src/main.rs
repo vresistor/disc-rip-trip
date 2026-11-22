@@ -38,7 +38,15 @@ drt fix-tags FOLDER [--apply]
   comment that is exactly cyanrip's name and version, and, in those files,
   marks a lone picture of type Other as the front cover. Tags only; each
   file is checked (audio and every other tag the same) before it replaces
-  the original. Without --apply it only lists what it would change.";
+  the original. Without --apply it only lists what it would change.
+
+drt rename-full-copies FOLDER [--dat FILE]... [--apply]
+
+  Renames plain images (a cue sheet and its tracks, with their log) to
+  Redump's names, when every track's SHA-1 is a track of one entry in a
+  Redump list, and rewrites each cue sheet's FILE lines to match. The
+  lists are the ones the app keeps (or each --dat given). Nothing is
+  written over. Without --apply it only lists what it would do.";
 
 struct Args {
     recipe: Recipe,
@@ -206,10 +214,100 @@ async fn fix_tags(folder: &std::path::Path, apply: bool, out: &mut impl Write) -
     Ok((changed, failed))
 }
 
+/// `drt rename-full-copies FOLDER [--dat FILE]... [--apply]`. Gives how
+/// many sets it renamed or would rename, and how many it left because
+/// something was in the way.
+fn rename_full_copies(folder: &std::path::Path, dats: &[std::path::PathBuf], apply: bool, out: &mut impl Write) -> Result<(usize, usize)> {
+    use drt_steps::real::renames::{self, Plan};
+    let mut lists = vec![];
+    for d in dats {
+        let bytes = std::fs::read(d).map_err(|e| anyhow::anyhow!("{}: {e}", d.display()))?;
+        lists.push(drt_steps::real::redump::parse(&bytes).map_err(|e| anyhow::anyhow!("{}: {e}", d.display()))?);
+    }
+    if lists.is_empty() {
+        bail!("no Redump list to match against: rip a game first, or pass --dat FILE");
+    }
+    let (mut renamed, mut left) = (0, 0);
+    for cue in renames::sheets(folder)? {
+        let shown = cue.strip_prefix(folder).unwrap_or(&cue).display().to_string();
+        let roms = match renames::hash_set(&cue) {
+            Ok(r) => r,
+            Err(e) => {
+                writeln!(out, "left as it is   {shown}: {e}")?;
+                left += 1;
+                continue;
+            }
+        };
+        match renames::plan(&cue, &roms, renames::find(&lists, &roms)) {
+            Plan::AlreadyNamed { .. } => {}
+            Plan::NoMatch => writeln!(out, "no match        {shown}: not in the Redump lists, left as it is")?,
+            Plan::Left(why) => {
+                writeln!(out, "left as it is   {shown}: {why}")?;
+                left += 1;
+            }
+            Plan::Rename { game, moves } => {
+                let said = moves.iter().filter(|(a, b)| a != b).map(|(a, b)| format!("\n    {} -> {}", name(a), name(b))).collect::<String>();
+                if !apply {
+                    writeln!(out, "would rename    {shown} as {game}:{said}")?;
+                    renamed += 1;
+                    continue;
+                }
+                match renames::apply(&moves) {
+                    Ok(()) => {
+                        writeln!(out, "renamed         {shown} as {game}:{said}")?;
+                        renamed += 1;
+                    }
+                    Err(e) => {
+                        writeln!(out, "couldn't rename {shown}: {e}")?;
+                        left += 1;
+                    }
+                }
+            }
+        }
+    }
+    let sets = |n: usize| if n == 1 { "1 set".to_owned() } else { format!("{n} sets") };
+    match (apply, renamed) {
+        (_, 0) => writeln!(out, "Nothing to rename.")?,
+        (false, n) => writeln!(out, "{} to rename. Run again with --apply to rename them.", sets(n))?,
+        (true, n) => writeln!(out, "{} renamed.", sets(n))?,
+    }
+    if left > 0 {
+        writeln!(out, "{} left as they were.", sets(left))?;
+    }
+    Ok((renamed, left))
+}
+
+fn name(p: &std::path::Path) -> String {
+    p.file_name().unwrap_or_default().to_string_lossy().into_owned()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut argv = std::env::args().skip(1);
-    if argv.next().as_deref() == Some("fix-tags") {
+    let first = argv.next();
+    if first.as_deref() == Some("rename-full-copies") {
+        let rest: Vec<String> = argv.collect();
+        let (mut apply, mut dats, mut folders) = (false, vec![], vec![]);
+        let mut it = rest.iter();
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--apply" => apply = true,
+                "--dat" => dats.push(std::path::PathBuf::from(it.next().ok_or_else(|| anyhow::anyhow!("--dat needs a file"))?)),
+                s if s.starts_with("--") => bail!("unknown argument {s}\n\n{HELP}"),
+                s => folders.push(s.to_owned()),
+            }
+        }
+        let [folder] = folders.as_slice() else { bail!("drt rename-full-copies FOLDER [--dat FILE]... [--apply]") };
+        if dats.is_empty() {
+            dats = drt_steps::real::renames::cached_lists();
+        }
+        let (_, left) = rename_full_copies(std::path::Path::new(folder), &dats, apply, &mut std::io::stdout())?;
+        if left > 0 {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if first.as_deref() == Some("fix-tags") {
         let rest: Vec<String> = argv.collect();
         let apply = rest.iter().any(|a| a == "--apply");
         let folders: Vec<&String> = rest.iter().filter(|a| !a.starts_with("--")).collect();
@@ -433,6 +531,37 @@ fn stdin_lines() -> mpsc::Receiver<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_copies_are_listed_then_renamed_to_their_redump_names() {
+        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/rename-full-copies");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("PlayStation/Koudelka")).unwrap();
+        let set = dir.join("PlayStation/Koudelka");
+        std::fs::write(set.join("KOUDELKA_1.cue"), "FILE \"KOUDELKA_1.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n").unwrap();
+        std::fs::write(set.join("KOUDELKA_1.bin"), "sectors").unwrap();
+        std::fs::write(set.join("KOUDELKA_1.log"), "log").unwrap();
+        // One nobody lists.
+        std::fs::write(dir.join("other.cue"), "FILE \"other.bin\" BINARY\n").unwrap();
+        std::fs::write(dir.join("other.bin"), "unknown").unwrap();
+        let sha1 = drt_steps::real::hash::hash_files(&[&set.join("KOUDELKA_1.bin")], |_| {}, || false).unwrap().remove(0).sha1;
+        let dat = dir.join("psx.dat");
+        std::fs::write(
+            &dat,
+            format!("<?xml version=\"1.0\"?><datafile><header><name>Sony - PlayStation</name><version>1</version></header><game name=\"Koudelka (Europe) (Disc 1)\"><rom name=\"Koudelka (Europe) (Disc 1).cue\" size=\"1\" crc=\"0\" md5=\"0\" sha1=\"0\"/><rom name=\"Koudelka (Europe) (Disc 1).bin\" size=\"7\" crc=\"0\" md5=\"0\" sha1=\"{sha1}\"/></game></datafile>"),
+        )
+        .unwrap();
+        let mut said = vec![];
+        assert_eq!(rename_full_copies(&dir, std::slice::from_ref(&dat), false, &mut said).unwrap(), (1, 0));
+        let said = String::from_utf8(said).unwrap();
+        assert!(said.contains("would rename") && said.contains("KOUDELKA_1.bin -> Koudelka (Europe) (Disc 1).bin") && said.contains("no match"), "{said}");
+        assert!(set.join("KOUDELKA_1.bin").is_file(), "listing changes nothing");
+        assert_eq!(rename_full_copies(&dir, std::slice::from_ref(&dat), true, &mut vec![]).unwrap(), (1, 0));
+        assert!(std::fs::read_to_string(set.join("Koudelka (Europe) (Disc 1).cue")).unwrap().starts_with("FILE \"Koudelka (Europe) (Disc 1).bin\" BINARY\n"));
+        assert!(set.join("Koudelka (Europe) (Disc 1).log").is_file() && dir.join("other.bin").is_file());
+        assert_eq!(rename_full_copies(&dir, &[dat], true, &mut vec![]).unwrap(), (0, 0), "once is enough");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A folder of files as they were filed before the audit, made the way
     /// they were made then: ffmpeg copying the rip WAV's INFO comment, and
