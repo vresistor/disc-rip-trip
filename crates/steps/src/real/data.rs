@@ -291,15 +291,15 @@ impl Image {
             let (unread, c2) = split.lines().filter_map(redumper::split_errors).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
             match (ok, t.main()) {
                 (true, Some(_)) => skipped,
-                _ if redumper::split_needs_force(&split) => {
+                _ if redumper::split_needs_force(&split) && !split.contains(redumper::UNEXPECTED) => {
                     cx.log(format!("{}: {}", redumper::unreadable_line(unread.max(1), c2), redumper::UNREADABLE_ADVICE));
                     return Ok(Err(plural(unread.max(1), "unreadable sector")));
                 }
-                _ => bail!("{}", redumper::reason(&split)),
+                _ => return Ok(Err(redumper::unexpected_note(&split))),
             }
         } else {
             if t.main().is_none() {
-                bail!("{}", redumper::reason(out));
+                return Ok(Err(redumper::unexpected_note(out)));
             }
             match redumper::errors_left(out) {
                 0 => 0,
@@ -310,8 +310,11 @@ impl Image {
         // Sectors the drive read wrong without saying so: only an inspection
         // of the image finds them (redumper's `info`, which `disc` runs).
         let mut info = String::new();
-        self.phase(cx, item, t, vec!["info".into(), format!("--image-path={}", t.dir.display()), format!("--image-name={}", t.name)], &mut info).await?;
+        let checked = self.phase(cx, item, t, vec!["info".into(), format!("--image-path={}", t.dir.display()), format!("--image-name={}", t.name)], &mut info).await?;
         out.push_str(&info);
+        if !checked && info.contains(redumper::UNEXPECTED) {
+            return Ok(Err(redumper::unexpected_note(&info)));
+        }
         let size = t.main().and_then(|m| std::fs::metadata(m).ok()).map(|m| media::size(m.len())).unwrap_or_default();
         let problems = redumper::sector_problems(&info);
         // The error codes go to the log; the note says it in words.
@@ -326,14 +329,36 @@ impl Image {
     /// whatever the drive reported bad, then the image made and checked.
     /// Rip's read, and Check's when it rips again. The caller has the drive.
     pub(crate) async fn read_disc(&self, cx: &Cx, item: &Item, t: &redumper::Target, opts: &redumper::Options, out: &mut String) -> Result<Outcome> {
-        if !self.phase(cx, item, t, redumper::dump_args(opts, t), out).await? {
-            bail!("{}", redumper::reason(out));
+        self.read_disc_from(cx, item, t, opts, out, &mut false).await
+    }
+
+    /// [`Image::read_disc`], saying whether the read through finished:
+    /// what's left to do if it stops part way. Every stage that doesn't
+    /// finish ends it with what happened, for you to try again or skip.
+    pub(crate) async fn read_disc_from(&self, cx: &Cx, item: &Item, t: &redumper::Target, opts: &redumper::Options, out: &mut String, dumped: &mut bool) -> Result<Outcome> {
+        let mut dump = String::new();
+        let ok = self.phase(cx, item, t, redumper::dump_args(opts, t), &mut dump).await?;
+        out.push_str(&dump);
+        if !ok {
+            return Ok(Err(redumper::unexpected_note(&dump)));
         }
+        *dumped = true;
         let refine = redumper::errors_left(out) > 0;
         if refine {
-            self.phase(cx, item, t, redumper::refine_args(opts, t), out).await?;
+            if let Some(bad) = self.reread(cx, item, t, opts, out).await? {
+                return Ok(Err(bad));
+            }
         }
         self.settle(cx, item, t, out, false, refine).await
+    }
+
+    /// A re-read of what the drive reported bad. Gives what happened if it
+    /// stopped other than by finishing or by giving up as no use.
+    pub(crate) async fn reread(&self, cx: &Cx, item: &Item, t: &redumper::Target, opts: &redumper::Options, out: &mut String) -> Result<Option<String>> {
+        let mut text = String::new();
+        let ok = self.phase(cx, item, t, redumper::refine_args(opts, t), &mut text).await?;
+        out.push_str(&text);
+        Ok((!ok && !redumper::gave_up(&text)).then(|| redumper::unexpected_note(&text)))
     }
 }
 
@@ -455,6 +480,7 @@ pub fn read_offset(c: &Context) -> Option<i64> {
 pub fn failure_detail(bad: &str) -> String {
     match bad.strip_suffix(" unreadable sectors").or_else(|| bad.strip_suffix(" unreadable sector")).and_then(|n| n.parse::<u64>().ok()) {
         Some(n) => redumper::unreadable_line(n, 0),
+        None if bad.starts_with(redumper::UNEXPECTED) => bad.to_owned(),
         None => cap(bad),
     }
 }
@@ -512,9 +538,10 @@ impl Step for Image {
         }
         cx.item(&item, ItemState::Busy, "reading");
         let mut out = String::new();
+        let mut dumped = false;
         let mut outcome = {
             let _drive = cx.lane(LaneKind::Drive).await;
-            let o = self.read_disc(&cx, &item, &t, &opts, &mut out).await?;
+            let o = self.read_disc_from(&cx, &item, &t, &opts, &mut out, &mut dumped).await?;
             cx.drive_says(StepState::Idle, "Waiting", "");
             o
         };
@@ -555,11 +582,22 @@ impl Step for Image {
                     cx.item(&item, ItemState::Busy, "keeping anyway");
                     self.settle(&cx, &item, &t, &mut out, true, false).await?
                 }
+                // The read through stopped part way: it goes on from where
+                // it got to (redumper resumes a dump it has a record of).
+                _ if !dumped => {
+                    cx.item(&item, ItemState::Busy, "reading");
+                    let _drive = cx.lane(LaneKind::Drive).await;
+                    let o = self.read_disc_from(&cx, &item, &t, &opts, &mut out, &mut dumped).await?;
+                    cx.drive_says(StepState::Idle, "Waiting", "");
+                    o
+                }
                 _ => {
                     cx.item(&item, ItemState::Busy, "re-reading bad parts");
                     let _drive = cx.lane(LaneKind::Drive).await;
-                    self.phase(&cx, &item, &t, redumper::refine_args(&opts, &t), &mut out).await?;
-                    let o = self.settle(&cx, &item, &t, &mut out, false, true).await?;
+                    let o = match self.reread(&cx, &item, &t, &opts, &mut out).await? {
+                        Some(bad) => Err(bad),
+                        None => self.settle(&cx, &item, &t, &mut out, false, true).await?,
+                    };
                     cx.drive_says(StepState::Idle, "Waiting", "");
                     o
                 }

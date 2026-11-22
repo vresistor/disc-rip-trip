@@ -106,13 +106,46 @@ pub fn split_args(t: &Target, force: bool) -> Vec<String> {
 }
 
 /// Runs one redumper command in the dump's folder. Gives what it printed
-/// and whether it succeeded.
+/// and whether it succeeded. One killed by a signal (from outside: none
+/// of ours) has a line saying so added to what it printed
+/// ([`UNEXPECTED`]), so whatever reads it next can't take it for an
+/// ordinary end.
 pub async fn run(args: &[String], t: &Target, stop: impl std::future::Future<Output = ()>, on_line: impl FnMut(&str)) -> Result<(String, bool)> {
     std::fs::create_dir_all(&t.dir)?;
     let mut cmd = tool::command("redumper");
     cmd.args(args);
-    let (text, status) = tool::run(cmd, &t.dir, stop, on_line).await?;
+    let (mut text, status) = tool::run(cmd, &t.dir, stop, on_line).await?;
+    if let Some(sig) = std::os::unix::process::ExitStatusExt::signal(&status) {
+        text.push_str(&format!("{UNEXPECTED}: {}\n", signal_words(sig)));
+    }
     Ok((text, status.success()))
+}
+
+/// How a note starts when redumper ended other than by finishing.
+pub const UNEXPECTED: &str = "redumper stopped unexpectedly";
+
+/// A signal in words: *killed by signal 9 (SIGKILL)*.
+pub fn signal_words(sig: i32) -> String {
+    let name = match sig {
+        1 => " (SIGHUP)",
+        2 => " (SIGINT)",
+        6 => " (SIGABRT)",
+        9 => " (SIGKILL)",
+        11 => " (SIGSEGV)",
+        15 => " (SIGTERM)",
+        _ => "",
+    };
+    format!("killed by signal {sig}{name}")
+}
+
+/// What a stage that didn't finish comes to, from what it printed: *redumper
+/// stopped unexpectedly: killed by signal 9 (SIGKILL)*, or with the last
+/// thing it said.
+pub fn unexpected_note(text: &str) -> String {
+    match text.lines().rev().find(|l| l.starts_with(UNEXPECTED)) {
+        Some(l) => l.trim().to_owned(),
+        None => format!("{UNEXPECTED}: {}", reason(text)),
+    }
 }
 
 // ---- reading what it prints ----------------------------------------------------------------
