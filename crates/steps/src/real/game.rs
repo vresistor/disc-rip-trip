@@ -780,14 +780,31 @@ impl Reread for Disc {
         for l in fix::log_lines(&fixed, tries) {
             cx.log(l);
         }
-        // The map of the disc as fixing found it: each sector that failed
-        // its checks, put right or not.
+        // The map of the disc as fixing left it: its sectors as last read
+        // from the dump's own `.state` when it's there, with each that
+        // failed its checks over it, put right or not; else the checks alone.
         if fixed.other_disc.is_none() {
             let sectors = super::combine::layout(&main).map(|ts| ts.iter().map(|t| (t.start.max(0) as u64) + t.size / super::combine::SECTOR as u64).max().unwrap_or(0)).unwrap_or(0);
             let found: Vec<(u64, crate::map::Mark)> =
                 fixed.bad.iter().map(|s| (s.lba.max(0) as u64, if matches!(s.outcome, fix::Outcome::Fixed { .. }) { crate::map::Mark::Recovered } else { crate::map::Mark::Wrong })).collect();
             let sectors = sectors.max(found.iter().map(|f| f.0 + 1).max().unwrap_or(0));
-            cx.map(serde_json::to_value(crate::map::SectorMap::checked(sectors, &found, true)).ok());
+            let t = super::redumper::Target { dir: main.parent().unwrap_or(Path::new(".")).to_path_buf(), name: main.file_stem().unwrap_or_default().to_string_lossy().into_owned() };
+            let offset = data::read_offset(dump.context()).unwrap_or(0);
+            let read = tokio::task::spawn_blocking(move || {
+                let mut s = super::redumper::StateScan::new(&t, sectors, offset, true);
+                s.read_to(sectors, sectors, true).ok().map(|_| s.map(false))
+            })
+            .await
+            .ok()
+            .flatten();
+            let map = match read {
+                Some(mut m) => {
+                    m.overlay(&found);
+                    m
+                }
+                None => crate::map::SectorMap::checked(sectors, &found, true),
+            };
+            cx.map(serde_json::to_value(map).ok());
         }
         let roms = self.rehash(cx, dump).await?;
         for r in &roms {

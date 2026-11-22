@@ -259,40 +259,49 @@ impl SectorMap {
     }
 
     /// The same map with what another look at some sectors found: each to
-    /// its mark. A sector come back was one of its block's bad ones; one
-    /// found wrong, one of its good ones.
+    /// its mark. Where each was before is known only as bad, come back, or
+    /// neither, from the map's stretches; which kind of bad, from its
+    /// block's counts. One already bad that's found bad again stays as it
+    /// was; one come back already stays so.
     pub fn overlay(&mut self, found: &[(u64, Mark)]) {
+        if found.is_empty() {
+            return;
+        }
         let mut bad: std::collections::BTreeSet<u64> = each(&self.runs).collect();
         let mut back: std::collections::BTreeSet<u64> = each(&self.recovered).collect();
         for &(lba, to) in found {
             if lba >= self.sectors {
                 continue;
             }
+            let was_bad = bad.contains(&lba);
             let b = (lba / self.per_block.max(1)) as usize;
             let mut c = self.counts(b);
-            let order: &[Mark] =
-                if to == Mark::Recovered { &[Mark::Unreadable, Mark::Wrong, Mark::C2] } else { &[Mark::Good, Mark::Recovered, Mark::C2, Mark::Wrong, Mark::Unreadable, Mark::NotRead] };
-            let Some(from) = order.iter().copied().find(|m| *m != to && c[*m as usize] > 0) else { continue };
+            let from = match to {
+                _ if to.is_bad() && was_bad => continue,
+                Mark::Recovered if back.contains(&lba) => continue,
+                _ if was_bad => [Mark::Unreadable, Mark::Wrong, Mark::C2].into_iter().find(|m| c[*m as usize] > 0),
+                _ if back.contains(&lba) => Some(Mark::Recovered),
+                _ => [Mark::Good, Mark::NotRead].into_iter().find(|m| c[*m as usize] > 0),
+            };
+            let Some(from) = from.filter(|f| *f != to) else { continue };
             c[from as usize] -= 1;
             c[to as usize] += 1;
             self.totals[from as usize] -= 1;
             self.totals[to as usize] += 1;
-            let mut marks = self.marks.clone().into_bytes();
+            let mut marks = std::mem::take(&mut self.marks).into_bytes();
             marks[b] = worst(&c).letter() as u8;
             self.marks = String::from_utf8(marks).unwrap_or_default();
             self.mixed.retain(|(k, _)| *k as usize != b);
             if c.iter().filter(|x| **x > 0).count() > 1 {
-                self.mixed.push((b as u32, c));
-                self.mixed.sort_by_key(|x| x.0);
+                let at = self.mixed.partition_point(|x| (x.0 as usize) < b);
+                self.mixed.insert(at, (b as u32, c));
             }
+            bad.remove(&lba);
+            back.remove(&lba);
             if to.is_bad() {
                 bad.insert(lba);
-                back.remove(&lba);
-            } else {
-                bad.remove(&lba);
-                if to == Mark::Recovered {
-                    back.insert(lba);
-                }
+            } else if to == Mark::Recovered {
+                back.insert(lba);
             }
         }
         self.runs = runs_of(bad.into_iter());
@@ -304,6 +313,32 @@ impl SectorMap {
         let mut out: Vec<(u64, Mark)> = each(&self.recovered).map(|l| (l, Mark::Recovered)).collect();
         out.extend(each(&self.runs).map(|l| (l, Mark::Wrong)));
         out
+    }
+}
+
+/// The map Rip's sidebar shows: Rip's own (`rip`), with the sectors its
+/// check of every sector found wrong (`wrong`) over it; then Check and
+/// fix's (`check`), if it has made one since. A map Check made from the
+/// image's checks alone goes over Rip's; one it made from reading the disc
+/// again takes its place, keeping where Rip's re-reads brought sectors
+/// back unless Check finds them bad.
+pub fn combined(rip: Option<SectorMap>, wrong: &[u64], check: Option<SectorMap>) -> Option<SectorMap> {
+    let mut m = rip.filter(|m| !m.is_empty());
+    if let Some(m) = m.as_mut().filter(|m| !m.checks_only) {
+        m.overlay(&wrong.iter().map(|l| (*l, Mark::Wrong)).collect::<Vec<_>>());
+    }
+    match (check.filter(|c| !c.is_empty()), m) {
+        (Some(c), Some(mut m)) if c.checks_only => {
+            m.overlay(&c.found());
+            Some(m)
+        }
+        (Some(mut c), Some(m)) => {
+            let bad: std::collections::BTreeSet<u64> = each(&c.runs).collect();
+            let back: Vec<(u64, Mark)> = each(&m.recovered).filter(|l| !bad.contains(l)).map(|l| (l, Mark::Recovered)).collect();
+            c.overlay(&back);
+            Some(c)
+        }
+        (c, m) => c.or(m),
     }
 }
 
@@ -427,6 +462,9 @@ const NOMINAL: f64 = 0.09;
 const SLACK: f64 = 1.5;
 /// This share of the gaps must fit.
 const FIT: f64 = 0.8;
+/// This share of a place's stretches must be no longer than a third of
+/// a turn.
+const SHORT: f64 = 0.9;
 
 /// The places where bad sectors come once per turn of the disc: one spot
 /// met again each time round, not a whole ring. For each, how far from the
@@ -497,7 +535,12 @@ fn periodic(place: &[&Run], g: &Geometry) -> Option<(f64, f64)> {
         })
         .count();
     let singles = gaps.iter().filter(|x| (*x - turn).abs() <= SLACK).count();
-    let ok = fits as f64 >= FIT * gaps.len() as f64 && singles >= MIN_GAPS.min(gaps.len()) && (turn / want - 1.0).abs() <= NOMINAL;
+    // A spot, not a band: its stretches short beside a turn, and none
+    // as long as one (a whole turn bad is a ring, there).
+    let lens: Vec<f64> = place.iter().map(|r| (r.to - r.from + 1) as f64).collect();
+    let short = lens.iter().filter(|l| **l <= turn / 3.0).count();
+    let spot = short as f64 >= SHORT * lens.len() as f64 && lens.iter().all(|l| *l < turn);
+    let ok = spot && fits as f64 >= FIT * gaps.len() as f64 && singles >= MIN_GAPS.min(gaps.len()) && (turn / want - 1.0).abs() <= NOMINAL;
     ok.then(|| (g.radius(mid), turn))
 }
 
@@ -613,6 +656,10 @@ mod tests {
         assert!(once_per_turn(&spot(147_107, 16.3, 4, &[]), &g).is_empty());
         // Regular, but not the turn: every 9 sectors.
         assert!(once_per_turn(&spot(147_107, 9.0, 40, &[]), &g).is_empty());
+        // Once per turn, but some stretches a whole turn long: a band.
+        let mut band = spot(147_107, 16.3, 40, &[]);
+        band[20].to = band[20].from + 20;
+        assert!(once_per_turn(&band, &g).is_empty());
         // Scattered.
         let scattered: Vec<Run> = [0u64, 7, 29, 31, 52, 90, 97, 133, 140, 171].iter().map(|k| Run { from: 147_000 + k, to: 147_000 + k }).collect();
         assert!(once_per_turn(&scattered, &g).is_empty());
@@ -627,7 +674,7 @@ mod tests {
         // and fixing brings back 2 of the unreadable and 50.
         let m0 = sectors(10_000, &[(1, Mark::Unreadable), (2, Mark::Unreadable), (3, Mark::Unreadable)]).map(None, true);
         let mut m = m0.clone();
-        m.overlay(&[(50, Mark::Wrong)]);
+        m.overlay(&[(50, Mark::Wrong), (3, Mark::Wrong)]);
         assert_eq!((m.mark(5), m.total(Mark::Wrong), m.total(Mark::Good)), (Mark::Wrong, 1, 9_996));
         let fixed = SectorMap::checked(10_000, &[(1, Mark::Recovered), (2, Mark::Recovered), (50, Mark::Recovered)], true);
         assert!(fixed.checks_only);
@@ -639,6 +686,25 @@ mod tests {
         assert_eq!(m.recovered, [Run { from: 1, to: 2 }, Run { from: 50, to: 50 }]);
         let c = m.counts(0);
         assert_eq!((c[Mark::Good as usize], c[Mark::Recovered as usize], c[Mark::Unreadable as usize]), (7, 2, 1));
+    }
+
+    #[test]
+    fn rip_s_map_takes_check_s_after_it() {
+        let rip = sectors(10_000, &[(1, Mark::Unreadable), (2, Mark::Recovered), (3, Mark::Unreadable)]).map(None, true);
+        // The check of every sector found 50 wrong; Check and fix then put
+        // 50 right and left 3.
+        let fixes = SectorMap::checked(10_000, &[(50, Mark::Recovered), (3, Mark::Wrong)], true);
+        let m = combined(Some(rip.clone()), &[50], Some(fixes)).unwrap();
+        assert_eq!((m.total(Mark::Unreadable), m.total(Mark::Recovered), m.total(Mark::Wrong)), (2, 2, 0));
+        // Check read the disc again itself: its map, with where Rip's
+        // re-read brought sectors back, unless Check finds them bad.
+        let again = sectors(10_000, &[(3, Mark::C2)]).map(None, true);
+        let m = combined(Some(rip.clone()), &[], Some(again)).unwrap();
+        assert_eq!((m.total(Mark::Unreadable), m.total(Mark::Recovered), m.total(Mark::C2)), (0, 1, 1));
+        assert_eq!(m.recovered, [Run { from: 2, to: 2 }]);
+        // Neither, or only one.
+        assert_eq!(combined(None, &[], None), None);
+        assert_eq!(combined(Some(rip.clone()), &[], None), Some(rip));
     }
 
     #[test]

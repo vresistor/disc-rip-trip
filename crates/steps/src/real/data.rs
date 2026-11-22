@@ -266,7 +266,7 @@ impl Image {
         if let Some(l) = trail.finish() {
             cx.log(l);
         }
-        map.finish(cx);
+        map.finish(cx, matches!(ran, Ok((_, true))));
         cx.now(None);
         let (text, ok) = match ran {
             Err(_) if gave_up && !cx.stopped() && !hold.tray_opened() => {
@@ -392,10 +392,15 @@ impl MapWatch {
             Some("refine") => true,
             _ => return None,
         };
+        // Only a read of this dump's own files: not another rip made to
+        // combine with it, which isn't what the dump is.
+        if item.path.as_ref().is_some_and(|p| p.parent() != Some(t.dir.as_path())) {
+            return None;
+        }
         // At the offset redumper was told; without one, it uses its own
         // list's, which is at most a few sectors off.
         let offset = args.iter().find_map(|a| a.strip_prefix("--drive-read-offset=")?.parse().ok()).unwrap_or(0);
-        let cd = matches!(item.context().get(Subject::Disc, "media").unwrap_or("CD"), "CD" | "CD-ROM");
+        let cd = !matches!(item.context().get(Subject::Disc, "media").unwrap_or("CD"), "DVD" | "HD DVD" | "Blu-ray");
         Some(MapWatch { rereading, offset, cd, target: t.clone(), scan: None, last: None, at: (0, 0) })
     }
 
@@ -412,16 +417,29 @@ impl MapWatch {
         }
     }
 
+    fn map(&self, reading: bool) -> Option<crate::map::SectorMap> {
+        self.scan.as_ref().map(|s| s.map(reading))
+    }
+
     fn publish(&self, cx: &Cx, reading: bool) {
-        if let Some(s) = &self.scan {
-            cx.map(serde_json::to_value(s.map(reading)).ok());
+        if let Some(m) = self.map(reading) {
+            cx.map(serde_json::to_value(m).ok());
         }
+    }
+
+    /// The pass has ended: `completed`, a read went to the disc's end (its
+    /// last progress line is a sector short of it).
+    fn ended(&mut self, completed: bool) -> std::io::Result<()> {
+        if completed && !self.rereading {
+            self.at.0 = self.at.1;
+        }
+        self.look(false)
     }
 }
 
 trait MapLines {
     fn line(&mut self, cx: &Cx, p: &redumper::Progress);
-    fn finish(&mut self, cx: &Cx);
+    fn finish(&mut self, cx: &Cx, completed: bool);
 }
 
 impl MapLines for Option<MapWatch> {
@@ -439,9 +457,9 @@ impl MapLines for Option<MapWatch> {
         }
     }
 
-    fn finish(&mut self, cx: &Cx) {
+    fn finish(&mut self, cx: &Cx, completed: bool) {
         let Some(m) = self.as_mut() else { return };
-        if m.look(false).is_ok() {
+        if m.ended(completed).is_ok() {
             m.publish(cx, false);
         }
     }
@@ -1051,6 +1069,55 @@ pub async fn place_dump(main: &Path, dir: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CD's `.state` as redumper writes it at +103: the lead-in not
+    /// read, then a byte a sample of each sector in `marks`.
+    fn state_at_103(path: &Path, marks: &[u8]) {
+        let mut b = vec![0u8; 45_150 * 588 - 103];
+        for m in marks {
+            b.extend(std::iter::repeat_n(*m, 588));
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn a_pass_s_map_follows_the_state_file_and_only_this_dump_s() {
+        use crate::map::Mark;
+        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/map-watch");
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = redumper::Target { dir: dir.clone(), name: "D".into() };
+        let mut disc = Item::new(DUMP, ItemKind::Dump, "D", None, None);
+        disc.context_mut().add(Subject::Disc, "media", "CD", "the disc");
+        // Read through to the end of 2,000 sectors, 100 unreadable; the
+        // last progress line a sector short of the end.
+        let mut marks = vec![4u8; 2_000];
+        marks[100] = 0;
+        state_at_103(&t.file("state"), &marks);
+        let dump = ["dump".to_owned(), "--drive-read-offset=103".into()];
+        let mut m = MapWatch::new(&disc, &t, &dump).unwrap();
+        m.at = (1_999, 2_000);
+        m.look(true).unwrap();
+        assert_eq!(m.map(true).unwrap().at, Some(1_999));
+        m.ended(true).unwrap();
+        let read = m.map(false).unwrap();
+        assert_eq!((read.total(Mark::Good), read.total(Mark::Unreadable), read.total(Mark::NotRead), read.at), (1_999, 1, 0, None));
+        // A re-read of it, by Check on the dump's own files: 100 comes back.
+        marks[100] = 4;
+        state_at_103(&t.file("state"), &marks);
+        let own = disc.clone().becomes(ItemKind::Dump, Some(t.file("cue")));
+        let refine = ["refine".to_owned(), "--drive-read-offset=103".into()];
+        let mut m = MapWatch::new(&own, &t, &refine).unwrap();
+        m.at = (100, 2_000);
+        m.ended(true).unwrap();
+        // A fresh look sees it read: good, as it is now.
+        assert_eq!(m.map(false).unwrap().total(Mark::Unreadable), 0);
+        // Another rip of it, made to combine: no map of the dump's.
+        let other = redumper::Target { dir: dir.join("rip-2"), name: "D".into() };
+        assert!(MapWatch::new(&own, &other, &dump).is_none());
+        // A pass that doesn't read the drive has none.
+        assert!(MapWatch::new(&disc, &t, &["split".to_owned()]).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn what_check_says() {

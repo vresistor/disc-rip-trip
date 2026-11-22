@@ -1,6 +1,6 @@
-//! The map of a disc's sectors in a sidebar: blocks in rows, each the worst
-//! of its sectors, with how far from the centre each row lies beside it,
-//! a legend with counts, and where the bad sectors are. Draws any
+//! The map of a disc's sectors in a sidebar: a legend with counts and
+//! where the bad sectors are, then blocks in rows, each the worst of its
+//! sectors, with how far from the centre each row lies beside it. Draws any
 //! [`SectorMap`], wherever it came from (Rip's read, Check and fix).
 //!
 //! Rows and blocks, never a drawing of the disc: only the distance from
@@ -77,6 +77,12 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
     if m.is_empty() {
         return;
     }
+    // What it comes to first, then the blocks.
+    ui.scope(|ui| legend(ui, p, m));
+    for line in [where_line(m), turn_line(m)].into_iter().flatten() {
+        ui.add(egui::Label::new(RichText::new(line).font(font(13.0, 400)).color(p.muted)).wrap());
+    }
+    ui.add_space(8.0);
     let geo = m.geometry();
     let w = ui.available_width();
     let room = w - if geo.is_some() { SCALE_W } else { 0.0 };
@@ -136,17 +142,15 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
         }
     }
     ui.add_space(8.0);
-    legend(ui, p, m);
-    for line in [where_line(m), turn_line(m)].into_iter().flatten() {
-        ui.add(egui::Label::new(RichText::new(line).font(font(13.0, 400)).color(p.muted)).wrap());
-    }
 }
 
 /// A swatch for each kind of sector there is, with how many.
 fn legend(ui: &mut Ui, p: &Pal, m: &SectorMap) {
+    // Rows only as tall as a line of text.
+    ui.spacing_mut().interact_size.y = 16.0;
+    ui.spacing_mut().item_spacing.y = 4.0;
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(14.0, 4.0);
-        ui.spacing_mut().interact_size.y = 16.0;
+        ui.spacing_mut().item_spacing.x = 14.0;
         // Each swatch with its count, kept together on a line.
         for k in ORDER.iter().copied().filter(|k| m.total(*k) > 0) {
             let g = ui.painter().layout_no_wrap(format!("{} {}", thousands(m.total(k)), word(k)), tnum(13.0, 400), p.ink);

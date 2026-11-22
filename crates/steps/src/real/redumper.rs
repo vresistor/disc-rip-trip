@@ -1654,10 +1654,12 @@ mod tests {
         let g = crate::map::Geometry::CD;
         eprintln!("spots: {:?}", crate::map::once_per_turn(&m.runs, &g));
         eprintln!("{:?}\n{:?}", crate::map::where_line(&m), crate::map::turn_line(&m));
-        // Two places, each once per turn: 16.3 sectors a turn at 4.4 cm,
-        // 18.1 at 4.9 cm, both 2.5% over the nominal turn (a disc pressed
-        // at about 1.27 m/s).
-        assert_eq!(crate::map::turn_line(&m).as_deref(), Some("Errors repeat once per turn: single spots about 4.4 cm and 4.9 cm out, not whole rings."));
+        // Bad stretches two sectors long, 16.3 sectors apart at 4.4 cm:
+        // one spot met every turn (2.5% over the nominal turn: a disc
+        // pressed at about 1.27 m/s). The other place, at 4.9 cm, comes
+        // once a turn too, but with stretches up to three turns long where
+        // it's worst: a band there, not a spot, so not said.
+        assert_eq!(crate::map::turn_line(&m).as_deref(), Some("Errors repeat once per turn: a single spot about 4.4 cm out, not a whole ring."));
     }
 
     #[test]

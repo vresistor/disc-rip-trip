@@ -3162,11 +3162,6 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             }
         }
     });
-    if let Some(m) = sectors_map {
-        heading(ui, p, "Every sector, from the centre out");
-        crate::sectormap::show(ui, p, m, t);
-        ui.add_space(12.0);
-    }
     if stop {
         if app.m.shows_newest(i) {
             app.m.stop(i);
@@ -3247,7 +3242,14 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
         list.push(r);
     }
     let key = format!("{}/dump", v.step);
-    rows(app, ui, p, &key, list, "", t)
+    let clicked = rows(app, ui, p, &key, list, "", t);
+    // Every sector, under what needs you and the passes.
+    if let Some(m) = sectors_map {
+        ui.add_space(8.0);
+        heading(ui, p, "Every sector, from the centre out");
+        crate::sectormap::show(ui, p, m, t);
+    }
+    clicked
 }
 
 /// The map of a game or data disc's sectors for Rip's sidebar: as Rip
@@ -3256,22 +3258,12 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
 /// re-read of its own in place of Rip's, or the sectors it fixed over it.
 /// None when no step made one (a run from before maps, a simulated step).
 fn sector_map(snap: &Snapshot, v: &StepView) -> Option<drt_steps::map::SectorMap> {
-    use drt_steps::map::{Mark, SectorMap};
-    let of = |s: &StepView| s.record.map.clone().and_then(|j| serde_json::from_value::<SectorMap>(j).ok()).filter(|m| !m.is_empty());
-    let mut m = of(v);
-    if let Some(m) = m.as_mut().filter(|m| !m.checks_only) {
-        let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
-        let wrong: Vec<(u64, Mark)> = drt_steps::real::redumper::disc_map(log.iter().copied()).wrong.iter().flat_map(|w| w.from..=w.to).take(200_000).map(|l| (l, Mark::Wrong)).collect();
-        m.overlay(&wrong);
-    }
-    for c in snap.steps.values().filter(|s| s.step == "check") {
-        match (of(c), m.as_mut()) {
-            (Some(cm), Some(m)) if cm.checks_only => m.overlay(&cm.found()),
-            (Some(cm), _) => m = Some(cm),
-            _ => {}
-        }
-    }
-    m
+    use drt_steps::map::SectorMap;
+    let of = |s: &StepView| s.record.map.clone().and_then(|j| serde_json::from_value::<SectorMap>(j).ok());
+    let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
+    let wrong: Vec<u64> = drt_steps::real::redumper::disc_map(log.iter().copied()).wrong.iter().flat_map(|w| w.from..=w.to).take(200_000).collect();
+    let check = snap.steps.values().find(|s| s.step == "check").and_then(of);
+    drt_steps::map::combined(of(v), &wrong, check)
 }
 
 /// The marks on a game or data disc's ring: where the drive reported
