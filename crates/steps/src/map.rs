@@ -565,12 +565,16 @@ pub fn turn_line(m: &SectorMap) -> Option<String> {
             at.push(c);
         }
     }
+    // It counts every read error, those a re-read put right too: say so
+    // when there were any, or it reads as at odds with where the bad
+    // sectors are.
+    let what = if m.recovered.is_empty() { "Errors" } else { "Read errors, put right or not," };
     match at.as_slice() {
         [] => None,
-        [one] => Some(format!("Errors repeat once per turn: a single spot about {one} out, not a whole ring.")),
+        [one] => Some(format!("{what} repeat once per turn: a single spot about {one} out, not a whole ring.")),
         many => {
             let list = format!("{} and {}", many[..many.len() - 1].join(", "), many[many.len() - 1]);
-            Some(format!("Errors repeat once per turn: single spots about {list} out, not whole rings."))
+            Some(format!("{what} repeat once per turn: single spots about {list} out, not whole rings."))
         }
     }
 }

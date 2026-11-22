@@ -4575,7 +4575,7 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                     // Every bad part put right, and where they were.
                     h.get_by_label("Map of the disc: 332,827 good · 172 recovered on a re-read");
                     h.get_by_label("Sectors re-read about 3.5–4.7 cm from the centre");
-                    h.get_by_label("Errors repeat once per turn: a single spot about 3.9 cm out, not a whole ring.");
+                    h.get_by_label("Read errors, put right or not, repeat once per turn: a single spot about 3.9 cm out, not a whole ring.");
                     assert!(row_says(&h, &["Read the disc", "SCSI 105840, C2 211731", "Errors"]));
                     assert!(row_says(&h, &["Re-read bad parts", "All put right"]));
                     assert!(row_says(&h, &["Check every sector", "None wrong"]));
