@@ -5500,3 +5500,20 @@ fn a_sector_order_found_by_testing_shows_on_the_drive_and_resets_to_be_found_aga
     h.run_steps(2);
     assert_eq!(app(&h).m.engine.settings.lock().unwrap().drive(&drive, "sector_order"), Setting::Default);
 }
+
+/// Stop is said at once: the recipe says Stopping… until the run has
+/// actually stopped, however long the drive takes to answer.
+#[test]
+fn stop_says_stopping_at_once() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.03);
+    click(&mut h, "Start");
+    h.run_steps(3);
+    app_mut(&mut h).m.stop(0);
+    assert!(app(&h).m.stopping(0) || app(&h).m.snapshot(0).stopped, "said before the run answers");
+    if app(&h).m.stopping(0) {
+        assert_eq!(app(&h).m.status_line(0).0, "Stopping…");
+    }
+    until(&mut h, "the stop", |a| a.m.snapshot(0).finished || a.m.snapshot(0).stopped);
+    assert!(!app(&h).m.stopping(0), "and not once it has");
+}

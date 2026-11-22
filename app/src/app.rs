@@ -1243,6 +1243,12 @@ impl App {
                         if Btn::new("", "Back to current disc").look(Look::Quiet).show(ui, p).clicked() {
                             self.show_run(i, None);
                         }
+                    } else if running && self.m.stopping(i) {
+                        // Pressed: said at once, and why it can take a while.
+                        let _ = Btn::new("stop", "Stopping…")
+                            .enabled(false)
+                            .show(ui, p)
+                            .on_disabled_hover_text("Waiting for the drive to finish the read it's on. On a sector it can't read, that can take a minute.");
                     } else if running {
                         let b = Btn::new("stop", "Stop").fg(p.bad).show(ui, p);
                         // Held back, Stop only calls the next disc off.

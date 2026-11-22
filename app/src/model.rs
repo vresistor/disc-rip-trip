@@ -100,6 +100,10 @@ pub struct Model {
     /// Which run that was, and how it last looked: followed while it
     /// finishes encoding and filing.
     before_disc: HashMap<usize, (u64, Snapshot)>,
+    /// Runs Stop was pressed on, by recipe: said at once, until the run
+    /// has actually stopped (a drive stuck on a sector answers in its own
+    /// time).
+    stopping: HashMap<usize, u64>,
     /// Recipes whose findable settings (a drive's offset) are being looked
     /// up, and whether by measuring.
     pub finding: HashMap<usize, bool>,
@@ -219,6 +223,7 @@ impl Model {
             missing_tools: Vec::new(),
             auto_left: HashMap::new(),
             before_disc: HashMap::new(),
+            stopping: HashMap::new(),
             finding: HashMap::new(),
             connected: None,
             last: HashMap::new(),
@@ -904,6 +909,15 @@ impl Model {
         }
         if let Some(r) = self.newest(i) {
             let _ = r.run.commands().try_send(Command::Stop);
+            self.stopping.insert(i, r.id);
+        }
+    }
+
+    /// Whether Stop was pressed on the recipe's run and it hasn't stopped yet.
+    pub fn stopping(&self, i: usize) -> bool {
+        match (self.stopping.get(&i), self.newest(i)) {
+            (Some(id), Some(r)) => *id == r.id && !r.snap.finished && !r.snap.stopped,
+            _ => false,
         }
     }
 
@@ -963,6 +977,9 @@ impl Model {
         }
         if let Some(why) = self.held_back(i) {
             return (why, StepState::Needs);
+        }
+        if self.stopping(i) {
+            return ("Stopping…".into(), StepState::Busy);
         }
         if let Some(r) = self.newest(i) {
             return run_line(&r.snap, false);
