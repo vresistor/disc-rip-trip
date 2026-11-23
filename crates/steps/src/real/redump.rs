@@ -237,7 +237,10 @@ fn serial_digits(raw: &str) -> String {
 /// Reads a Logiqx datfile.
 pub fn parse(xml: &[u8]) -> Result<Catalogue> {
     use quick_xml::events::Event;
-    let mut reader = quick_xml::Reader::from_reader(xml);
+    // quick-xml refuses bytes that aren't UTF-8; a stray one in a datfile
+    // costs that one character, not the whole catalogue.
+    let xml = String::from_utf8_lossy(xml);
+    let mut reader = quick_xml::Reader::from_reader(xml.as_bytes());
     reader.config_mut().trim_text(true);
     let mut out = Catalogue::default();
     let mut game: Option<Game> = None;
@@ -246,29 +249,29 @@ pub fn parse(xml: &[u8]) -> Result<Catalogue> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"header" => in_header = true,
-                b"game" | b"machine" => game = Some(Game { name: attr(&e, b"name").unwrap_or_default(), serials: vec![], roms: vec![] }),
-                b"version" => in_version = in_header,
-                b"serial" => in_serial = game.is_some(),
+                "header" => in_header = true,
+                "game" | "machine" => game = Some(Game { name: attr(&e, "name").unwrap_or_default(), serials: vec![], roms: vec![] }),
+                "version" => in_version = in_header,
+                "serial" => in_serial = game.is_some(),
                 _ => {}
             },
-            Ok(Event::Empty(e)) if e.name().as_ref() == b"rom" => {
+            Ok(Event::Empty(e)) if e.name().as_ref() == "rom" => {
                 if let Some(g) = &mut game {
                     g.roms.push(Rom {
-                        name: attr(&e, b"name").unwrap_or_default(),
-                        size: attr(&e, b"size").and_then(|v| v.parse().ok()).unwrap_or(0),
-                        crc: attr(&e, b"crc").unwrap_or_default().to_ascii_lowercase(),
-                        md5: attr(&e, b"md5").unwrap_or_default().to_ascii_lowercase(),
-                        sha1: attr(&e, b"sha1").unwrap_or_default().to_ascii_lowercase(),
+                        name: attr(&e, "name").unwrap_or_default(),
+                        size: attr(&e, "size").and_then(|v| v.parse().ok()).unwrap_or(0),
+                        crc: attr(&e, "crc").unwrap_or_default().to_ascii_lowercase(),
+                        md5: attr(&e, "md5").unwrap_or_default().to_ascii_lowercase(),
+                        sha1: attr(&e, "sha1").unwrap_or_default().to_ascii_lowercase(),
                     });
                 }
             }
             Ok(Event::Text(t)) if in_version => {
-                out.version = t.decode().map(|s| s.trim().to_owned()).unwrap_or_default();
+                out.version = t.trim().to_owned();
                 in_version = false;
             }
             Ok(Event::Text(t)) if in_serial => {
-                let text = t.decode().map(|s| s.into_owned()).unwrap_or_default();
+                let text = String::from(&*t);
                 let text = quick_xml::escape::unescape(&text).map(|s| s.into_owned()).unwrap_or(text);
                 if let Some(g) = &mut game {
                     g.serials.extend(text.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()));
@@ -276,8 +279,8 @@ pub fn parse(xml: &[u8]) -> Result<Catalogue> {
                 in_serial = false;
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
-                b"header" => in_header = false,
-                b"game" | b"machine" => out.games.extend(game.take()),
+                "header" => in_header = false,
+                "game" | "machine" => out.games.extend(game.take()),
                 _ => (in_version, in_serial) = (false, false),
             },
             Ok(Event::Eof) => break,
@@ -316,9 +319,9 @@ pub fn parse(xml: &[u8]) -> Result<Catalogue> {
 }
 
 /// An attribute, with its entities resolved: names are full of `&amp;`.
-fn attr(e: &quick_xml::events::BytesStart, name: &[u8]) -> Option<String> {
+fn attr(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
     let a = e.attributes().flatten().find(|a| a.key.as_ref() == name)?;
-    Some(a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map(|v| v.trim().to_owned()).unwrap_or_else(|_| String::from_utf8_lossy(&a.value).trim().to_owned()))
+    Some(a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map(|v| v.trim().to_owned()).unwrap_or_else(|_| a.value.trim().to_owned()))
 }
 
 // ---- the cache -----------------------------------------------------------------------------------
@@ -429,6 +432,17 @@ pub(crate) mod tests {
         assert_eq!(c.games.len(), 2);
         assert_eq!(c.games[1].name, "Myst & Riven (Europe)", "entities resolved");
         assert_eq!(c.games[0].roms[0].sha1, "aaaa000000000000000000000000000000000001", "hashes lower-cased");
+    }
+
+    #[test]
+    fn a_byte_that_isnt_utf8_costs_one_character_not_the_datfile() {
+        let mut dat = DAT.replace("Myst &amp; Riven", "Myst \u{1} Riven").into_bytes();
+        let at = dat.iter().position(|&b| b == 1).unwrap();
+        dat[at] = 0xE9; // Latin-1 é
+        let c = parse(&dat).unwrap();
+        assert_eq!(c.games.len(), 2);
+        assert_eq!(c.games[1].name, "Myst \u{FFFD} Riven (Europe)");
+        assert_eq!(c.games[0].roms[0].sha1, "aaaa000000000000000000000000000000000001");
     }
 
     #[test]

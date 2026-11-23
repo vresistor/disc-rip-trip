@@ -15,7 +15,7 @@ libc = "0.2"
 # build.rs and so can't build offline in the flatpak builder).
 libchdman-rs = "0.289"
 # Redump's datfiles: zipped Logiqx XML.
-quick-xml = "0.41"
+quick-xml = "0.42"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # Hashing a dump, with progress and Stop, in one pass for all three.
 crc32fast = "1"
