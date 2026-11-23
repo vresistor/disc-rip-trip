@@ -23,7 +23,8 @@ md-5 = "0.11"
 sha1 = "0.11"
 # Writing the tags ffmpeg can't (an ID3 UFID frame, MP4 freeform atoms), and
 # `drt fix-tags`. Read without its conversions, so nothing else changes.
-lofty = { version = "=0.24.0", default-features = false }
+# Default features on: 0.25.5 does not build without id3v2_compression_support.
+lofty = "=0.25.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde.workspace = true
 anyhow.workspace = true

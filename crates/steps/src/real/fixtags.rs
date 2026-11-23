@@ -140,7 +140,7 @@ const COMMENT: &str = "comment\t";
 /// `picture\t<type>\t…`. Anything else as lofty has it.
 fn inventory(t: &Tags) -> Vec<String> {
     let mut out = vec![];
-    let vorbis = |vc: &lofty::ogg::VorbisComments, out: &mut Vec<String>| {
+    let vorbis = |vc: &lofty::ogg::tag::VorbisComments, out: &mut Vec<String>| {
         out.push(format!("vendor\t{}", vc.vendor()));
         for (k, v) in vc.items() {
             if (k.eq_ignore_ascii_case("description") || k.eq_ignore_ascii_case("comment")) && is_signature(v) {
@@ -270,7 +270,7 @@ fn change(t: &mut Tags, plan: &Plan) {
             p.set_pic_type(PictureType::CoverFront);
         }
     };
-    let drop_sig = |vc: &mut lofty::ogg::VorbisComments| {
+    let drop_sig = |vc: &mut lofty::ogg::tag::VorbisComments| {
         for k in ["DESCRIPTION", "COMMENT"] {
             let keep: Vec<String> = vc.get_all(k).filter(|v| !is_signature(v)).map(str::to_owned).collect();
             if vc.get_all(k).any(is_signature) {
@@ -353,7 +353,8 @@ fn change(t: &mut Tags, plan: &Plan) {
 }
 
 fn save(t: &Tags, p: &Path) -> Result<()> {
-    let mut w = WriteOptions::default().preferred_padding(0);
+    // A write reads the file again to find the tag; it reads it as `parse` does.
+    let mut w = WriteOptions::default().preferred_padding(0).parse_options(parse());
     match t {
         Tags::Flac(f) => f.save_to_path(p, w)?,
         Tags::Mp3(f) => {

@@ -416,7 +416,7 @@ pub fn finish_tags(codec: Codec, file: &std::path::Path, later: &[Later], id3v23
         return Ok(());
     }
     let parse = ParseOptions::new().implicit_conversions(false);
-    let write = WriteOptions::default().use_id3v23(id3v23).preferred_padding(0);
+    let write = WriteOptions::default().use_id3v23(id3v23).preferred_padding(0).parse_options(parse);
     let mut f = std::fs::File::open(file)?;
     match codec {
         Codec::Mp3 => {
