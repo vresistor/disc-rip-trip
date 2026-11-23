@@ -234,17 +234,47 @@ fn serial_digits(raw: &str) -> String {
     raw.chars().filter(char::is_ascii_digit).collect()
 }
 
+/// `&` that doesn't start an entity (`&amp;`, `&#38;`, `&#x26;`), as
+/// `&amp;`.
+fn escape_bare_ampersands(xml: &str) -> std::borrow::Cow<'_, str> {
+    let starts_entity = |rest: &str| {
+        let end = rest.find(';').filter(|&e| e > 1 && e <= 10);
+        end.is_some_and(|e| {
+            let name = &rest[1..e];
+            name.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
+        })
+    };
+    if !xml.match_indices('&').any(|(i, _)| !starts_entity(&xml[i..])) {
+        return std::borrow::Cow::Borrowed(xml);
+    }
+    let mut out = String::with_capacity(xml.len() + 16);
+    for (i, c) in xml.char_indices() {
+        if c == '&' && !starts_entity(&xml[i..]) {
+            out.push_str("&amp;");
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// Reads a Logiqx datfile.
 pub fn parse(xml: &[u8]) -> Result<Catalogue> {
     use quick_xml::events::Event;
     // quick-xml refuses bytes that aren't UTF-8; a stray one in a datfile
     // costs that one character, not the whole catalogue.
     let xml = String::from_utf8_lossy(xml);
+    // A bare `&` (not starting an entity) isn't well-formed XML, and
+    // quick-xml stops there; read it as the `&amp;` that was meant.
+    let xml = escape_bare_ampersands(&xml);
     let mut reader = quick_xml::Reader::from_reader(xml.as_bytes());
-    reader.config_mut().trim_text(true);
+    // Not trimmed: a serial split at an entity keeps the spaces around it.
+    reader.config_mut().trim_text(false);
     let mut out = Catalogue::default();
     let mut game: Option<Game> = None;
     let (mut in_header, mut in_version, mut in_serial) = (false, false, false);
+    // A serial's text arrives in pieces, split at each entity (`&amp;`).
+    let mut serial = String::new();
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
@@ -252,7 +282,10 @@ pub fn parse(xml: &[u8]) -> Result<Catalogue> {
                 "header" => in_header = true,
                 "game" | "machine" => game = Some(Game { name: attr(&e, "name").unwrap_or_default(), serials: vec![], roms: vec![] }),
                 "version" => in_version = in_header,
-                "serial" => in_serial = game.is_some(),
+                "serial" => {
+                    in_serial = game.is_some();
+                    serial.clear();
+                }
                 _ => {}
             },
             Ok(Event::Empty(e)) if e.name().as_ref() == "rom" => {
@@ -272,9 +305,15 @@ pub fn parse(xml: &[u8]) -> Result<Catalogue> {
             }
             Ok(Event::Text(t)) if in_serial => {
                 let text = String::from(&*t);
-                let text = quick_xml::escape::unescape(&text).map(|s| s.into_owned()).unwrap_or(text);
+                serial.push_str(&quick_xml::escape::unescape(&text).map(|s| s.into_owned()).unwrap_or(text));
+            }
+            Ok(Event::GeneralRef(r)) if in_serial => {
+                let name = String::from(&*r);
+                serial.push_str(&quick_xml::escape::unescape(&format!("&{name};")).map(|s| s.into_owned()).unwrap_or_else(|_| format!("&{name};")));
+            }
+            Ok(Event::End(e)) if in_serial && e.name().as_ref() == "serial" => {
                 if let Some(g) = &mut game {
-                    g.serials.extend(text.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()));
+                    g.serials.extend(serial.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()));
                 }
                 in_serial = false;
             }
@@ -417,6 +456,20 @@ pub fn unzip(zipped: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_serial_with_an_ampersand_is_read_whole_and_a_bare_one_doesnt_stop_it() {
+        let xml = br#"<?xml version="1.0"?><datafile><header><version>1</version></header>
+<game name="Road &amp; Track (USA)"><serial>AB &amp; CD 1, EF-2</serial><rom name="a.bin" size="2352" crc="00" md5="00" sha1="aa"/></game>
+<game name="Bare & Name"><serial>X & Y</serial><rom name="b.bin" size="2352" crc="00" md5="00" sha1="bb"/></game>
+</datafile>"#;
+        let c = parse(xml).unwrap();
+        assert_eq!(c.games.len(), 2);
+        assert_eq!(c.games[0].name, "Road & Track (USA)");
+        assert_eq!(c.games[0].serials, ["AB & CD 1", "EF-2"]);
+        assert_eq!(c.games[1].name, "Bare & Name");
+        assert_eq!(c.games[1].serials, ["X & Y"]);
+    }
 
     /// A datfile in Redump's shape, with the disc the simulated steps image.
     pub use crate::sim::REDUMP_DAT as DAT;
