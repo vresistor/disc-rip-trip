@@ -267,19 +267,6 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     let Some(v) = snap.steps.get(id).cloned() else { return };
     let Some(info) = app.m.info(i, id) else { return };
     let ctx = app.m.shown_context(i);
-    // Why Check holds a dump: Redump's copy beside it.
-    if let Some(m) = crate::compare::mismatch(&v) {
-        crate::compare::show(ui, p, &m);
-    }
-    // Check's own re-reads and fixes, as a map of the disc.
-    if v.step == "check" {
-        if let Some(m) = v.record.map.clone().and_then(|j| serde_json::from_value::<drt_steps::map::SectorMap>(j).ok()).filter(|m| !m.is_empty()) {
-            heading(ui, p, if m.checks_only { "Sectors checked, from the centre out" } else { "Every sector, from the centre out" });
-            if let Some(v) = crate::sectormap::show(ui, p, &m, t, app.map_view) {
-                app.set_map_view(v);
-            }
-        }
-    }
     // A choice: the one chosen, and why; the others below it.
     if let Some(d) = &v.record.decided {
         let options = options_of(&v, ctx.as_ref());
@@ -354,6 +341,9 @@ struct Plan {
     rename: Option<String>,
     /// Remove, in the header's row beside the close button (in edit mode).
     remove: bool,
+    /// A quiet action on the header's own row, beside the close button: a
+    /// game or data disc's Rip opens the tray from there.
+    corner: Option<Act>,
 }
 
 /// A header action. The last `Primary` one is drawn filled.
@@ -437,6 +427,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     body: if options.iter().any(|o| o.picture.is_some()) { Body::Pictures } else { Body::Answers },
                     rename: None,
                     remove: false,
+                    corner: None,
                 }),
                 QuestionShape::PickOne { options, preselected, details, skip } => {
                     let n = options.len();
@@ -467,6 +458,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                         body: Body::Choose,
                         rename: None,
                         remove: false,
+                        corner: None,
                     })
                 }
                 QuestionShape::PerItem { .. } => Some(Plan {
@@ -480,6 +472,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     // The rows take the whole width.
                     rename: None,
                     remove: false,
+                    corner: None,
                 }),
                 QuestionShape::Value { label, .. } => Some(Plan {
                     icon: v.step.clone(),
@@ -491,6 +484,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     body: Body::Value,
                     rename: None,
                     remove: false,
+                    corner: None,
                 }),
             }
         }
@@ -508,6 +502,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                 body: Body::Step,
                 rename: None,
                 remove: false,
+                corner: None,
             };
             let editing = app.editing && !app.m.ripping(i);
             let Some(info) = info else {
@@ -575,9 +570,15 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                         [_] => format!("{}.", v.detail),
                         b => format!("{} {what} need you.", b.len()),
                     };
-                    // While it has the drive: stop and take the disc out.
+                    // While it has the drive: stop and take the disc out. A
+                    // disc's image has it quietly on the header's row.
                     if app.m.ripping(i) && app.m.shows_newest(i) && app.m.can_open_tray(i) {
-                        plan.acts.push(Act::OpenTray { busy: app.m.opening_tray(i), measuring: app.m.measuring_on_drive(i) });
+                        let act = Act::OpenTray { busy: app.m.opening_tray(i), measuring: app.m.measuring_on_drive(i) };
+                        if matches!(v.step.as_str(), "game-rip" | "image") {
+                            plan.corner = Some(act);
+                        } else {
+                            plan.acts.push(act);
+                        }
                     }
                     // One track's choices are on its row, not here too;
                     // several get one button for them all.
@@ -844,7 +845,8 @@ fn header(app: &mut App, ui: &mut Ui, p: &Pal, plan: &Plan, t: f64) {
         // The state's pill, after the name on its row.
         let pill_w =
             plan.pill.as_ref().map_or(0.0, |(text, _, state)| ui.painter().layout_no_wrap(text.clone(), font(12.0, 500), p.ink).size().x + 16.0 + if state.is_some() { 16.0 } else { 0.0 } + 8.0);
-        let room = ui.available_width() - 40.0 - remove_w - pill_w;
+        let corner_w = if plan.corner.is_some() { ui.painter().layout_no_wrap("Open tray".into(), font(13.0, 500), p.muted).size().x + 16.0 + 26.0 } else { 0.0 };
+        let room = ui.available_width() - 40.0 - remove_w - pill_w - corner_w;
         match &plan.rename {
             // In edit mode, the tile's name is its label, edited here.
             Some(id) => {
@@ -878,6 +880,13 @@ fn header(app: &mut App, ui: &mut Ui, p: &Pal, plan: &Plan, t: f64) {
             }
             if plan.remove && quiet_bad(ui, p, "Remove") {
                 act_on(app, ui, Act::AskRemove);
+            }
+            if let Some(Act::OpenTray { busy, measuring }) = &plan.corner {
+                let says = if *measuring { "Measuring the offset: the tray can open once that's done" } else { "Stops any read on this drive" };
+                let b = Btn::new("next-disc", if *busy { "Opening…" } else { "Open tray" }).look(Look::Quiet).font(font(13.0, 500)).enabled(!busy && !measuring).show(ui, p);
+                if b.on_hover_text(says).on_disabled_hover_text(if *measuring { says } else { "Opening the tray" }).clicked() {
+                    act_on(app, ui, Act::OpenTray { busy: *busy, measuring: *measuring });
+                }
             }
         });
     });
@@ -1699,6 +1708,8 @@ struct Row {
     /// What its verdict can grow to while it changes (a percentage to
     /// 100 %): its column is that wide from the start, so it never moves.
     widest: Vec<(String, String)>,
+    /// Its title muted: what came in, not what the step did.
+    faint: bool,
 }
 
 impl Row {
@@ -1721,6 +1732,7 @@ impl Row {
             size: None,
             size_w: 0.0,
             two_line: false,
+            faint: false,
         }
     }
 }
@@ -2049,11 +2061,12 @@ fn row(ui: &mut Ui, p: &Pal, w: f32, vw: f32, r: &Row, first: bool, t: f64) -> (
         right -= gw + 14.0;
     }
     let tw = (right - x - 8.0).max(30.0);
-    let mut job = egui::text::LayoutJob::single_section(r.title.clone(), egui::TextFormat::simple(tf.clone(), p.ink));
+    let ink = if r.faint { p.muted } else { p.ink };
+    let mut job = egui::text::LayoutJob::single_section(r.title.clone(), egui::TextFormat::simple(tf.clone(), ink));
     job.wrap = egui::text::TextWrapping::truncate_at_width(tw);
     let g = pt.layout_job(job);
     let lift = if r.progress.is_some() && !two { 4.0 } else { 0.0 };
-    pt.galley(pos2(x, cy - g.size().y / 2.0 - lift), g, p.ink);
+    pt.galley(pos2(x, cy - g.size().y / 2.0 - lift), g, ink);
     if let Some(f) = r.progress {
         let bar = Rect::from_min_size(pos2(x, cy + 8.0), vec2(tw.min(180.0), 3.0));
         pt.rect_filled(bar, 2.0, p.busy_soft);
@@ -2298,10 +2311,11 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
         }
         "rip" => rip(app, ru, p, id, &v, &info, ctx.as_ref(), t),
         "image" | "game-rip" => {
-            let map = sector_map(snap, &v);
+            let map = sector_map(&v);
             dump_rip(app, ru, p, id, &v, &info, map.as_ref(), t)
         }
         "rip-video" => video_rip(app, ru, p, id, &v, &info, ctx.as_ref(), t),
+        "check" => check_fix(app, ru, p, id, &v, &info, ctx.as_ref(), t),
         "lyrics" => {
             lyrics(app, ru, p, id, &v, ctx.as_ref(), t);
             vec![]
@@ -2991,7 +3005,9 @@ fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &Step
 
 /// What an image came to, from its note: the headline, the ring's word,
 /// and its tone. *✓ 682 MB, read cleanly*; *kept anyway, 3 unreadable
-/// sectors left blank*; *read, but 2 sectors came back wrong*.
+/// sectors left blank*; *read, but 2 sectors read wrong*; made by itself
+/// with sectors it couldn't read, for Check and fix: *34 sectors couldn't
+/// be read*.
 pub fn dump_verdict(state: ItemState, note: &str) -> (String, String, Tone) {
     let n = note.trim();
     let rest = n.trim_start_matches('✓').trim();
@@ -3002,12 +3018,16 @@ pub fn dump_verdict(state: ItemState, note: &str) -> (String, String, Tone) {
         // Not clean: kept with sectors blank, or sectors that came back
         // wrong. Never a tick.
         // Made by itself with sectors it couldn't read, for Check and fix.
-        ItemState::Ok if n.starts_with("made the image with") => (cap(n), "made".into(), Tone::Warn),
+        ItemState::Ok if n.starts_with("made the image with") => {
+            let count = n.trim_start_matches("made the image with").split_whitespace().next().and_then(|c| c.parse::<u64>().ok());
+            (count.map_or_else(|| "Some sectors couldn't be read".to_owned(), |c| format!("{} couldn't be read", sectors_text(c))), "made".into(), Tone::Warn)
+        }
         ItemState::Ok if n.starts_with("kept anyway") => {
             let why = n.trim_start_matches("kept anyway").trim_start_matches(", ");
             (if why.is_empty() || why.ends_with(" MB") || why.ends_with(" GB") { "Kept anyway".into() } else { format!("Kept with {why}") }, "kept".into(), Tone::Warn)
         }
-        ItemState::Ok if n.starts_with("read, but ") => (cap(n.trim_start_matches("read, but ")), "not clean".into(), Tone::Warn),
+        // (An older run's note says *came back wrong*.)
+        ItemState::Ok if n.starts_with("read, but ") => (cap(&n.trim_start_matches("read, but ").replace("came back wrong", "read wrong")), "not clean".into(), Tone::Warn),
         ItemState::Ok => ("Read".into(), "read".into(), Tone::Ok),
         ItemState::Bad if n == drt_steps::real::TRAY_OPENED || n == drt_steps::real::NO_DISC => (cap(n), "not read".into(), Tone::Bad),
         ItemState::Bad => {
@@ -3038,19 +3058,120 @@ fn thousands(n: u64) -> String {
     out
 }
 
-/// Rip of a game or data disc: the disc as one ring, filling as redumper
-/// reads it; beside it the pass it's on, how far, the time left and the
-/// speed; or once done, what the image came to. Under it each pass as a
-/// row, with the errors it met. Only what Rip itself knows: whether the
-/// image matches Redump is Check's to say.
+/// A count of sectors in words: *1 sector*, *1,310 sectors*.
+fn sectors_text(n: u64) -> String {
+    if n == 1 {
+        "1 sector".into()
+    } else {
+        format!("{} sectors", thousands(n))
+    }
+}
+
+/// How long something took, in words a clock would use: *41 s*, *47 min*,
+/// *2 h 31 min*.
+fn span(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s} s"),
+        s if s < 3600 => format!("{} min", s / 60),
+        s => format!("{} h {} min", s / 3600, s % 3600 / 60),
+    }
+}
+
+/// How long a pass took, as a clock shows it: *0:41*, *38:12*, *1:52:10*.
+fn clock(secs: u64) -> String {
+    if secs < 3600 {
+        mmss(secs)
+    } else {
+        format!("{}:{:02}:{:02}", secs / 3600, secs % 3600 / 60, secs % 60)
+    }
+}
+
+/// How long a step took from start to finish: *Read in 2 h 31 min*.
+fn took(v: &StepView, verb: &str) -> Option<String> {
+    let (a, b) = (v.record.started?, v.record.finished?);
+    b.checked_sub(a).filter(|t| *t > 0).map(|t| format!("{verb} in {}", span(t)))
+}
+
+/// Working, beside a ring: what's going on as a headline, a bar for how
+/// far (moving along when that isn't known), and a line or two of how
+/// it's going.
+fn working(ui: &mut Ui, p: &Pal, head: &str, pct: Option<f32>, lines: &[String], t: f64) {
+    ring_headline(ui, p, head);
+    ui.add_space(6.0);
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width().min(260.0), 4.0), Sense::hover());
+    ui.painter().rect_filled(bar, 2.0, p.busy_soft);
+    match pct {
+        Some(f) => {
+            ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f.clamp(0.0, 1.0), 4.0)), 2.0, p.busy);
+        }
+        None => {
+            let k = if crate::motion::on() { ((t * 0.6).fract()) as f32 } else { 0.0 };
+            let x = bar.left() + (bar.width() - 40.0) * k;
+            ui.painter().rect_filled(Rect::from_min_size(pos2(x, bar.top()), vec2(40.0, 4.0)), 2.0, p.busy);
+            crate::app::tick(ui.ctx());
+        }
+    }
+    ui.add_space(6.0);
+    for l in lines.iter().filter(|l| !l.is_empty()) {
+        ui.add(egui::Label::new(RichText::new(l).font(crate::theme::tnum(13.0, 400)).color(p.muted)).wrap());
+    }
+}
+
+/// What needs you, in one box under the ring: why, in a line, when
+/// there's something to say; then only the buttons that can still help,
+/// the first filled, settling it without a good copy (Keep it anyway,
+/// Skip) quiet. Each button is named with what it's for (`name`). Gives
+/// the option clicked.
+fn needs_box(ui: &mut Ui, p: &Pal, reason: Option<&str>, acts: &[(String, String, bool)], name: &str) -> Option<String> {
+    let mut clicked = None;
+    egui::Frame::new().fill(mix(p.bad_soft, if p.dark { 0.8 } else { 0.6 }, p.raised)).corner_radius(6.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        if let Some(r) = reason.filter(|r| !r.is_empty()) {
+            ui.add(egui::Label::new(RichText::new(r).font(font(13.0, 400)).color(p.ink)).wrap());
+            ui.add_space(8.0);
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            let first = acts.iter().position(|a| !a.2);
+            for (k, (label, id, quiet)) in acts.iter().enumerate() {
+                let look = if *quiet {
+                    Look::Quiet
+                } else if Some(k) == first {
+                    Look::Primary
+                } else {
+                    Look::Plain
+                };
+                let b = Btn::new("", label).look(look).font(font(13.0, 500)).pad(if *quiet { vec2(8.0, 5.0) } else { vec2(11.0, 5.0) }).name(&format!("{label}, {name}")).show(ui, p);
+                if b.clicked() {
+                    clicked = Some(id.clone());
+                }
+            }
+        });
+    });
+    ui.add_space(4.0);
+    clicked
+}
+
+/// How many tries redumper gives each bad sector, from its command line.
+fn retries_of(log: &[&str]) -> Option<u32> {
+    log.iter().find_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("--retries=")).and_then(|n| n.parse().ok()))
+}
+
+/// Rip of a game or data disc, in the CD Rip's shape: the disc as one
+/// ring, filling as redumper reads it, then what it made; beside it what's
+/// going on, or what it came to, in a line or two. Under it, what needs
+/// you, if anything does; each pass as a row in sectors; and where on the
+/// disc things went wrong, from Rip's own map. Only what Rip itself knows:
+/// whether the image matches Redump, and what was put right later, are
+/// Check and fix's to say.
 #[allow(clippy::too_many_arguments)]
 fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, sectors_map: Option<&drt_steps::map::SectorMap>, t: f64) -> Vec<(String, String)> {
+    use drt_steps::map::Mark;
     let Some(it) = v.items.first().cloned() else {
         empty(ui, p, "Nothing read yet");
         return vec![];
     };
     let i = app.sel;
-    let drive = app.m.drive(i);
     let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
     let passes = drt_steps::real::redumper::passes(log.iter().copied());
     let raw = app.m.shown_raw(i, id);
@@ -3072,6 +3193,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     // What redumper is doing just now: where, which try, what's come back.
     let now_live: Option<drt_steps::real::redumper::Live> = v.now.clone().and_then(|n| serde_json::from_value(n).ok()).filter(|_| busy);
     let rereading = now_live.as_ref().filter(|l| l.rereading && l.of > 0);
+    let crawling = now_live.as_ref().is_some_and(|l| l.crawling);
     // A re-read's own progress, not the disc's: in a bad patch it moves a
     // sector a minute, and the disc's share would sit still for hours.
     let pct = rereading.map(|l| l.fraction()).or(pct);
@@ -3089,11 +3211,12 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
         ItemState::Skipped => (left_word(&it.note).to_owned(), String::new()),
         ItemState::Busy if rereading.is_some() => (pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())), "re-read".to_owned()),
         ItemState::Busy => (pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())), word),
-        ItemState::Bad => (it.note.split_whitespace().next().filter(|w| w.chars().all(|c| c.is_ascii_digit())).unwrap_or("!").to_owned(), word),
+        // Nothing made yet: the headline says how many it couldn't read.
+        ItemState::Bad => ("—".to_owned(), "not made".to_owned()),
         _ => (size.clone().unwrap_or_else(|| cap(&word)), word),
     };
     // The disc from its start to its end round the ring, with where the
-    // drive reported errors as it read, and where the check of every
+    // drive reported errors as it read, and where the test of every
     // sector found some wrong: as Rip logged them.
     let map = drt_steps::real::redumper::disc_map(log.iter().copied());
     let sectors = if map.sectors > 0 { map.sectors } else { crate::pace::sectors(&it.note).map_or(0, |s| s.1) };
@@ -3103,149 +3226,129 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     let ticks = if sectors_map.is_some() { vec![] } else { disc_ticks(p, &map, sectors, put_right && !busy) };
     // The ring in the verdict's colour; but sectors found wrong, red
     // across it, are the verdict, and stand out only on a plain ring.
-    let cell = if matches!(cell, crate::card::Cell::Bad | crate::card::Cell::Needs) && !map.wrong.is_empty() { crate::card::Cell::Done } else { cell };
-    // Where things went wrong, in centimetres under the map when it knows
-    // them; else as shares of the disc beside the ring.
-    let where_line = if sectors_map.is_some_and(|m| m.geometry().is_some()) { None } else { map_line(&map, sectors, busy) };
+    let cell = if matches!(cell, crate::card::Cell::Bad | crate::card::Cell::Needs) && !map.wrong.is_empty() && sectors_map.is_none() { crate::card::Cell::Done } else { cell };
+    // Where things went wrong, as shares of the disc, only with no map to
+    // say it in centimetres.
+    let where_line = if sectors_map.is_some() { None } else { map_line(&map, sectors, busy) };
     let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
-    let shown = big.clone();
-    let mut stop = false;
+    let made_anyway = it.state == ItemState::Ok && it.note.starts_with("made the image with");
     ring_head(ui, p, &arcs, Some(&ticks), here, big, small, |ui, _| {
         if let Some(l) = rereading {
-            // The re-read: how far through the bad sectors, the time left
-            // if the pace says; where on the disc and which try; what's
-            // come back.
-            let pass = passes.len().max(1);
-            now_reading(ui, p, &format!("Pass {pass} · Re-reading bad parts"), &it.label, pct, l.left_secs.map(drt_steps::real::redumper::left_words), t);
-            let gone = match l.total {
-                Some(n) => format!("{} of {} bad sectors gone through · {}", thousands(l.done), thousands(n), l.recovered_text()),
-                None => cap(&l.recovered_text()),
+            // How far through the bad sectors, which try, what's come back.
+            let mut gone = match l.total {
+                Some(n) => format!("{} of {} bad sectors", thousands(l.done), thousands(n)),
+                None => format!("{} bad sectors gone through", thousands(l.done)),
             };
-            ring_note(ui, p, &gone);
-            let mut place = format!("Sector {} of {} ({}% through the disc)", thousands(l.at), thousands(l.of), (l.position() * 100.0) as u32);
             if l.retry > 0 {
-                place.push_str(&format!(" · try {} of {}", l.retry, l.retries));
+                gone.push_str(&format!(" · try {} of {}", l.retry, l.retries));
             }
-            ring_note(ui, p, &place);
+            let mut back = l.recovered_text();
+            if let Some(s) = l.left_secs {
+                back.push_str(&format!(" · {}", drt_steps::real::redumper::left_words(s)));
+            }
+            working(ui, p, "Re-reading bad parts", pct, &[gone, cap(&back)], t);
         } else if busy {
-            // The pass, the disc, how far, then the time left and speed.
-            let crawling = now_live.as_ref().is_some_and(|l| l.crawling);
-            let doing = if v.detail.is_empty() || crawling { "Reading".to_owned() } else { v.detail.split(" · ").next().unwrap_or("").to_owned() };
-            let times = app.m.reading(i, id).map(|r| r.times());
-            let pass = passes.len().max(1);
-            now_reading(ui, p, &format!("Pass {pass} · {doing}"), &it.label, pct, times, t);
-            if let Some((at, of)) = crate::pace::sectors(&it.note) {
-                ring_note(ui, p, &format!("Sector {} of {}", thousands(at), thousands(of)));
-            }
-            if let Some(l) = &where_line {
-                ring_note(ui, p, l);
-            }
-        } else {
-            // Needing you, the row says what's wrong, with what to do.
-            let head = match it.state {
-                ItemState::Bad => "Not read cleanly",
-                ItemState::Skipped if it.note == drt_engine::snapshot::STOPPED => "Stopped",
-                ItemState::Skipped => "No image kept",
-                _ => &headline,
+            // What it's doing, how far, then the time left and speed: the
+            // read slowed by errors says so as its headline.
+            let doing = if crawling {
+                "Slowed by read errors".to_owned()
+            } else if v.detail.is_empty() {
+                "Reading".to_owned()
+            } else {
+                cap(v.detail.split(" · ").next().unwrap_or("Reading"))
             };
-            ring_headline(ui, p, head);
+            let times = app.m.reading(i, id).map(|r| r.times()).map(|s| cap(s.trim_end_matches(" · slowed by read errors"))).unwrap_or_default();
+            let at = crate::pace::sectors(&it.note).map(|(at, of)| format!("Sector {} of {}", thousands(at), thousands(of))).unwrap_or_default();
+            working(ui, p, &doing, pct, &[at, times], t);
+        } else {
+            let head = match it.state {
+                ItemState::Skipped if it.note == drt_engine::snapshot::STOPPED => "Stopped".to_owned(),
+                ItemState::Skipped => "No image kept".to_owned(),
+                _ => headline.clone(),
+            };
+            ring_headline(ui, p, &head);
             ui.add_space(4.0);
-            let took = crate::model::read_in(v, |_| None);
-            // The size, unless it's already the ring's big number.
-            let size = size.clone().filter(|s| *s != shown);
-            let line = [size, took.map(|t| t.replacen("Read in", "read in", 1))].into_iter().flatten().collect::<Vec<_>>().join(", ");
-            if !line.is_empty() {
-                ring_note(ui, p, &cap(&line));
+            if made_anyway {
+                ring_note(ui, p, "Left blank, for Check and fix to try again");
+            }
+            if let Some(l) = took(v, "Read") {
+                ring_note(ui, p, &l);
             }
             if let Some(l) = &where_line {
                 ring_note(ui, p, l);
-            }
-            if it.state == ItemState::Bad && drt_steps::real::data::failure_detail(&it.note) != cap(&it.note) {
-                ring_note(ui, p, &v.detail);
-                ui.add_space(4.0);
-                ring_note(ui, p, drt_steps::real::redumper::UNREADABLE_ADVICE);
-            }
-            if !drive.is_empty() {
-                ring_note(ui, p, &drive);
             }
         }
-        // Crawling: said once, with Stop beside it.
-        if now_live.as_ref().is_some_and(|l| l.crawling) {
-            ui.add_space(10.0);
-            ui.add(egui::Label::new(RichText::new(drt_steps::real::redumper::CRAWLING).font(font(14.0, 500)).color(p.warn)).wrap());
-            ui.add_space(6.0);
-            if crate::widgets::Btn::new("stop", "Stop").fg(p.bad).show(ui, p).clicked() {
-                stop = true;
-            }
+        // Crawling: said once, under the rest. Stop is the window's.
+        if crawling {
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(RichText::new(drt_steps::real::redumper::CRAWLING).font(font(13.5, 500)).color(p.warn)).wrap());
         }
     });
-    if stop {
-        if app.m.shows_newest(i) {
-            app.m.stop(i);
-        } else {
-            app.m.send(i, drt_engine::Command::Stop);
-        }
-    }
-    // The passes as rows, the image's own first when it needs you.
-    let mut list: Vec<Row> = vec![];
+    let mut clicked = vec![];
+    // What needs you: the sectors it couldn't read, and what can still help.
     if it.state == ItemState::Bad {
         let mut r = Row::new(None, it.label.clone());
-        r.attn = true;
-        r.why = Some(headline.clone());
-        r.item = Some(it.id.clone());
         retries(&mut r, info);
-        list.push(r);
+        let reason = drt_steps::real::data::failure_detail(&it.note) != cap(&it.note);
+        let why = reason.then_some("Clean the disc and re-read them, or make the image with them left blank, for Check and fix to try again.");
+        if let Some(o) = needs_box(ui, p, why, &r.acts, &it.label) {
+            clicked.push((it.id.clone(), o));
+        }
     }
+    // What it's done: each pass as a row, in order, in sectors from Rip's
+    // own map; the drive's own counts are the log's.
+    let count = |k: Mark| sectors_map.map(|m| m.total(k));
+    let read_bad = sectors_map.map(|m| m.total(Mark::Recovered) + m.total(Mark::Unreadable) + m.total(Mark::C2));
+    let left = sectors_map.map(|m| m.total(Mark::Unreadable) + m.total(Mark::C2));
+    let mut list: Vec<Row> = vec![];
     let last = passes.len().saturating_sub(1);
     for (k, ps) in passes.iter().enumerate() {
-        use drt_steps::real::redumper::{errors_text, left_after, PassKind};
+        use drt_steps::real::redumper::{left_after, PassKind};
         let mut r = Row::new(Some(k as u32 + 1), ps.kind.name());
         let now = busy && k == last;
         // Its time, from its heading to the next one's (or now).
         let from = v.record.log.get(ps.at).map(|l| l.at);
         let to = passes.get(k + 1).and_then(|n| v.record.log.get(n.at)).map(|l| l.at).or(if now { None } else { v.record.finished });
-        r.len = from.zip(to).and_then(|(a, b)| b.checked_sub(a)).filter(|d| *d > 0).map(mmss);
-        // The errors it met, beside its name (under it if long): the
-        // drive's counts as it gave them, in samples for a CD.
-        let counts = if now {
-            live.as_ref().filter(|_| ps.kind.reads()).map(|l| errors_text(&l.counts)).unwrap_or_default()
-        } else {
-            match ps.kind {
-                PassKind::Read => errors_text(&ps.errors),
-                PassKind::Reread => errors_text(&still_wrong(&passes, k)),
-                PassKind::Check => ps.wrong.iter().filter(|w| w.1 > 0).map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", "),
-                _ => String::new(),
+        r.len = from.zip(to).and_then(|(a, b)| b.checked_sub(a)).filter(|d| *d > 0).map(clock);
+        if ps.kind == PassKind::Reread {
+            if let Some(n) = retries_of(&log) {
+                r.dest = Some((format!("{n} tries each"), String::new()));
+                r.two_line = true;
             }
-        };
-        if !counts.is_empty() {
-            r.dest = Some((counts.clone(), if ps.kind == PassKind::Reread && !now { " left".into() } else { String::new() }));
         }
         r.verdict = Some(if now {
-            (
-                if ps.kind.reads() && counts.is_empty() {
-                    "No errors so far".into()
-                } else if rereading.is_some() {
-                    "Re-reading".into()
-                } else if now_live.is_some() {
-                    "Reading".into()
-                } else {
-                    cap(&v.detail.split(" · ").next().unwrap_or("").to_lowercase())
+            let word = match (ps.kind, read_bad) {
+                (PassKind::Read, Some(0)) => "No errors so far".to_owned(),
+                (PassKind::Read, Some(n)) => format!("{} bad so far", thousands(n)),
+                (PassKind::Read, None) if live.as_ref().is_some_and(|l| l.counts.iter().any(|c| c.0 != "Q" && c.1 > 0)) => "Errors so far".into(),
+                (PassKind::Read, None) => "No errors so far".into(),
+                (PassKind::Reread, _) => match count(Mark::Recovered).filter(|n| *n > 0) {
+                    Some(n) => format!("{} put right so far", thousands(n)),
+                    None => "Re-reading".into(),
                 },
-                Tone::Busy,
-                String::new(),
-            )
+                _ => cap(&v.detail.split(" · ").next().unwrap_or("").to_lowercase()),
+            };
+            (word, Tone::Busy, String::new())
         } else {
-            match ps.kind {
-                PassKind::Read if counts.is_empty() => ("No errors".into(), Tone::Ok, String::new()),
-                PassKind::Read => ("Errors".into(), Tone::Plain, String::new()),
-                PassKind::Reread if left_after(&passes, k) == 0 => ("All put right".into(), Tone::Ok, String::new()),
-                PassKind::Reread => ("Some left".into(), Tone::Plain, String::new()),
-                // Stopped on them; or, kept anyway, written with them blank.
-                PassKind::Tracks if ps.skipped > 0 && ps.error.is_some() => (format!("{} skipped", ps.skipped), Tone::Bad, String::new()),
-                PassKind::Tracks if ps.skipped > 0 => (format!("{} left blank", ps.skipped), Tone::Plain, String::new()),
-                PassKind::Tracks if ps.error.is_none() => ("None skipped".into(), Tone::Ok, String::new()),
-                PassKind::Check if ps.wrong.iter().any(|w| w.1 > 0) => (format!("{} wrong", ps.wrong.iter().map(|w| w.1).max().unwrap_or(0)), Tone::Plain, String::new()),
-                PassKind::Check => ("None wrong".into(), Tone::Ok, String::new()),
+            match (ps.kind, read_bad) {
+                (PassKind::Read, Some(0)) => ("No errors".into(), Tone::Ok, String::new()),
+                (PassKind::Read, Some(n)) => (format!("{} bad", thousands(n)), Tone::Plain, String::new()),
+                (PassKind::Read, None) if left_after(&passes, k) == 0 => ("No errors".into(), Tone::Ok, String::new()),
+                (PassKind::Read, None) => ("Errors".into(), Tone::Plain, String::new()),
+                (PassKind::Reread, Some(_)) => {
+                    let back = count(Mark::Recovered).unwrap_or(0);
+                    let tone = if left == Some(0) { Tone::Ok } else { Tone::Plain };
+                    (if back == 0 { "None put right".into() } else { format!("{} put right", thousands(back)) }, tone, String::new())
+                }
+                (PassKind::Reread, None) if left_after(&passes, k) == 0 => ("All put right".into(), Tone::Ok, String::new()),
+                (PassKind::Reread, None) => ("Some left".into(), Tone::Plain, String::new()),
+                // Stopped on them; or, made anyway, written with them blank.
+                (PassKind::Tracks, _) if ps.skipped > 0 && ps.error.is_some() => (format!("{} unreadable", thousands(ps.skipped)), Tone::Bad, String::new()),
+                (PassKind::Tracks, _) if ps.skipped > 0 => (format!("{} left blank", thousands(ps.skipped)), Tone::Plain, String::new()),
+                (PassKind::Tracks, _) if ps.error.is_none() => ("Done".into(), Tone::Ok, String::new()),
+                (PassKind::Check, _) if ps.wrong.iter().any(|w| w.1 > 0) => (format!("{} read wrong", thousands(ps.wrong.iter().map(|w| w.1).max().unwrap_or(0))), Tone::Plain, String::new()),
+                (PassKind::Check, _) if left.unwrap_or(0) > 0 || made_anyway => ("No others wrong".into(), Tone::Ok, String::new()),
+                (PassKind::Check, _) => ("None read wrong".into(), Tone::Ok, String::new()),
                 _ if ps.error.is_some() => ("Stopped".into(), Tone::Bad, String::new()),
                 _ => ("Done".into(), Tone::Ok, String::new()),
             }
@@ -3258,18 +3361,16 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
         r.verdict = Some((headline, tone, String::new()));
         list.push(r);
     }
-    let key = format!("{}/dump", v.step);
-    let clicked = rows(app, ui, p, &key, list, "", t);
-    // How the drive was read, when redumper was told: found by testing, or yours.
-    if let Some(l) = log.iter().find(|l| l.starts_with(drt_steps::real::redumper::ORDER_LINE)) {
-        ui.add_space(6.0);
-        ui.add(egui::Label::new(RichText::new(*l).font(font(12.5, 400)).color(p.muted)).wrap());
+    if !list.is_empty() {
+        heading(ui, p, "What it's done");
+        let key = format!("{}/dump", v.step);
+        clicked.extend(rows(app, ui, p, &key, list, "", t));
     }
-    // Every sector, under what needs you and the passes.
+    // Where on the disc, as Rip read it.
     if let Some(m) = sectors_map {
         ui.add_space(8.0);
-        heading(ui, p, "Every sector, from the centre out");
-        if let Some(v) = crate::sectormap::show(ui, p, m, t, app.map_view) {
+        heading(ui, p, "Where on the disc");
+        if let Some(v) = crate::sectormap::show(ui, p, m, t, app.map_view, crate::sectormap::Whose::Rip) {
             app.set_map_view(v);
         }
     }
@@ -3277,17 +3378,16 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
 }
 
 /// The map of a game or data disc's sectors for Rip's sidebar: as Rip
-/// read it, with the sectors its check of every sector found wrong over
-/// it (from its log); then what Check and fix did after, if it has: a
-/// re-read of its own in place of Rip's, or the sectors it fixed over it.
-/// None when no step made one (a run from before maps, a simulated step).
-fn sector_map(snap: &Snapshot, v: &StepView) -> Option<drt_steps::map::SectorMap> {
+/// read it, with the sectors its test of every sector found wrong over it
+/// (from its log). Only Rip's own: what Check and fix did after is on its
+/// own map. None when Rip made none (a run from before maps, a simulated
+/// step).
+fn sector_map(v: &StepView) -> Option<drt_steps::map::SectorMap> {
     use drt_steps::map::SectorMap;
-    let of = |s: &StepView| s.record.map.clone().and_then(|j| serde_json::from_value::<SectorMap>(j).ok());
     let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
     let wrong: Vec<u64> = drt_steps::real::redumper::disc_map(log.iter().copied()).wrong.iter().flat_map(|w| w.from..=w.to).take(200_000).collect();
-    let check = snap.steps.values().find(|s| s.step == "check").and_then(of);
-    drt_steps::map::combined(of(v), &wrong, check)
+    let rip = v.record.map.clone().and_then(|j| serde_json::from_value::<SectorMap>(j).ok());
+    drt_steps::map::combined(rip, &wrong, None)
 }
 
 /// The marks on a game or data disc's ring: where the drive reported
@@ -3335,24 +3435,212 @@ fn map_line(map: &drt_steps::real::redumper::DiscMap, sectors: u64, count: bool)
     place(&map.read).map(|(w, whole)| if whole { format!("Read errors {w}") } else { format!("Most read errors {w}") })
 }
 
-/// Each counter's errors left after pass `upto`: the read's, less what
-/// every re-read since put right.
-fn still_wrong(passes: &[drt_steps::real::redumper::Pass], upto: usize) -> Vec<(String, u64)> {
-    use drt_steps::real::redumper::PassKind;
-    let mut left: Vec<(String, u64)> = vec![];
-    for p in passes.iter().take(upto + 1) {
-        match p.kind {
-            PassKind::Read => left = p.errors.clone(),
-            PassKind::Reread => {
-                for (name, n) in &mut left {
-                    let fixed = p.corrected.iter().find(|c| c.0 == *name).map_or(0, |c| c.1);
-                    *n = n.saturating_sub(fixed);
-                }
-            }
-            _ => {}
+// ---- Check and fix: a game or data disc's image, against Redump ------------------------------
+
+/// What Check and fix is busy with, from its status, as its row says it:
+/// the row's name, and the word beside its spinner.
+fn check_doing(status: &str) -> Option<(&'static str, &'static str)> {
+    let s = status;
+    if s == "Looking for bad sectors" {
+        Some(("Read bad sectors again", "Looking"))
+    } else if s.starts_with("Re-reading ") && (s.ends_with(" bad sectors") || s.ends_with(" bad sector")) {
+        Some(("Read bad sectors again", "Re-reading"))
+    } else if (s.starts_with("Rip ") && s.contains(" of ")) || s.starts_with("Ripping again") {
+        Some(("Rip again and combine", "Ripping"))
+    } else if s.starts_with("Combining ") {
+        Some(("Rip again and combine", "Combining"))
+    } else if s.starts_with("Repairing") {
+        Some(("Repair with error correction", "Repairing"))
+    } else if s == "Re-reading bad parts" {
+        Some(("Re-read bad parts", "Re-reading"))
+    } else {
+        None
+    }
+}
+
+/// Check and fix, in the CD Rip's shape: the copy as a ring, how it
+/// stands beside it in a line or two; what needs you, if anything does;
+/// each thing it did, in order, from what came in from Rip; where on the
+/// disc the sectors it took in as bad are, and what came of each; then
+/// Redump's copy beside this one, the proof.
+#[allow(clippy::too_many_arguments)]
+fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, ctx: Option<&Context>, t: f64) -> Vec<(String, String)> {
+    let Some(it) = v.items.first().cloned() else {
+        empty(ui, p, "Nothing checked yet");
+        return vec![];
+    };
+    let i = app.sel;
+    let m = crate::compare::mismatch(v);
+    let busy = it.state == ItemState::Busy;
+    let verified = it.verified || matches!(v.status.as_str(), "Verified" | "Matches Redump");
+    let held = it.state == ItemState::Bad;
+    let pct = progress(&it.note).0;
+    let size = m.as_ref().and_then(crate::compare::copy_bytes).map(drt_steps::real::media::size);
+    let (cell, word) = match it.state {
+        ItemState::Busy => (crate::card::Cell::Busy, "checking"),
+        ItemState::Waiting => (crate::card::Cell::Wait, "waiting"),
+        ItemState::Skipped => (crate::card::Cell::Out, "skipped"),
+        ItemState::Bad => (crate::card::Cell::Needs, "not verified"),
+        _ if verified => (crate::card::Cell::Verified, "verified"),
+        _ => (crate::card::Cell::Done, "not verified"),
+    };
+    let big = match (it.state, &size) {
+        (ItemState::Skipped, _) => "—".to_owned(),
+        (_, Some(s)) => s.clone(),
+        (ItemState::Busy, None) => pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())),
+        (_, None) => "1/1".to_owned(),
+    };
+    let entry = m.as_ref().map(|m| m.entry.clone()).filter(|e| !e.is_empty()).or_else(|| ctx.and_then(|c| c.get(Subject::Disc, "name")).map(str::to_owned));
+    let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
+    ring_head(ui, p, &arcs, None, None, big, word.to_owned(), |ui, _| {
+        if busy {
+            let head = if v.status.is_empty() { "Checking".to_owned() } else { v.status.clone() };
+            let line = if v.status.is_empty() { cap(&v.detail) } else { String::new() };
+            working(ui, p, &head, pct, &[line], t);
+            return;
+        }
+        let (head, lines): (String, Vec<String>) = match v.status.as_str() {
+            _ if verified => ("Verified".into(), vec![entry.clone().map(|e| format!("Matches Redump's {e}")).unwrap_or_default()]),
+            _ if held => (v.status.clone(), vec![m.as_ref().map(crate::compare::still_line).unwrap_or_default()]),
+            "" => (cap(&it.note), vec![]),
+            s => (s.to_owned(), vec![cap(&v.detail)]),
+        };
+        ring_headline(ui, p, &head);
+        ui.add_space(4.0);
+        for l in lines.iter().filter(|l| !l.is_empty()) {
+            ring_note(ui, p, l);
+        }
+        if let Some(l) = took(v, "Done").filter(|_| !held) {
+            ring_note(ui, p, &l);
+        }
+    });
+    let mut clicked = vec![];
+    // What needs you: why, and only what can still help. Ripping again is
+    // offered again until as many rips as Check's settings allow are made.
+    if held {
+        let rips = m.as_ref().and_then(|m| m.combined.as_ref()).map_or(1, |c| c.rips.len());
+        let most = info.params.iter().find(|s| s.key == "extra_rips").and_then(|s| app.m.param(i, id, s).resolve(None)).and_then(|v| v.as_u64()).unwrap_or(drt_steps::real::game::EXTRA_RIPS as u64)
+            as usize
+            + 1;
+        let options: Vec<(String, String)> = it.options.iter().filter(|o| !(o.0 == "combine" && rips >= most)).cloned().collect();
+        let mut r = Row::new(None, it.label.clone());
+        offered(&mut r, &options);
+        let reason = m.as_ref().and_then(|m| crate::compare::reason(m, &it.note));
+        if let Some(o) = needs_box(ui, p, reason.as_deref(), &r.acts, &it.label) {
+            clicked.push((it.id.clone(), o));
         }
     }
-    left
+    // What it's done, in order: what came in from Rip, the first
+    // comparison, each way it tried to put the copy right, the last.
+    let mut list: Vec<Row> = vec![];
+    let blank = ctx.and_then(|c| c.get(Subject::Disc, drt_steps::real::data::UNREADABLE)).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+    let mut from = Row::new(None, if blank > 0 { format!("From Rip: the image, {} blank", sectors_text(blank)) } else { "From Rip: the image".to_owned() });
+    from.faint = true;
+    list.push(from);
+    let mut n = 0u32;
+    let mut next = |title: &str| {
+        n += 1;
+        Row::new(Some(n), title)
+    };
+    let secs = |s: Option<u64>| s.filter(|s| *s > 0).map(clock);
+    let first_word = match (&m, v.status.as_str()) {
+        (Some(m), _) if m.in_redump() => ("Doesn't match".to_owned(), Tone::Plain),
+        (Some(_), _) => ("Not in Redump".to_owned(), Tone::Plain),
+        (None, _) if busy => ("Checking".to_owned(), Tone::Busy),
+        (None, _) if verified => ("Matches".to_owned(), Tone::Ok),
+        (None, "Couldn't check") => ("Couldn't reach Redump".to_owned(), Tone::Bad),
+        (None, "Not in Redump") => ("Not in Redump".to_owned(), Tone::Plain),
+        (None, _) => (cap(&v.status), Tone::Plain),
+    };
+    let mut r = next("Compare with Redump");
+    r.verdict = Some((first_word.0, first_word.1, String::new()));
+    list.push(r);
+    let doing = if busy { check_doing(&v.status) } else { None };
+    let mut tried = false;
+    if let Some(m) = &m {
+        if let Some(f) = &m.fixed {
+            tried = true;
+            let mut r = next("Read bad sectors again");
+            r.dest = Some((format!("up to {} tries each", f.tries), String::new()));
+            r.two_line = true;
+            r.len = secs(f.secs);
+            r.verdict = Some(match (f.other_disc, f.bad, f.fixed) {
+                (true, _, _) => ("Nothing changed".into(), Tone::Bad, String::new()),
+                (false, 0, _) => ("None bad".into(), Tone::Ok, String::new()),
+                (false, _, 0) => ("None put right".into(), Tone::Plain, String::new()),
+                (false, _, k) => (format!("{} put right", thousands(k)), if f.left == 0 { Tone::Ok } else { Tone::Plain }, String::new()),
+            });
+            list.push(r);
+        }
+        if let Some(c) = &m.combined {
+            tried = true;
+            let mut r = next("Rip again and combine");
+            let later: Vec<String> = c.rips.iter().skip(1).map(|r| r.n.to_string()).collect();
+            let named = match later.as_slice() {
+                [] => String::new(),
+                [one] => format!("rip {one}"),
+                [rest @ .., last] => format!("rips {} and {last}", rest.join(", ")),
+            };
+            if !named.is_empty() {
+                r.dest = Some((named, String::new()));
+                r.two_line = true;
+            }
+            r.len = secs(c.secs);
+            let from = if later.len() == 1 { format!("rip {}", later[0]) } else { "the other rips".to_owned() };
+            r.verdict = Some(match c.taken {
+                0 => ("Nothing taken".into(), Tone::Plain, String::new()),
+                k => (format!("{} taken from {from}", thousands(k)), if c.still_bad == 0 { Tone::Ok } else { Tone::Plain }, String::new()),
+            });
+            if doing.is_some_and(|d| d.0 == "Rip again and combine") {
+                r.verdict = Some((doing.map_or("", |d| d.1).to_owned(), Tone::Busy, String::new()));
+            }
+            list.push(r);
+        }
+        if let Some(rp) = &m.repaired {
+            tried = true;
+            let mut r = next("Repair with error correction");
+            r.len = secs(rp.secs);
+            r.verdict = Some(match rp.repaired {
+                0 => ("Nothing repaired".into(), Tone::Plain, String::new()),
+                k => (format!("{} repaired", thousands(k)), if rp.left() == 0 { Tone::Ok } else { Tone::Plain }, String::new()),
+            });
+            list.push(r);
+        }
+    }
+    // What it's at now, its spinner on its row, unless that row's above.
+    if let Some((title, w)) = doing {
+        if !list.iter().any(|r| r.title == title && r.verdict.as_ref().is_some_and(|v| v.1 == Tone::Busy)) {
+            let mut r = next(title);
+            r.verdict = Some((w.to_owned(), Tone::Busy, String::new()));
+            list.push(r);
+        }
+    } else if tried {
+        // How the last comparison came out.
+        let mut r = next("Compare with Redump");
+        r.verdict = Some(match (&m, verified) {
+            (_, true) => ("Matches".into(), Tone::Ok, String::new()),
+            (Some(m), false) if m.in_redump() => ("Doesn't match".into(), Tone::Bad, String::new()),
+            _ => ("Not in Redump".into(), Tone::Plain, String::new()),
+        });
+        list.push(r);
+    }
+    heading(ui, p, "What it's done");
+    clicked.extend(rows(app, ui, p, &format!("{}/check", v.step), list, "", t));
+    // Where on the disc: the sectors it took in as bad, and what came of each.
+    if let Some(map) = v.record.map.clone().and_then(|j| serde_json::from_value::<drt_steps::map::SectorMap>(j).ok()).filter(|m| !m.is_empty()) {
+        ui.add_space(8.0);
+        heading(ui, p, "Where on the disc");
+        if let Some(v) = crate::sectormap::show(ui, p, &map, t, app.map_view, crate::sectormap::Whose::Check) {
+            app.set_map_view(v);
+        }
+    }
+    // The proof, last.
+    if let Some(m) = m.as_ref().filter(|m| m.in_redump() && !m.files.is_empty()) {
+        ui.add_space(8.0);
+        heading(ui, p, "Redump's copy and this one");
+        crate::compare::proof(ui, p, m);
+    }
+    clicked
 }
 
 // ---- Rip for a video disc: MakeMKV's copy of each title ---------------------------------------
@@ -4487,7 +4775,7 @@ mod tests {
     #[test]
     fn an_image_made_anyway_says_check_and_fix_will_try() {
         let (head, _, tone) = dump_verdict(ItemState::Ok, &drt_steps::real::data::made_anyway_note(21));
-        assert_eq!((head.as_str(), tone), ("Made the image with 21 unreadable sectors; Check and fix will try them", Tone::Warn));
+        assert_eq!((head.as_str(), tone), ("21 sectors couldn't be read", Tone::Warn));
     }
 
     /// An item the run was stopped in the middle of says so, and nothing
@@ -4508,10 +4796,11 @@ mod tests {
         let v = dump_verdict;
         assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, false, &[])), ("Read cleanly".into(), "read".into(), Tone::Ok));
         assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, true, &[])), ("Bad parts re-read".into(), "read".into(), Tone::Ok));
-        // Kept, or sectors that came back wrong: done, but never a tick.
+        // Kept, or sectors read wrong: done, but never a tick.
         assert_eq!(v(ItemState::Ok, &image_note("682 MB", true, 0, false, &[])).0, "Kept anyway");
         assert_eq!(v(ItemState::Ok, &image_note("682 MB", true, 3, false, &[])), ("Kept with 3 unreadable sectors left blank".into(), "kept".into(), Tone::Warn));
-        assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, false, &[("EDC", 2)])), ("2 sectors came back wrong".into(), "not clean".into(), Tone::Warn));
+        assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, false, &[("EDC", 2)])), ("2 sectors read wrong".into(), "not clean".into(), Tone::Warn));
+        assert_eq!(v(ItemState::Ok, "read, but 2 sectors came back wrong").0, "2 sectors read wrong", "an older run's note");
         assert_eq!(v(ItemState::Bad, "3 unreadable sectors").0, "3 sectors couldn't be read");
         assert_eq!(v(ItemState::Bad, "1 unreadable sector").0, "1 sector couldn't be read");
         assert_eq!(v(ItemState::Bad, "drive not ready").0, "Drive not ready");

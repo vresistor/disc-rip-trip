@@ -2684,15 +2684,23 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     h.get_by_label_contains("Check and fix, Doesn't match Redump, same size, 140 bad sectors");
     shot(&mut h, "games-check-holds");
     open_id(&mut h, "g_check");
-    h.get_by_label_contains("Redump has 2 copies of SLES-04711, and this one matches none of them.");
-    h.get_by_label("Compared with Redump");
+    // The headline, what's wrong in a line, and why; no sentence under
+    // the header, and no retelling of Rip's read.
+    h.get_by_label("Doesn't match Redump");
+    h.get_by_label("140 sectors read wrong");
+    h.get_by_label("The drive didn't report them as bad, so only reading each sector again can find them.");
+    assert!(h.query_by_label_contains("Redump has 2 copies of SLES-04711").is_none(), "no header sentence");
+    assert!(h.query_by_label_contains("What the first rip reported").is_none() && h.query_by_label_contains("What it likely means").is_none());
+    assert!(row_says(&h, &["From Rip: the image"]) && row_says(&h, &["1, Compare with Redump", "Doesn't match"]));
+    // The proof, last.
+    h.get_by_label("Redump's copy and this one");
     h.get_by_label("Size: Redump 200,000 sectors, this copy 200,000 sectors, the same");
     h.get_by_label_contains("SHA-1: Redump 43c1fe26…, this copy 9b07a5e1…, different");
-    h.get_by_label("The drive reported no read errors");
-    h.get_by_label("At least 140 sectors read wrong");
-    h.get_by_label_contains("15 failing their error correction, between 49% and 68% of the way through (ECC)");
-    h.get_by_label("redumper doesn't know this drive, so it used general settings and a read offset of +0");
-    h.get_by_label_contains("140 sectors read wrong. The drive didn't report them as bad, so Re-read bad parts can't find them. Fix bad sectors reads just those sectors again, one at a time");
+    // The drive's and redumper's own counts, and what it likely means, are the log's.
+    let log: Vec<String> = snap(&h).steps["g_check"].record.log.iter().map(|l| l.line.clone()).collect();
+    assert!(log.iter().any(|l| l == "the rip's log: SCSI 0 and C2 0 samples; sectors MSF 140, ECC 15, EDC 12"), "{log:?}");
+    assert!(log.iter().any(|l| l.contains("redumper doesn't know this drive")), "{log:?}");
+    assert!(h.query_by_label_contains("ECC 15").is_none() && h.query_by_label_contains("SCSI").is_none(), "not on Progress");
     assert!(h.query_all_by_label_contains("Fix bad sectors, ").next().is_some());
     assert!(h.query_all_by_label_contains("Re-read bad parts, ").next().is_none(), "no help when the drive reported nothing");
     assert!(h.query_all_by_label_contains("Rip again and combine, ").next().is_some());
@@ -2725,7 +2733,9 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     h.get_by_label_contains("Redump, Not needed, Check and fix found the game");
     shot(&mut h, "step-redump-not-needed");
     open_id(&mut h, "g_check");
-    h.get_by_label_contains("Its checksums match Redump's copy of Ape Escape (Europe).");
+    h.get_by_label("Verified");
+    h.get_by_label("Matches Redump's Ape Escape (Europe)");
+    assert!(row_says(&h, &["1, Compare with Redump", "Matches"]));
 }
 
 /// A misread the drive kept quiet about: Rip again and combine, twice, and
@@ -2747,20 +2757,19 @@ fn check_rips_again_and_combines_until_it_matches() {
     h.get_all_by_label_contains("Rip again and combine, ").next().expect("on the dump's row").click_accesskit();
     h.run_steps(2);
     until(&mut h, "two rips combined", |a| a.m.snapshot(a.sel).steps["g_check"].detail.starts_with("combined from 2 rips"));
-    h.get_by_label_contains("Combined from 2 rips, this copy still doesn't match Redump's copy of SLES-04711.");
-    h.get_by_label("Rips");
-    h.get_by_label("Rip 2");
-    h.get_by_label("Combined: doesn't match Redump");
-    h.get_by_label("What the first rip reported");
-    h.get_by_label_contains("Combined from 2 rips, 4 sectors still have no copy that passes its check.");
+    h.get_by_label("4 sectors still not put right, after 2 rips");
+    assert!(row_says(&h, &["2, Rip again and combine", "131 taken from rip 2", "rip 2"]));
+    assert!(row_says(&h, &["3, Compare with Redump", "Doesn't match"]));
+    assert!(h.query_by_label_contains("What the first rip reported").is_none());
     assert!(h.query_all_by_label_contains("Keep the best combination (not verified), ").next().is_some());
     shot(&mut h, "step-check-combined");
     h.get_all_by_label_contains("Rip again and combine again, ").next().expect("again").click_accesskit();
     h.run_steps(2);
     until(&mut h, "the third rip to verify it", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Verified");
     open_id(&mut h, "g_check");
-    h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now, combined from 3 rips.");
-    h.get_by_label("Combined: matches Redump");
+    h.get_by_label("Matches Redump's Lantern Keep (Europe) (Disc 1)");
+    assert!(row_says(&h, &["2, Rip again and combine", "140 taken from the other rips", "rips 2 and 3"]));
+    assert!(row_says(&h, &["3, Compare with Redump", "Matches"]));
     shot(&mut h, "step-check-combined-verified");
 }
 
@@ -2794,16 +2803,16 @@ fn check_repairs_by_the_disc_s_error_correction_last() {
     until(&mut h, "the repair", |a| held(a) && a.m.snapshot(a.sel).steps["g_check"].detail.contains("repaired by error correction"));
     h.run_steps(3);
     assert_eq!(snap(&h).steps["g_check"].items[0].note, "Not verified: 137 sectors repaired by the disc's error correction");
-    h.get_by_label_contains("The disc's error correction was tried last, and this copy still doesn't match Redump's copy of SLES-04711.");
-    h.get_by_label("Repaired by error correction");
-    h.get_by_label("137 sectors put right by the error correction stored in each");
-    h.get_by_label("3 sectors with no error correction");
-    h.get_by_label_contains("It still doesn't match Redump's copy, so it isn't verified.");
+    h.get_by_label("Doesn't match Redump");
+    h.get_by_label("3 sectors still not put right");
+    assert!(row_says(&h, &["2, Repair with error correction", "137 repaired"]));
+    // Check's own map: what it took in, and what came of each.
+    h.get_by_label("Map of the disc: 199,860 as Rip made them · 137 repaired by error correction · 3 read wrong");
     shot(&mut h, "step-check-repaired-not-verified");
+    // Rip's sidebar shows only Rip's own work.
     open_id(&mut h, "g_rip");
     h.run_steps(3);
-    h.get_by_label_contains("137 repaired by error correction");
-    h.get_by_label_contains("Map of the disc: 199,860 good · 137 repaired by error correction · 3 came back wrong");
+    assert!(h.query_by_label_contains("Map of the disc: ").is_none(), "Rip made no map here, and Check's isn't drawn as Rip's");
     shot(&mut h, "games-rip-map-repaired");
 
     let e = env();
@@ -2817,7 +2826,8 @@ fn check_repairs_by_the_disc_s_error_correction_last() {
     open_id(&mut h, "g_check");
     h.run_steps(3);
     assert_eq!(snap(&h).steps["g_check"].items[0].note, "Verified: Lantern Keep (Europe) (Disc 1), 139 sectors re-read, 1 sector repaired by the disc's error correction");
-    h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now, with 1 sector repaired by the disc's error correction.");
+    h.get_by_label("Matches Redump's Lantern Keep (Europe) (Disc 1)");
+    assert!(row_says(&h, &["Read bad sectors again", "139 put right"]) && row_says(&h, &["Repair with error correction", "1 repaired"]));
     shot(&mut h, "step-check-repaired-verified");
     open_id(&mut h, "g_rip");
     h.run_steps(3);
@@ -2921,7 +2931,10 @@ fn a_scratched_disc_says_how_its_read_and_re_read_go() {
     assert_eq!(card, "The drive can't read parts of this disc · below 0.1×");
     // The card short of room keeps the speed whole and the crawl's start.
     h.get_by_label("Rip, The drive can't read parts of… · below 0.1×, Retries 20");
-    h.get_by_label("time left unknown · below 0.1× · slowed by read errors");
+    h.get_by_label("Slowed by read errors");
+    h.get_by_label("Time left unknown · below 0.1×");
+    // One Stop: the window's.
+    assert_eq!(h.get_all_by_label("Stop").count(), 1, "the crawl warning has no Stop of its own");
     shot(&mut h, "games-rip-crawling");
     // The re-read: how far through the bad sectors, where, which try,
     // what's come back.
@@ -2929,20 +2942,25 @@ fn a_scratched_disc_says_how_its_read_and_re_read_go() {
     h.run_steps(3);
     let l = live(app(&h)).unwrap();
     assert_eq!((l.total, l.recovered, l.retries), (Some(774), 2, 20));
-    h.get_by_label_contains("of 774 bad sectors gone through · 2 recovered so far");
-    h.get_by_label_contains("through the disc) · try 19 of 20");
+    h.get_by_label("Re-reading bad parts");
+    h.get_by_label_contains("of 774 bad sectors · try 19 of 20");
+    h.get_by_label_contains("2 put right so far");
     let card = {
         let a = app(&h);
         a.m.snapshot(a.sel).steps["g_rip"].detail.clone()
     };
-    assert!(card.starts_with("Re-reading bad parts: sector 148,") && card.ends_with("2 recovered so far · try 19 of 20 · The drive can't read parts of this disc"), "{card}");
+    assert!(card.starts_with("Re-reading bad parts: sector 148,") && card.ends_with("2 put right so far · try 19 of 20 · The drive can't read parts of this disc"), "{card}");
     h.get_by_label(drt_steps::real::redumper::CRAWLING);
     shot(&mut h, "games-rip-rereading");
     // It couldn't: how many, and what to try.
     until(&mut h, "Rip to need you", |a| a.m.snapshot(a.sel).steps["g_rip"].items.first().is_some_and(|i| i.state == ItemState::Bad));
     h.run_steps(3);
-    assert!(h.get_all_by_label_contains("Couldn't read 771 sectors").count() >= 2, "on the card and in the sidebar");
-    h.get_by_label(drt_steps::real::redumper::UNREADABLE_ADVICE);
+    h.get_by_label_contains("Couldn't read 771 sectors");
+    h.get_by_label("771 sectors couldn't be read");
+    // What needs you: why, in a line, and what can still help.
+    h.get_by_label("Clean the disc and re-read them, or make the image with them left blank, for Check and fix to try again.");
+    h.get_by_label("Re-read bad parts, SLES_147.11");
+    h.get_by_label("Make the image anyway, SLES_147.11");
     shot(&mut h, "games-rip-unreadable");
 }
 
@@ -2967,7 +2985,8 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     until(&mut h, "Check to re-read the bad sectors", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Re-reading 140 bad sectors");
     // The sidebar first, while it's at it, then the card.
     open_id(&mut h, "g_check");
-    h.get_by_label_contains("Re-reading 140 bad sectors: each is read again from the disc, on its own");
+    h.get_by_label("Re-reading 140 bad sectors");
+    assert!(row_says(&h, &["2, Read bad sectors again", "Re-reading"]));
     shot(&mut h, "step-check-fixing");
     app_mut(&mut h).close_tray();
     let i = app(&h).sel;
@@ -2978,15 +2997,14 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     until(&mut h, "the second rip", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Rip 2 of 4");
     open_id(&mut h, "g_check");
     h.run_steps(3);
-    h.get_by_label_contains("Rip 2 of 4: the whole disc is read again");
-    h.get_by_label("Bad sectors read again");
-    h.get_by_label("139 sectors read correctly and put in place");
-    h.get_by_label("1 sector still bad");
+    h.get_by_label("Rip 2 of 4");
+    assert!(row_says(&h, &["2, Read bad sectors again", "139 put right", "tries each"]));
+    assert!(row_says(&h, &["3, Rip again and combine", "Ripping"]));
     shot(&mut h, "step-check-ripping-again");
     until(&mut h, "it to verify", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Verified");
     open_id(&mut h, "g_check");
-    h.get_by_label_contains("It matches Redump's copy of Lantern Keep (Europe) (Disc 1) now: 139 sectors read again from the disc, then combined with 1 more rip.");
-    h.get_by_label_contains("Verified: Lantern Keep (Europe) (Disc 1), 139 sectors re-read, 1 from a second rip");
+    h.get_by_label("Matches Redump's Lantern Keep (Europe) (Disc 1)");
+    assert!(row_says(&h, &["3, Rip again and combine", "1 taken from rip 2"]) && row_says(&h, &["4, Compare with Redump", "Matches"]));
     shot(&mut h, "step-check-fixed-verified");
 }
 
@@ -4269,6 +4287,11 @@ enum At {
     /// As [`At::Wrong`], its read errors coming back once per turn at two
     /// single spots about 4.4 and 4.9 cm out, as Koudelka's do.
     Spots,
+    /// As [`At::Reading`], the read slowed by errors to a crawl.
+    Crawling,
+    /// Read, re-read, and made with 34 sectors it couldn't read left
+    /// blank, handed on for Check and fix to try: as its settings say.
+    HandedOn,
 }
 
 /// Where [`slips`] puts its `n` places with errors, spread from `from` to
@@ -4320,7 +4343,7 @@ fn held_map(n: u64, from: f64, to: f64, upto: u64, reread: bool, left: usize) ->
 
 /// A Rip's map of a disc like Koudelka's: the places [`slips`] logged, and
 /// two spots met once per turn (2% off the nominal turn), about 4.4 and
-/// 4.9 cm out; all re-read and put right, three by error correction.
+/// 4.9 cm out; all re-read and put right.
 fn spots_map() -> drt_steps::map::SectorMap {
     use drt_steps::map::{Geometry, Mark, Sectors};
     let mut s = Sectors::new(CD_SECTORS);
@@ -4338,11 +4361,142 @@ fn spots_map() -> drt_steps::map::SectorMap {
             s.set(at + 1, Mark::Recovered);
         }
     }
-    // Three that Check and fix's error correction put right, 5.3 cm out.
-    for at in [245_000, 245_001, 245_400] {
-        s.set(at, Mark::Repaired);
-    }
     s.map(None, true)
+}
+
+/// The sectors of the disc [`At::HandedOn`] reads: as many as Koudelka
+/// (Europe) (Disc 4) has.
+const DISC_4: u64 = 269_159;
+/// The sectors it can't read, left blank for Check and fix.
+const HANDED_ON: u64 = 34;
+
+/// Rip's map of a disc with two bad patches, each a spot met once per
+/// turn (2% off the nominal turn) about 4.4 and 4.9 cm out, as Koudelka
+/// (Europe) (Disc 4)'s: re-read, and all but [`HANDED_ON`] put right. With
+/// the sectors left unreadable.
+fn handed_map() -> (drt_steps::map::SectorMap, Vec<u64>) {
+    use drt_steps::map::{Geometry, Mark, Sectors};
+    let mut s = Sectors::new(DISC_4);
+    for k in 0..DISC_4 {
+        s.set(k, Mark::Good);
+    }
+    let mut blank = vec![];
+    for start in [148_500u64, 201_200] {
+        let turn = Geometry::CD.per_turn(start as f64) * 1.02;
+        let bad: Vec<u64> = (0..160u64).filter(|k| k % 7 != 3).flat_map(|k| (0..5).map(move |x| x + start + (k as f64 * turn).round() as u64)).collect();
+        for at in &bad {
+            s.set(*at, Mark::Recovered);
+        }
+        blank.extend(bad.iter().rev().step_by(9).take(HANDED_ON as usize / 2));
+    }
+    for at in &blank {
+        s.set(*at, Mark::Unreadable);
+    }
+    blank.sort_unstable();
+    (s.map(None, true), blank)
+}
+
+/// How a held Check and fix ends: verified, or holding the copy for you.
+#[derive(Clone, Copy, PartialEq)]
+enum CheckAt {
+    Verified,
+    Holding,
+}
+
+/// Check and fix as the real one reports a copy Rip handed on with
+/// [`HANDED_ON`] sectors blank, held where it ends: read again, then
+/// ripped again and combined, until it matches Redump's copy, or it
+/// can't. With the times each took, its map of those sectors, and
+/// Redump's copy beside this one.
+struct HeldCheck {
+    at: CheckAt,
+    held: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl drt_engine::Step for HeldCheck {
+    fn info(&self) -> drt_engine::StepInfo {
+        drt_steps::real::data::check_info()
+    }
+    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+        use drt_steps::map::{Mark, SectorMap};
+        use drt_steps::real::mismatch::{Combination, File, Fixing, Mismatch, Pair, Read, RipRead};
+        let Some(dump) = inlet.recv().await else { return Ok(()) };
+        let done = self.at == CheckAt::Verified;
+        let blank = handed_map().1;
+        let file = |sha1: &str| File { name: "SLES_147.11.bin".into(), size: DISC_4 * 2352, sha1: sha1.into() };
+        let left = if done { 0 } else { 3 };
+        let rips = if done { 2 } else { 4 };
+        let m = Mismatch {
+            serial: "SLES-14711".into(),
+            entry: "Lantern Keep (Europe) (Disc 2)".into(),
+            files: vec![Pair {
+                expected: Some(file("3a64731400000000000000000000000000000000")),
+                got: Some(file(if done { "3a64731400000000000000000000000000000000" } else { "91c0d2e500000000000000000000000000000000" })),
+            }],
+            read: Some(Read { drive: "ACME DVD-RW XY123".into(), generic: true, read_offset: Some(0), scsi: 19_992, disc_sectors: DISC_4, ..Read::default() }),
+            can_combine: true,
+            fixed: Some(Fixing { bad: HANDED_ON, fixed: 31, left: 3, left_at: blank[31..].iter().map(|l| *l as i64).collect(), tries: 10, secs: Some(250), ..Fixing::default() }),
+            combined: Some(Combination {
+                rips: (1..=rips).map(|n| RipRead { n, bad: if n == 1 || !done { 3 } else { 0 } }).collect(),
+                sectors: DISC_4,
+                differing: 3,
+                taken: if done { 3 } else { 0 },
+                no_good: left,
+                still_bad: left,
+                left: blank[34 - left as usize..].iter().map(|l| *l as i64).collect(),
+                verified: done,
+                secs: Some(if done { 2_462 } else { 7_304 }),
+                ..Combination::default()
+            }),
+            ..Mismatch::default()
+        };
+        let found: Vec<(u64, Mark)> = blank.iter().enumerate().map(|(k, l)| (*l, if done || k < 31 { Mark::Recovered } else { Mark::Unreadable })).collect();
+        cx.item(&dump, ItemState::Busy, "checking");
+        cx.map(serde_json::to_value(SectorMap::checked(DISC_4, &found, true)).ok());
+        cx.report(serde_json::to_value(&m).ok());
+        if done {
+            cx.verified(&dump, "Verified: Lantern Keep (Europe) (Disc 2), 31 sectors re-read, 3 from a second rip");
+            cx.status("Verified", "31 sectors re-read, 3 from a second rip");
+            self.held.store(true, std::sync::atomic::Ordering::SeqCst);
+            outlet.send(dump).await;
+            return Ok(());
+        }
+        cx.status("Doesn't match Redump", m.short());
+        cx.state(StepState::Bad);
+        cx.item_options(&dump, m.options());
+        cx.item(&dump, ItemState::Bad, "Tried by itself (31 sectors re-read, 3 more rips); still doesn't match Redump");
+        self.held.store(true, std::sync::atomic::Ordering::SeqCst);
+        cx.cancelled().await;
+        Ok(())
+    }
+}
+
+/// The window with Games started on a scratched disc, Rip held at `at`
+/// and, once Rip hands it on, Check and fix held at `check`; the sidebar
+/// of `open` open.
+fn held_game<'a>(e: &Env, at: At, check: Option<CheckAt>, open: &str, size: egui::Vec2) -> Harness<'a, Window> {
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
+    let rip = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let checked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    reg.add(HeldRip { info: drt_steps::real::game::rip_info(), at, held: rip.clone() });
+    reg.add(HeldCheck { at: check.unwrap_or(CheckAt::Verified), held: checked.clone() });
+    let mut h = window_on(e, reg, true, 0.0, size, 1.0);
+    h.get_by_label_contains("Games,").click();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    until(&mut h, "Rip held", |_| rip.load(std::sync::atomic::Ordering::SeqCst));
+    if at == At::HandedOn {
+        until(&mut h, "Rip to finish", |a| a.m.snapshot(a.sel).steps["g_rip"].state == StepState::Ok);
+    }
+    if check.is_some() {
+        until(&mut h, "Check held", |_| checked.load(std::sync::atomic::Ordering::SeqCst));
+    }
+    h.run_steps(3);
+    open_id(&mut h, open);
+    h.run_steps(3);
+    h
 }
 
 /// redumper's first read of a CD as Image logs it, its progress lines fed
@@ -4425,11 +4579,44 @@ impl HeldRip {
         let item = Item::new(drt_steps::real::data::DUMP, ItemKind::Dump, disc.label.clone(), None, None).knowing(disc);
         cx.log(format!("redumper dump --drive=/dev/sr0 --retries=20 --image-name={}", disc.label));
         match self.at {
-            At::Reading => {
+            At::Reading | At::Crawling => {
                 // Errors met so far, up to where it is, then reading on.
                 slips(cx, 160, 0.10, 0.70, 141_500);
                 cx.map(serde_json::to_value(held_map(160, 0.10, 0.70, 141_500 + 150 * 18, false, 0)).ok());
                 Self::read(cx, &item, 141_500, 4.5, 2, 37).await;
+                if self.at == At::Crawling {
+                    let live = drt_steps::real::redumper::Live { at: 144_200, of: CD_SECTORS, crawling: true, ..Default::default() };
+                    cx.now(serde_json::to_value(live).ok());
+                }
+            }
+            At::HandedOn => {
+                cx.map(serde_json::to_value(handed_map().0).ok());
+                for l in [
+                    "*** DUMP (time check: 0s)",
+                    "media errors:",
+                    "SCSI: 790272 samples",
+                    "C2: 0 samples",
+                    "Q: 0",
+                    "*** REFINE (time check: 0s)",
+                    "correction statistics:",
+                    "SCSI: 770280 samples",
+                    "C2: 0 samples",
+                    "Q: 0 sectors",
+                    "*** END (time check: 1s)",
+                    "*** SPLIT (time check: 0s)",
+                    "errors detected, track: 1, sectors: {SKIP: 34, C2: 0}, samples: {SKIP: 19992, C2: 0}",
+                    "*** END (time check: 1s)",
+                    "*** INFO (time check: 0s)",
+                    "*** END (time check: 1s)",
+                ] {
+                    cx.log(l);
+                }
+                let note = drt_steps::real::data::made_anyway_note(HANDED_ON);
+                cx.item(&item, ItemState::Ok, note.clone());
+                cx.status("633 MB", note);
+                let mut made = item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))));
+                made.context_mut().add(drt_engine::Subject::Disc, drt_steps::real::data::UNREADABLE, HANDED_ON.to_string(), "Rip");
+                outlet.send(made).await;
             }
             At::Clean => {
                 slips(cx, 0, 0.0, 1.0, CD_SECTORS);
@@ -4463,7 +4650,7 @@ impl HeldRip {
                 ] {
                     cx.log(l);
                 }
-                cx.item(&item, ItemState::Ok, "read, but 25 sectors came back wrong");
+                cx.item(&item, ItemState::Ok, "read, but 25 sectors read wrong");
                 cx.status("682 MB", "");
                 outlet.send(item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))))).await;
             }
@@ -4538,8 +4725,8 @@ impl HeldRip {
             }
         }
         match self.at {
-            At::Done | At::Clean | At::Wrong | At::Spots => cx.status(video::titles_word(items.len()), ""),
-            At::Reading => {
+            At::Done | At::Clean | At::Wrong | At::Spots | At::HandedOn => cx.status(video::titles_word(items.len()), ""),
+            At::Reading | At::Crawling => {
                 let it = &items[busy];
                 cx.status(format!("{busy} of {}", video::titles_word(items.len())), it.label.clone());
                 cx.item(it, ItemState::Busy, "saving to mkv file 20%");
@@ -4573,7 +4760,7 @@ impl drt_engine::Step for HeldRip {
         }
         self.held.store(true, std::sync::atomic::Ordering::SeqCst);
         // Done ends; the others stay where they are.
-        if !matches!(self.at, At::Done | At::Clean | At::Wrong | At::Spots) {
+        if !matches!(self.at, At::Done | At::Clean | At::Wrong | At::Spots | At::HandedOn) {
             cx.cancelled().await;
         }
         Ok(())
@@ -4629,6 +4816,13 @@ fn times_said(h: &Harness<Window>) -> String {
     times
 }
 
+/// The whole of the text that says `part`.
+fn text_of(h: &Harness<Window>, part: &str) -> String {
+    let n = h.get_by_label_contains(part);
+    let a = n.accesskit_node();
+    a.label().or_else(|| a.value()).map(|s| s.to_string()).unwrap_or_default()
+}
+
 /// Whether a list row says all of `parts`.
 fn row_says(h: &Harness<Window>, parts: &[&str]) -> bool {
     h.get_all_by_role(Role::ListItem).filter_map(|n| n.accesskit_node().label()).any(|l| parts.iter().all(|p| l.contains(p)))
@@ -4648,39 +4842,41 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                 ("data" | "game", At::Reading) => {
                     let ring = h.get_by_label_contains("The disc, 4").accesskit_node().label().unwrap();
                     assert!(ring.ends_with("% read"), "{ring}");
-                    h.get_by_label("Pass 1 · Reading");
+                    assert!(h.query_by_label("Pass 1 · Reading").is_none(), "the row says the pass");
                     let times = times_said(&h);
                     assert!(times.ends_with('×'), "{times}");
                     h.get_by_label_contains("Sector 14");
-                    assert!(row_says(&h, &["Read the disc", "SCSI 2, C2 37", "Reading"]), "the errors so far");
+                    // The errors so far, in sectors: the drive's counts are the log's.
+                    assert!(row_says(&h, &["1, Read the disc", "140 bad so far"]), "the errors so far");
+                    assert!(h.query_by_label_contains("SCSI").is_none());
                     // Every sector as a map: how far it's read, what's
-                    // wrong where, and how far from the centre.
-                    h.get_by_label("Map of the disc: 144,060 good · 58 with C2 errors · 82 unreadable · 188,799 not read yet");
-                    h.get_by_label("Bad sectors about 3.2–3.3 cm and 3.4–4.3 cm from the centre");
-                    h.get_by_label("Errors repeat once per turn: a single spot about 3.9 cm out, not a whole ring.");
+                    // wrong where, and how far from the centre, in a line.
+                    h.get_by_label("Map of the disc: 144,060 good · 58 read with errors · 82 unreadable · 188,799 not read yet");
+                    let line = text_of(&h, "So far ");
+                    assert!(line.contains(" cm") && line.contains("once per turn") && line.ends_with("Look there for a scratch."), "{line}");
                     assert!(h.query_by_label_contains("Most read errors").is_none(), "said in centimetres, under the map");
                 }
                 ("data" | "game", At::Done) => {
                     h.get_by_label("The disc, 682 MB read");
                     h.get_by_label("Bad parts re-read");
                     // Every bad part put right, and where they were.
-                    h.get_by_label("Map of the disc: 332,827 good · 172 recovered on a re-read");
-                    h.get_by_label("Sectors re-read about 3.5–4.7 cm from the centre");
-                    h.get_by_label("Read errors, put right or not, repeat once per turn: a single spot about 3.9 cm out, not a whole ring.");
-                    assert!(row_says(&h, &["Read the disc", "SCSI 105840, C2 211731", "Errors"]));
-                    assert!(row_says(&h, &["Re-read bad parts", "All put right"]));
-                    assert!(row_says(&h, &["Check every sector", "None wrong"]));
+                    h.get_by_label("Map of the disc: 332,827 good · 172 put right on a re-read");
+                    let line = text_of(&h, " patch");
+                    assert!(line.contains("single spot, once per turn"), "{line}");
+                    assert!(row_says(&h, &["1, Read the disc", "172 bad"]));
+                    assert!(row_says(&h, &["2, Re-read bad parts", "172 put right", "20 tries each"]));
+                    assert!(row_says(&h, &["Test every sector", "None read wrong"]));
                     // Only what Rip knows: nothing of Redump's here (Check, on
                     // the canvas, says whether it matches).
                     assert!(!row_says(&h, &["Redump"]) && !row_says(&h, &["erified"]));
                 }
                 ("data" | "game", At::Failed) => {
-                    h.get_by_label("The disc, 3 unreadable");
+                    h.get_by_label("The disc, — not made");
+                    h.get_by_label("3 sectors couldn't be read");
                     let map = h.get_by_label_contains("Map of the disc: ").accesskit_node().label().unwrap();
-                    assert!(map.contains(" recovered on a re-read · 3 unreadable"), "{map}");
-                    assert!(row_says(&h, &[label, "3 sectors couldn't be read"]));
-                    assert!(row_says(&h, &["Re-read bad parts", "SCSI 1764 left", "Some left"]));
-                    assert!(row_says(&h, &["Write the tracks", "3 skipped"]));
+                    assert!(map.contains(" put right on a re-read · 3 unreadable"), "{map}");
+                    assert!(row_says(&h, &["2, Re-read bad parts", "put right"]));
+                    assert!(row_says(&h, &["3, Write the tracks", "3 unreadable"]));
                     h.get_by_label(&format!("Re-read bad parts, {label}"));
                     h.get_by_label(&format!("Make the image anyway, {label}"));
                     // A game's disc can't be left out; a data disc's can.
@@ -4707,14 +4903,14 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
                     h.get_by_label("Read again, S03E02 Proshai, Livushka");
                     h.get_by_label("Skip this video, S03E02 Proshai, Livushka");
                 }
-                (_, At::Clean | At::Wrong | At::Spots) => unreachable!(),
+                (_, At::Clean | At::Wrong | At::Spots | At::Crawling | At::HandedOn) => unreachable!(),
             }
             shot(&mut h, &format!("rip-{kind}-{word}{tag}"));
-            // The same, every sector in rows.
+            // The same, the disc drawn to scale.
             if kind == "game" && at == At::Reading {
-                click(&mut h, "Map: Sectors");
+                click(&mut h, "Map: Disc");
                 h.get_by_label_contains("Map of the disc: 144,060 good");
-                shot(&mut h, &format!("rip-{kind}-{word}-sectors{tag}"));
+                shot(&mut h, &format!("rip-{kind}-{word}-disc{tag}"));
             }
         }
     }
@@ -4723,34 +4919,40 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
     for (at, word) in [(At::Clean, "clean"), (At::Wrong, "wrong"), (At::Spots, "spots")] {
         let e = env();
         let (mut h, _) = held_rip(&e, "game", at, size);
-        // Drawn as a disc first, a switch to every sector above it.
-        assert_eq!(app(&h).map_view, drt_app::sectormap::MapView::Disc);
-        h.get_by_label("Map: Disc");
+        // Every sector in rows first, a small switch to the disc drawn to
+        // scale under the heading.
+        assert_eq!(app(&h).map_view, drt_app::sectormap::MapView::Sectors);
+        h.get_by_label("Where on the disc");
+        h.get_by_label("Map: Sectors");
         if at == At::Spots {
-            h.get_by_label("Read errors, put right or not, repeat once per turn: single spots about 4.4 cm and 4.9 cm out, not whole rings.");
-            // Each spot's ring dashed, and what that means.
-            h.get_by_label("a single spot somewhere on this ring");
+            let line = text_of(&h, " patch");
+            assert!(line.contains("4.4 cm and 4.9 cm") && line.contains("single spots, once per turn"), "{line}");
+            assert!(h.query_by_label("a single spot somewhere on this ring").is_none(), "only on the disc");
+            // Only Rip's own work: nothing Check and fix repaired.
             let map = h.get_by_label_contains("Map of the disc: ").accesskit_node().label().unwrap();
-            assert!(map.contains(" recovered on a re-read · 3 repaired by error correction · 25 came back wrong"), "{map}");
+            assert!(map.contains(" put right on a re-read · 25 read wrong") && !map.contains("repaired"), "{map}");
         } else if at == At::Clean {
             h.get_by_label("The disc, 682 MB read");
             h.get_by_label("Read cleanly");
             assert!(h.query_by_label_contains("bad sector").is_none() && h.query_by_label_contains("read errors").is_none());
             h.get_by_label("Map of the disc: 332,999 good");
-            assert!(h.query_by_label_contains("Bad sectors").is_none() && h.query_by_label_contains("once per turn").is_none());
+            assert!(h.query_by_label_contains("patch").is_none() && h.query_by_label_contains("once per turn").is_none());
         } else {
             h.get_by_label("The disc, 682 MB not clean");
-            h.get_by_label("25 sectors came back wrong");
+            h.get_by_label("25 sectors read wrong");
             // The sectors found wrong from Rip's log, over its map.
-            h.get_by_label("Map of the disc: 332,722 good · 252 recovered on a re-read · 25 came back wrong");
-            h.get_by_label("Bad sectors about 4.5 cm and 4.7–5.1 cm from the centre");
+            h.get_by_label("Map of the disc: 332,722 good · 252 put right on a re-read · 25 read wrong");
+            assert!(row_says(&h, &["Test every sector", "25 read wrong"]));
             assert!(h.query_by_label_contains("25 bad sectors").is_none(), "the count is in the headline once");
         }
         shot(&mut h, &format!("rip-game-{word}{tag}"));
         if at != At::Wrong {
-            click(&mut h, "Map: Sectors");
-            assert!(h.query_by_label("a single spot somewhere on this ring").is_none(), "only on the disc");
-            shot(&mut h, &format!("rip-game-{word}-sectors{tag}"));
+            click(&mut h, "Map: Disc");
+            if at == At::Spots {
+                // Each spot's ring dashed, and what that means.
+                h.get_by_label("a single spot somewhere on this ring");
+            }
+            shot(&mut h, &format!("rip-game-{word}-disc{tag}"));
         }
     }
     // One title: the emptiest list.
@@ -4767,12 +4969,12 @@ fn the_map_s_view_is_remembered() {
     use drt_app::sectormap::MapView;
     let e = env();
     let (mut h, _) = held_rip(&e, "game", At::Clean, egui::vec2(1280.0, 720.0));
+    assert_eq!(app(&h).map_view, MapView::Sectors, "every sector first");
+    click(&mut h, "Map: Disc");
     assert_eq!(app(&h).map_view, MapView::Disc);
-    click(&mut h, "Map: Sectors");
-    assert_eq!(app(&h).map_view, MapView::Sectors);
     drop(h);
     let h = window(&e, None, true, 0.0);
-    assert_eq!(app(&h).map_view, MapView::Sectors);
+    assert_eq!(app(&h).map_view, MapView::Disc);
 }
 
 /// A map with no distances (not a CD) has only its sectors: no switch.
@@ -4785,7 +4987,7 @@ fn a_map_without_distances_has_no_disc_view() {
     }
     let m = s.map(None, false);
     let h = Harness::builder().with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts())).build_ui(move |ui| {
-        drt_app::sectormap::show(ui, &drt_app::theme::Pal::light(), &m, 0.0, drt_app::sectormap::MapView::Disc);
+        drt_app::sectormap::show(ui, &drt_app::theme::Pal::light(), &m, 0.0, drt_app::sectormap::MapView::Disc, drt_app::sectormap::Whose::Rip);
     });
     h.get_by_label("Map of the disc: 2,000,000 good");
     assert!(h.query_by_label("Map: Disc").is_none());
@@ -4803,9 +5005,9 @@ fn an_image_that_needs_you_is_settled_from_its_row() {
         click(&mut h, "Start");
         until(&mut h, "the bad sectors", |a| a.m.snapshot(a.sel).steps["d_image"].state == StepState::Bad);
         open_id(&mut h, "d_image");
-        h.get_by_label("The disc, 3 unreadable");
-        assert!(row_says(&h, &["ENCARTA98", "3 sectors couldn't be read"]));
-        assert!(row_says(&h, &["Read the disc", "SCSI 1764", "Errors"]));
+        h.get_by_label("The disc, — not made");
+        h.get_by_label("3 sectors couldn't be read");
+        assert!(row_says(&h, &["1, Read the disc", "Errors"]));
         click(&mut h, &format!("{option}, ENCARTA98"));
         until(&mut h, "the image settled", |a| !matches!(a.m.snapshot(a.sel).steps["d_image"].items[0].state, ItemState::Bad | ItemState::Busy));
         h.run_steps(3);
@@ -4814,7 +5016,7 @@ fn an_image_that_needs_you_is_settled_from_its_row() {
             "reread" => {
                 h.get_by_label("Bad parts re-read");
                 assert!(row_says(&h, &["Re-read bad parts", "All put right"]));
-                assert!(row_says(&h, &["Check every sector", "None wrong"]));
+                assert!(row_says(&h, &["Test every sector", "None read wrong"]));
             }
             "kept" => {
                 h.get_by_label("The disc, 682 MB kept");
@@ -5516,4 +5718,75 @@ fn stop_says_stopping_at_once() {
     }
     until(&mut h, "the stop", |a| a.m.snapshot(0).finished || a.m.snapshot(0).stopped);
     assert!(!app(&h).m.stopping(0), "and not once it has");
+}
+
+/// Rip and Check and fix for a game, in one shape (docs/ux/game-rip-sidebar.md),
+/// in the four states it was drawn in: A, Rip reading through errors; B,
+/// Rip done, its unreadable sectors handed on; C, Check and fix verified;
+/// D, Check and fix holding the copy for you. Each at 1280 × 720 and
+/// 1920 × 1080.
+#[test]
+fn the_game_rip_sidebars_in_their_four_states() {
+    for (size, tag) in [(egui::vec2(1280.0, 720.0), ""), (egui::vec2(1920.0, 1080.0), "-1920")] {
+        // A: the read slowed to a crawl; the window's Stop, no other.
+        let e = env();
+        let mut h = held_game(&e, At::Crawling, None, "g_rip", size);
+        h.get_by_label("Slowed by read errors");
+        h.get_by_label(drt_steps::real::redumper::CRAWLING);
+        assert_eq!(h.get_all_by_label("Stop").count(), 1);
+        h.get_by_label("Open tray");
+        assert!(row_says(&h, &["1, Read the disc", "140 bad so far"]));
+        h.get_by_label("Where on the disc");
+        shot(&mut h, &format!("ripside-a-reading{tag}"));
+
+        // B: made with 34 sectors blank, for Check and fix.
+        let e = env();
+        let mut h = held_game(&e, At::HandedOn, Some(CheckAt::Verified), "g_rip", size);
+        h.get_by_label("The disc, 633 MB made");
+        h.get_by_label("34 sectors couldn't be read");
+        h.get_by_label("Left blank, for Check and fix to try again");
+        assert!(row_says(&h, &["1, Read the disc", "1,370 bad"]));
+        assert!(row_says(&h, &["2, Re-read bad parts", "1,336 put right", "20 tries each"]));
+        assert!(row_says(&h, &["3, Write the tracks", "34 left blank"]));
+        assert!(row_says(&h, &["4, Test every sector", "No others wrong"]));
+        h.get_by_label("Map of the disc: 267,789 good · 1,336 put right on a re-read · 34 unreadable");
+        h.get_by_label("Two patches, about 4.4 cm and 4.9 cm out: each a single spot, once per turn.");
+        assert!(h.query_by_label_contains("SCSI").is_none(), "the drive's counts are the log's");
+        // Nothing needs you: it went on to Check and fix, as set.
+        assert!(h.query_by_label_contains("Make the image anyway").is_none());
+        shot(&mut h, &format!("ripside-b-handed-on{tag}"));
+
+        // C: Check and fix put the 34 right, and it's Redump's.
+        open_id(&mut h, "g_check");
+        h.run_steps(3);
+        h.get_by_label("The disc, 633 MB verified");
+        h.get_by_label("Verified");
+        h.get_by_label("Matches Redump's Lantern Keep (Europe) (Disc 2)");
+        assert!(row_says(&h, &["From Rip: the image, 34 sectors blank"]));
+        assert!(row_says(&h, &["1, Compare with Redump", "Doesn't match"]));
+        assert!(row_says(&h, &["2, Read bad sectors again", "31 put right", "up to 10 tries each"]));
+        assert!(row_says(&h, &["3, Rip again and combine", "3 taken from rip 2", "rip 2"]));
+        assert!(row_says(&h, &["4, Compare with Redump", "Matches"]));
+        h.get_by_label("Map of the disc: 269,125 as Rip made them · 34 put right");
+        h.get_by_label("Size: Redump 269,159 sectors, this copy 269,159 sectors, the same");
+        assert!(h.query_by_label_contains("Compares the copy's checksums").is_none(), "no sentence under the header");
+        shot(&mut h, &format!("ripside-c-verified{tag}"));
+
+        // D: still 3 it can't read; only what can still help.
+        let e = env();
+        let mut h = held_game(&e, At::HandedOn, Some(CheckAt::Holding), "g_check", size);
+        h.get_by_label("The disc, 633 MB not verified");
+        h.get_by_label("Doesn't match Redump");
+        h.get_by_label("3 sectors still not put right, after 4 rips");
+        h.get_by_label("The drive was read with general settings: redumper doesn't know it. Another drive may read these 3.");
+        h.get_by_label("Repair with the disc's error correction, SLES_147.11");
+        h.get_by_label("Keep the best combination (not verified), SLES_147.11");
+        h.get_by_label("Skip this disc, SLES_147.11");
+        assert!(h.query_by_label_contains("Fix bad sectors").is_none() && h.query_by_label_contains("Rip again and combine again").is_none(), "what's been done isn't offered again");
+        assert!(row_says(&h, &["3, Rip again and combine", "Nothing taken", "rips 2, 3 and 4"]));
+        assert!(row_says(&h, &["4, Compare with Redump", "Doesn't match"]));
+        h.get_by_label("Map of the disc: 269,125 as Rip made them · 31 put right · 3 unreadable");
+        h.get_by_label_contains("SHA-1: Redump 3a647314…, this copy 91c0d2e5…, different");
+        shot(&mut h, &format!("ripside-d-holding{tag}"));
+    }
 }

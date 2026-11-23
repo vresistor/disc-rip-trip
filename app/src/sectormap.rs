@@ -1,12 +1,13 @@
 //! The map of a disc's sectors in a sidebar: a legend with counts and
-//! where the bad sectors are, then one of two views of it. Disc, for a CD:
-//! a drawing to scale, in rings ([`crate::discview`]). Sectors: blocks in
-//! rows, each the worst of its sectors, with how far from the centre each
-//! row lies beside it. Draws any [`SectorMap`], wherever it came from
-//! (Rip's read, Check and fix).
+//! where on the disc things went wrong, then one of two views of it.
+//! Sectors, the first: blocks in rows, each the worst of its sectors, with
+//! how far from the centre each row lies beside it. Disc, for a CD: a
+//! drawing to scale, in rings ([`crate::discview`]). Draws any
+//! [`SectorMap`], in the words of the step it's from (Rip's read, Check
+//! and fix's).
 
 use crate::theme::{font, mix, tnum, Pal};
-use drt_steps::map::{cm, turn_line, where_line, Mark, SectorMap, KINDS};
+use drt_steps::map::{cm, place_line, Mark, SectorMap, KINDS};
 use egui::{pos2, vec2, Color32, Rect, RichText, Sense, Stroke, Ui};
 
 /// Blocks to a row, at most and at least.
@@ -73,16 +74,28 @@ pub fn draw(pt: &egui::Painter, r: Rect, m: Mark, p: &Pal) {
     }
 }
 
-/// What a mark's sectors are called, in the legend and on hover.
-fn word(m: Mark) -> &'static str {
-    match m {
-        Mark::NotRead => "not read yet",
-        Mark::Good => "good",
-        Mark::Recovered => "recovered on a re-read",
-        Mark::Repaired => "repaired by error correction",
-        Mark::C2 => "with C2 errors",
-        Mark::Wrong => "came back wrong",
-        Mark::Unreadable => "unreadable",
+/// Whose map it is: each step says only what it did itself. Rip read
+/// the disc; Check and fix took Rip's image and put what it could right.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Whose {
+    #[default]
+    Rip,
+    Check,
+}
+
+/// What a mark's sectors are called, in the legend and on hover, in the
+/// words of the step whose map it is.
+fn word(m: Mark, whose: Whose) -> &'static str {
+    match (m, whose) {
+        (Mark::NotRead, _) => "not read yet",
+        (Mark::Good, Whose::Rip) => "good",
+        (Mark::Good, Whose::Check) => "as Rip made them",
+        (Mark::Recovered, Whose::Rip) => "put right on a re-read",
+        (Mark::Recovered, Whose::Check) => "put right",
+        (Mark::Repaired, _) => "repaired by error correction",
+        (Mark::C2, _) => "read with errors",
+        (Mark::Wrong, _) => "read wrong",
+        (Mark::Unreadable, _) => "unreadable",
     }
 }
 
@@ -95,15 +108,16 @@ fn thousands(n: u64) -> String {
 
 /// The counts in words: *268,850 good · 140 unreadable · 11 with C2
 /// errors*; only those there are.
-pub fn counts_line(c: &[u64; KINDS]) -> String {
-    ORDER.iter().filter(|m| c[**m as usize] > 0).map(|m| format!("{} {}", thousands(c[*m as usize]), word(*m))).collect::<Vec<_>>().join(" · ")
+pub fn counts_line(c: &[u64; KINDS], whose: Whose) -> String {
+    ORDER.iter().filter(|m| c[**m as usize] > 0).map(|m| format!("{} {}", thousands(c[*m as usize]), word(*m, whose))).collect::<Vec<_>>().join(" · ")
 }
 
-/// Which view of the map: the disc drawn to scale, or every sector in rows.
+/// Which view of the map: every sector in rows (the first), or the disc
+/// drawn to scale.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MapView {
-    #[default]
     Disc,
+    #[default]
     Sectors,
 }
 
@@ -121,57 +135,58 @@ impl MapView {
 }
 
 /// What hovering block `b` says: its sectors, how far out, and what's in it.
-pub fn hover_text(m: &SectorMap, b: usize) -> String {
+pub fn hover_text(m: &SectorMap, b: usize, whose: Whose) -> String {
     let (a, z) = m.range(b);
-    range_text(m, a, z, &m.counts(b))
+    range_text(m, a, z, &m.counts(b), whose)
 }
 
 /// Sectors `a` to `z`: which, how far from the centre, and how many of
 /// each kind (`c`).
-pub fn range_text(m: &SectorMap, a: u64, z: u64, c: &[u32; KINDS]) -> String {
+pub fn range_text(m: &SectorMap, a: u64, z: u64, c: &[u32; KINDS], whose: Whose) -> String {
     let mut lines = vec![if a == z { format!("Sector {}", thousands(a)) } else { format!("Sectors {}–{}", thousands(a), thousands(z)) }];
     if let Some(g) = m.geometry() {
         let (ra, rz) = (cm(g.radius(a as f64)), cm(g.radius(z as f64 + 1.0)));
         lines.push(if ra == rz { format!("About {ra} from the centre") } else { format!("About {}–{rz} from the centre", ra.trim_end_matches(" cm")) });
     }
-    lines.push(counts_line(&c.map(|x| x as u64)));
+    lines.push(counts_line(&c.map(|x| x as u64), whose));
     lines.join("\n")
 }
 
-/// Draws the map: the legend and where the bad sectors are, once; then,
-/// for a CD, a switch between the disc and its sectors, and the one
-/// chosen (`view`). Anything else has only its sectors, since how far out
-/// they lie isn't known. Gives the view picked, when one is.
-pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64, view: MapView) -> Option<MapView> {
+/// Draws the map, under its heading: for a CD, a small switch between
+/// every sector in rows and the disc drawn to scale; the key with its
+/// counts and where on the disc things went wrong, once; then the one
+/// picture chosen (`view`). Anything but a CD has only its sectors, since
+/// how far out they lie isn't known. Gives the view picked, when one is.
+pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64, view: MapView, whose: Whose) -> Option<MapView> {
     if m.is_empty() {
         return None;
     }
     let mut picked = None;
     let disc = m.geometry().is_some();
     if disc {
-        let views = [MapView::Disc, MapView::Sectors];
+        let views = [MapView::Sectors, MapView::Disc];
         let at = views.iter().position(|v| *v == view);
-        if let Some(k) = crate::widgets::segmented(ui, p, "Map", &["Disc", "Sectors"], at, true) {
+        if let Some(k) = crate::widgets::segmented_small(ui, p, "Map", &["Sectors", "Disc"], at) {
             picked = Some(views[k]);
         }
         ui.add_space(8.0);
     }
     // What it comes to first, then the drawing.
-    ui.scope(|ui| legend(ui, p, m));
-    for line in [where_line(m), turn_line(m)].into_iter().flatten() {
+    ui.scope(|ui| legend(ui, p, m, whose));
+    if let Some(line) = place_line(m) {
         ui.add(egui::Label::new(RichText::new(line).font(font(13.0, 400)).color(p.muted)).wrap());
     }
     ui.add_space(8.0);
     if disc && picked.unwrap_or(view) == MapView::Disc {
-        crate::discview::show(ui, p, m, t);
+        crate::discview::show(ui, p, m, t, whose);
     } else {
-        grid(ui, p, m, t);
+        grid(ui, p, m, t, whose);
     }
     picked
 }
 
 /// Every sector: the blocks in rows, the distances beside them.
-fn grid(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
+fn grid(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64, whose: Whose) {
     let geo = m.geometry();
     let w = ui.available_width();
     let room = w - if geo.is_some() { SCALE_W } else { 0.0 };
@@ -181,7 +196,7 @@ fn grid(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
     let n = m.blocks();
     let rows = n.div_ceil(cols);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, rows as f32 * step - GAP), Sense::hover());
-    let label = format!("Map of the disc: {}", counts_line(&m.totals));
+    let label = format!("Map of the disc: {}", counts_line(&m.totals, whose));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Image, true, label.clone()));
     let pt = ui.painter();
     let at = |b: usize| pos2(rect.left() + (b % cols) as f32 * step, rect.top() + (b / cols) as f32 * step);
@@ -232,14 +247,14 @@ fn grid(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
         if cx >= 0.0 && (cx as usize) < cols && cy >= 0.0 && b < n {
             let r = Rect::from_min_size(at(b), vec2(side, side));
             ui.painter().rect_stroke(r.expand(1.0), 2.0, Stroke::new(1.5, p.ink), egui::StrokeKind::Outside);
-            resp.on_hover_text_at_pointer(hover_text(m, b));
+            resp.on_hover_text_at_pointer(hover_text(m, b, whose));
         }
     }
     ui.add_space(8.0);
 }
 
 /// A swatch for each kind of sector there is, with how many.
-fn legend(ui: &mut Ui, p: &Pal, m: &SectorMap) {
+fn legend(ui: &mut Ui, p: &Pal, m: &SectorMap, whose: Whose) {
     // Rows only as tall as a line of text.
     ui.spacing_mut().interact_size.y = 16.0;
     ui.spacing_mut().item_spacing.y = 4.0;
@@ -247,7 +262,7 @@ fn legend(ui: &mut Ui, p: &Pal, m: &SectorMap) {
         ui.spacing_mut().item_spacing.x = 14.0;
         // Each swatch with its count, kept together on a line.
         for k in ORDER.iter().copied().filter(|k| m.total(*k) > 0) {
-            let g = ui.painter().layout_no_wrap(format!("{} {}", thousands(m.total(k)), word(k)), tnum(13.0, 400), p.ink);
+            let g = ui.painter().layout_no_wrap(format!("{} {}", thousands(m.total(k)), word(k, whose)), tnum(13.0, 400), p.ink);
             let (r, _) = ui.allocate_exact_size(vec2(16.0 + g.size().x, g.size().y.max(16.0)), Sense::hover());
             draw(ui.painter(), Rect::from_min_size(pos2(r.left(), r.center().y - 6.0), vec2(12.0, 12.0)), k, p);
             ui.painter().galley(pos2(r.left() + 16.0, r.center().y - g.size().y / 2.0), g, p.ink);
@@ -266,7 +281,9 @@ mod tests {
         c[Mark::Good as usize] = 268_850;
         c[Mark::Unreadable as usize] = 140;
         c[Mark::C2 as usize] = 11;
-        assert_eq!(counts_line(&c), "268,850 good · 11 with C2 errors · 140 unreadable");
+        assert_eq!(counts_line(&c, Whose::Rip), "268,850 good · 11 read with errors · 140 unreadable");
+        c[Mark::Recovered as usize] = 3;
+        assert_eq!(counts_line(&c, Whose::Check), "268,850 as Rip made them · 3 put right · 11 read with errors · 140 unreadable");
         let mut s = drt_steps::map::Sectors::new(300_000);
         for k in 0..300_000 {
             s.set(k, Mark::Good);
@@ -274,6 +291,6 @@ mod tests {
         s.set(147_108, Mark::Unreadable);
         let m = s.map(None, true);
         let b = (147_108 / m.per_block) as usize;
-        assert_eq!(hover_text(&m, b), "Sectors 147,000–147,299\nAbout 4.4 cm from the centre\n299 good · 1 unreadable");
+        assert_eq!(hover_text(&m, b, Whose::Rip), "Sectors 147,000–147,299\nAbout 4.4 cm from the centre\n299 good · 1 unreadable");
     }
 }

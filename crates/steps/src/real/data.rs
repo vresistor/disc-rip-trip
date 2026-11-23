@@ -695,11 +695,11 @@ pub fn image_note(size: &str, forced: bool, unreadable: u64, refined: bool, prob
     match (forced, unreadable, wrong) {
         (true, 0, 0) => format!("kept anyway, {size}"),
         (true, n, 0) => format!("kept anyway, {} left blank", plural(n, "unreadable sector")),
-        (true, n, w) => format!("kept anyway, {} left blank, {} came back wrong", plural(n, "unreadable sector"), plural(w, "sector")),
+        (true, n, w) => format!("kept anyway, {} left blank, {} read wrong", plural(n, "unreadable sector"), plural(w, "sector")),
         (false, _, 0) if refined => format!("✓ {size}, bad parts re-read"),
         (false, _, 0) => format!("✓ {size}, read cleanly"),
         // The drive didn't know: re-reading here won't help; another drive might.
-        (false, _, w) => format!("read, but {} came back wrong", plural(w, "sector")),
+        (false, _, w) => format!("read, but {} read wrong", plural(w, "sector")),
     }
 }
 
@@ -1278,7 +1278,7 @@ mod tests {
         assert_eq!(image_note("682 MB", false, 0, true, &[("EDC", 0)]), "✓ 682 MB, bad parts re-read");
         // Silent Hill: no read the drive admitted to, 18 sectors wrong on inspection.
         let silent_hill = [("invalid sync", 0), ("MSF", 70), ("ECC", 6), ("EDC", 18)];
-        assert_eq!(image_note("630 MB", false, 0, false, &silent_hill), "read, but 70 sectors came back wrong");
+        assert_eq!(image_note("630 MB", false, 0, false, &silent_hill), "read, but 70 sectors read wrong");
         assert_eq!(image_note("630 MB", true, 1, false, &[]), "kept anyway, 1 unreadable sector left blank");
         assert_eq!(image_note("630 MB", true, 0, false, &[]), "kept anyway, 630 MB", "forcing nothing isn't reading cleanly either");
     }

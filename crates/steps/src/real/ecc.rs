@@ -360,6 +360,7 @@ pub fn summary(found: &[Found]) -> Repairing {
         form2: n(&|f| f.repair == Err(Cannot::Form2)),
         beyond: n(&|f| matches!(f.repair, Err(Cannot::TooDamaged | Cannot::WrongAddress | Cannot::NotData | Cannot::NotBad))),
         verified: false,
+        secs: None,
     }
 }
 

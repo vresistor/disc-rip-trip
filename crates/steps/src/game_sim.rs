@@ -454,6 +454,7 @@ impl game::Reread for Reread {
             left: if right { vec![] } else { vec![98_000, 99_000, 120_000, 136_000] },
             left_out: vec![],
             verified: false,
+            secs: None,
         };
         let cat = redump::parse(GAME_DAT.as_bytes())?;
         let theirs = cat.by_serial(dump.context().get(Subject::Disc, "serial").unwrap_or("")).first().map(|g| g.roms.clone()).unwrap_or_default();

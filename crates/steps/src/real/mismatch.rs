@@ -321,6 +321,9 @@ pub struct Fixing {
     /// image's, or none: read wrong.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_differently: Vec<i64>,
+    /// How long it took, in seconds, when it was timed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secs: Option<u64>,
 }
 
 impl Fixing {
@@ -337,6 +340,7 @@ impl Fixing {
             verified: false,
             read_alike: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { alike, .. } if alike > 0)).map(|s| s.lba).collect(),
             read_differently: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { alike: 0, differed: true, .. })).map(|s| s.lba).collect(),
+            secs: None,
         }
     }
 
@@ -385,6 +389,9 @@ pub struct Repairing {
     pub beyond: u64,
     /// Its checksums are Redump's.
     pub verified: bool,
+    /// How long it took, in seconds, when it was timed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secs: Option<u64>,
 }
 
 impl Repairing {
@@ -439,6 +446,10 @@ pub struct Combination {
     pub left_out: Vec<String>,
     /// Its checksums are Redump's.
     pub verified: bool,
+    /// How long ripping again and combining took, every rip, in seconds,
+    /// when it was timed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secs: Option<u64>,
 }
 
 impl Combination {
@@ -455,6 +466,7 @@ impl Combination {
             left: t.still_bad.iter().take(10).copied().collect(),
             left_out: c.left_out.iter().map(|(n, why)| format!("Rip {n} was left out: {why}.")).collect(),
             verified,
+            secs: None,
         }
     }
 
@@ -479,7 +491,8 @@ impl Mismatch {
         self.files.iter().all(|p| p.expected.is_some() && p.got.is_some())
     }
 
-    fn same_size(&self) -> bool {
+    /// Whether it has Redump's copy's files, each its size.
+    pub fn same_size(&self) -> bool {
         self.same_count() && self.files.iter().all(Pair::size_ok)
     }
 
@@ -1034,7 +1047,7 @@ CD-ROM [GAME_1.bin]:
         let opts = |m: &Mismatch| m.options().into_iter().map(|o| o.0).collect::<Vec<_>>();
         let labels = |m: &Mismatch| m.options().into_iter().map(|o| o.1).collect::<Vec<_>>();
         assert_eq!(labels(&m)[2], "Repair with the disc's error correction");
-        let r = Repairing { bad: 6, repaired: 3, held_back: 1, unreadable: 1, form2: 1, beyond: 0, verified: false };
+        let r = Repairing { bad: 6, repaired: 3, held_back: 1, unreadable: 1, form2: 1, beyond: 0, verified: false, secs: None };
         let rep = m.clone().repairing(Some(r.clone()));
         assert_eq!(rep.short(), "3 sectors repaired by error correction, 3 sectors still bad");
         assert_eq!(

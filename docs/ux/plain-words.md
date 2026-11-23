@@ -181,7 +181,7 @@ November 2026.
 | Where | Now | Proposed | Why |
 |---|---|---|---|
 | Image note ⚑ ("refined") | ✓ 682 MB, refined | ✓ 682 MB, bad parts re-read | Matches the button. |
-| Image note | imaged, but N sectors read wrong (EDC 3, ECC 1) | read, but N sectors came back wrong | The error codes go to the log only. |
+| Image note | imaged, but N sectors read wrong (EDC 3, ECC 1) | read, but N sectors read wrong | The error codes go to the log only. |
 | Keep family ⚑ (`contains("unverified")`) | keeping as is / kept as is, {size} / Kept as is · doesn't match Redump / {k} kept / track N kept unverified | keeping anyway / kept anyway, {size} / Kept anyway · doesn't match Redump / {k} kept anyway / track N kept, not verified | Matches the *Keep it anyway* button. |
 | Image note | kept, N unreadable sectors filled | kept anyway, N unreadable sectors left blank | Says what "filled" means. |
 | redumper phases | Refining / Splitting / Hashing / Checking protection | Re-reading bad parts / Writing tracks / Checking / Checking copy protection | Plainer. |

@@ -625,6 +625,84 @@ pub fn turn_line(m: &SectorMap) -> Option<String> {
     }
 }
 
+/// The widest a place can be and still be a single spot, in metres.
+const SPOT_WIDE: f64 = 0.002;
+
+/// A small count in words: *one*, *two*; figures past nine.
+fn count_word(n: usize) -> String {
+    ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"].get(n).map_or_else(|| n.to_string(), |w| (*w).to_owned())
+}
+
+/// Where on the disc things went wrong, in one line under a map's key:
+/// how many places, how far from the centre, and whether each is a single
+/// spot met once per turn of the disc (a scratch, a speck) rather than a
+/// whole ring. Every sector that wasn't read right the first time counts,
+/// put right since or not. *Two patches, about 4.4 cm and 4.9 cm out: each
+/// a single spot, once per turn.* While a read is under way, what it's
+/// found so far. None but on a CD, or with nothing to say.
+pub fn place_line(m: &SectorMap) -> Option<String> {
+    let g = m.geometry()?;
+    let mut all: Vec<Run> = m.runs.iter().chain(&m.recovered).chain(&m.repaired).copied().collect();
+    all.sort_by_key(|r| r.from);
+    let all = runs_of(all.iter().flat_map(|r| r.from..=r.to));
+    let found = places(&all, &g, usize::MAX);
+    if found.is_empty() {
+        return None;
+    }
+    let spots = spots(m);
+    let spotted = |p: &(f64, f64, u64)| spots.iter().any(|s| *s >= p.0 - 0.001 && *s <= p.1 + 0.001);
+    let one = |p: &(f64, f64, u64)| {
+        let (a, b) = (cm(p.0), cm(p.1));
+        if a == b {
+            a
+        } else {
+            format!("{}–{b}", a.trim_end_matches(" cm"))
+        }
+    };
+    let list = |items: Vec<String>| match items.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    let reading = m.at.is_some();
+    let n = found.len();
+    let patches = if n == 1 { "patch" } else { "patches" };
+    let head = match (reading, n) {
+        (true, _) => format!("So far {} {patches}", count_word(n)),
+        (false, _) => {
+            let w = count_word(n);
+            format!("{}{} {patches}", w[..1].to_uppercase(), &w[1..])
+        }
+    };
+    let at = if n > 3 {
+        let far = found.iter().map(|p| p.1).fold(0.0, f64::max);
+        format!("{head}, from about {} to {} out", cm(found[0].0), cm(far))
+    } else {
+        format!("{head}, about {} out", list(found.iter().map(one).collect()))
+    };
+    // A place that is a spot: one met once per turn, and no wider than a
+    // scratch is. A spot in a wider place is said by its own distance.
+    let is_spot = |p: &(f64, f64, u64)| spotted(p) && p.1 - p.0 <= SPOT_WIDE;
+    let mut at_spots: Vec<String> = vec![];
+    for r in &spots {
+        let c = cm(*r);
+        if !at_spots.contains(&c) {
+            at_spots.push(c);
+        }
+    }
+    let mut line = match (found.iter().all(is_spot), n, at_spots.len()) {
+        (_, _, 0) => format!("{at}."),
+        (true, 1, _) => format!("{at}: a single spot, once per turn."),
+        (true, _, _) => format!("{at}: each a single spot, once per turn."),
+        (false, _, 1) => format!("{at}. At {}, a single spot, once per turn.", at_spots[0]),
+        (false, _, _) => format!("{at}. At {}, single spots, once per turn.", list(at_spots.clone())),
+    };
+    if reading && !at_spots.is_empty() {
+        line.push_str(" Look there for a scratch.");
+    }
+    Some(line)
+}
+
 // ---- rings ---------------------------------------------------------------------------------
 
 /// One ring of a drawing of the disc: blocks `first` to `last` (both in),
@@ -755,6 +833,16 @@ mod tests {
         let m = SectorMap { recovered: m.runs.clone(), runs: vec![], ..m };
         assert!(turn_line(&m).is_some());
         assert_eq!(where_line(&m).as_deref(), Some("Sectors re-read about 4.4 cm from the centre"));
+        assert_eq!(place_line(&m).as_deref(), Some("One patch, about 4.4 cm out: a single spot, once per turn."));
+        // While a read is under way: what it's found so far, and where to look.
+        let reading = SectorMap { at: Some(200_000), ..m.clone() };
+        assert_eq!(place_line(&reading).as_deref(), Some("So far one patch, about 4.4 cm out: a single spot, once per turn. Look there for a scratch."));
+        // A second place, a stretch that isn't a spot.
+        let mut two = m.clone();
+        two.runs = vec![Run { from: 40_000, to: 40_400 }];
+        assert_eq!(place_line(&two).as_deref(), Some("Two patches, about 3.1 cm and 4.4 cm out. At 4.4 cm, a single spot, once per turn."));
+        // Nothing wrong anywhere: nothing to say.
+        assert_eq!(place_line(&SectorMap { runs: vec![], recovered: vec![], ..m }), None);
     }
 
     #[test]

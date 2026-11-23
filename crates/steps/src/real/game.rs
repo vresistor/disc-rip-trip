@@ -551,6 +551,15 @@ pub async fn hold(
     let mut own_rips = 0u32;
     let mut tried: Vec<String> = vec![];
     let total_rips = 1 + policy.rips as usize;
+    // Every rip again, timed together.
+    let mut combine_secs = 0u64;
+    // The first read's own counts, in the drive's and redumper's units:
+    // for the log, not the sidebar.
+    if let Some(r) = explain(&dump).and_then(|m| m.read) {
+        let kinds: Vec<String> = r.sectors.iter().map(|s| format!("{} {}", s.kind.code(), s.count)).collect();
+        let kinds = if kinds.is_empty() { String::new() } else { format!("; sectors {}", kinds.join(", ")) };
+        cx.log(format!("the rip's log: SCSI {} and C2 {} samples{kinds}", r.scsi, r.c2));
+    }
     loop {
         let why = explain(&dump).map(|m| m.with(reread.can_combine(&dump), combined.clone()).fixing(fixed.clone()).repairing(repaired.clone()));
         if let Some(m) = &why {
@@ -626,8 +635,12 @@ pub async fn hold(
             "fix" => {
                 cx.item(&dump, ItemState::Busy, "looking for bad sectors");
                 cx.status("Looking for bad sectors", serial.to_owned());
+                let began = std::time::Instant::now();
                 let (mut f, roms) = match reread.fix(cx, &dump, policy.tries).await {
-                    Ok(done) => done,
+                    Ok(mut done) => {
+                        done.0.secs = Some(began.elapsed().as_secs());
+                        done
+                    }
                     Err(e) if cx.stopped() => return Err(e),
                     Err(e) => {
                         cx.log(format!("fix bad sectors: {e}"));
@@ -678,8 +691,13 @@ pub async fn hold(
                 };
                 cx.item(&dump, ItemState::Busy, doing.to_lowercase());
                 cx.status(doing, serial.to_owned());
+                let began = std::time::Instant::now();
                 let (mut c, roms) = match reread.combine(cx, &dump).await {
-                    Ok(done) => done,
+                    Ok(mut done) => {
+                        combine_secs += began.elapsed().as_secs();
+                        done.0.secs = Some(combine_secs);
+                        done
+                    }
                     Err(e) if cx.stopped() => return Err(e),
                     // The rips so far are kept; it can be tried again.
                     Err(e) => {
@@ -734,7 +752,9 @@ pub async fn hold(
                 cx.status("Repairing with the disc's error correction", serial.to_owned());
                 // No soft failure: partway, sectors that may be pressed so
                 // could be left repaired, so a failure stops Check.
-                let (r, entry) = repair_all(cx, reread, &mut dump, fixed.as_ref(), cat, listed).await?;
+                let began = std::time::Instant::now();
+                let (mut r, entry) = repair_all(cx, reread, &mut dump, fixed.as_ref(), cat, listed).await?;
+                r.secs = Some(began.elapsed().as_secs());
                 if by_itself && r.repaired == 0 {
                     tried.push("nothing repaired by error correction".into());
                 }

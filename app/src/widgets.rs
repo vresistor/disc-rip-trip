@@ -237,7 +237,19 @@ pub fn pill(ui: &mut Ui, p: &Pal, text: &str, tone: Tone, state: Option<drt_engi
 /// `name` prefixes each option's accessible name ("AccurateRip: On"), so
 /// two controls never share a name. Gives the option clicked.
 pub fn segmented(ui: &mut Ui, p: &Pal, name: &str, options: &[&str], chosen: Option<usize>, enabled: bool) -> Option<usize> {
-    let f = crate::theme::font(13.0, 400);
+    segmented_sized(ui, p, name, options, chosen, enabled, (13.0, 26.0, 10.0))
+}
+
+/// [`segmented`], smaller: a quiet choice that isn't the point of what
+/// it's beside (how a map is drawn).
+pub fn segmented_small(ui: &mut Ui, p: &Pal, name: &str, options: &[&str], chosen: Option<usize>) -> Option<usize> {
+    segmented_sized(ui, p, name, options, chosen, true, (12.0, 22.0, 8.0))
+}
+
+/// A segmented control in a size: its font, height and the room either
+/// side of each option's words.
+fn segmented_sized(ui: &mut Ui, p: &Pal, name: &str, options: &[&str], chosen: Option<usize>, enabled: bool, (size, h, pad): (f32, f32, f32)) -> Option<usize> {
+    let f = crate::theme::font(size, 400);
     let mut clicked = None;
     let mut rects = Vec::new();
     ui.horizontal(|ui| {
@@ -248,7 +260,7 @@ pub fn segmented(ui: &mut Ui, p: &Pal, name: &str, options: &[&str], chosen: Opt
             // near-white slab. (A galley keeps the colour it's laid out in.)
             let (on_fill, on_text) = if p.dark { (mix(p.ink, 0.2, p.raised), p.ink) } else { (p.ink, p.raised) };
             let g = ui.painter().layout_no_wrap((*o).to_owned(), f.clone(), if on { on_text } else { p.muted });
-            let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 20.0, 26.0), if enabled { Sense::click() } else { Sense::hover() });
+            let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + pad * 2.0, h), if enabled { Sense::click() } else { Sense::hover() });
             let label = format!("{name}: {o}");
             resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::RadioButton, enabled, on, &label));
             // Round only the control's outer corners.
@@ -264,7 +276,7 @@ pub fn segmented(ui: &mut Ui, p: &Pal, name: &str, options: &[&str], chosen: Opt
             if resp.hovered() && enabled {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, p.ink);
+            ui.painter().galley(pos2(r.left() + pad, r.center().y - g.size().y / 2.0), g, p.ink);
             focus_ring(ui, &resp, r, 6.0, p);
             if resp.clicked() {
                 clicked = Some(k);

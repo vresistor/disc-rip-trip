@@ -8,7 +8,7 @@
 //! and where errors come back once per turn to a single spot its ring is
 //! dashed, never a dot at a made-up place.
 
-use crate::sectormap::{colour, range_text};
+use crate::sectormap::{colour, range_text, Whose};
 use crate::theme::{font, mix, tnum, Pal};
 use drt_steps::map::{cm, Mark, Ring, SectorMap};
 use egui::{pos2, vec2, Color32, Pos2, Sense, Shape, Stroke, Ui};
@@ -67,10 +67,10 @@ fn stretches(rings: &[Ring]) -> Vec<(f64, f64, Mark)> {
 }
 
 /// What hovering ring `r` says: how far out, its sectors, what's in them.
-pub fn hover_text(m: &SectorMap, r: &Ring) -> String {
+pub fn hover_text(m: &SectorMap, r: &Ring, whose: Whose) -> String {
     let (a, _) = m.range(r.first);
     let (_, z) = m.range(r.last);
-    let mut t = range_text(m, a, z, &r.counts);
+    let mut t = range_text(m, a, z, &r.counts, whose);
     if r.spot {
         t.push_str("\nErrors come back to a single spot somewhere on this ring");
     }
@@ -79,7 +79,7 @@ pub fn hover_text(m: &SectorMap, r: &Ring) -> String {
 
 /// Draws the disc with its rings, the distances under it, and what a
 /// dashed ring means when there is one.
-pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
+pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64, whose: Whose) {
     let Some(g) = m.geometry() else { return };
     let w = ui.available_width();
     let d = w.min(MAX_D).floor();
@@ -87,7 +87,7 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
     let scale = big as f64 / EDGE;
     let rings = m.rings(RING.max(1.0 / scale));
     let (rect, resp) = ui.allocate_exact_size(vec2(w, d + RULER_H), Sense::hover());
-    let label = format!("Map of the disc: {}", crate::sectormap::counts_line(&m.totals));
+    let label = format!("Map of the disc: {}", crate::sectormap::counts_line(&m.totals, whose));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Image, true, label.clone()));
     let pt = ui.painter();
     let c = pos2(rect.left() + big, rect.top() + big);
@@ -188,7 +188,7 @@ pub fn show(ui: &mut Ui, p: &Pal, m: &SectorMap, t: f64) {
         let r = (pos - c).length() as f64 / scale;
         if let Some(rg) = rings.iter().find(|x| (x.inner..x.outer).contains(&r)) {
             bracket(ui.painter(), rg, Stroke::new(1.0, p.ink));
-            resp.on_hover_text_at_pointer(hover_text(m, rg));
+            resp.on_hover_text_at_pointer(hover_text(m, rg, whose));
         } else if (HOLE..=EDGE).contains(&r) && pos.y <= rect.top() + d {
             let say = if (CLAMP.0..=CLAMP.1).contains(&r) {
                 "Where the drive holds the disc"
@@ -234,7 +234,7 @@ mod tests {
         let m = s.map(None, true);
         let rings = m.rings(RING);
         let rg = rings.iter().find(|r| r.mark == Mark::Unreadable).unwrap();
-        let t = hover_text(&m, rg);
+        let t = hover_text(&m, rg, Whose::Rip);
         assert!(t.starts_with("Sectors 14") && t.contains("\nAbout 4.4 cm from the centre\n") && t.ends_with(" good · 1 unreadable"), "{t}");
     }
 }

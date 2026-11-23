@@ -464,7 +464,7 @@ impl PassKind {
             PassKind::Read => "Read the disc",
             PassKind::Reread => "Re-read bad parts",
             PassKind::Tracks => "Write the tracks",
-            PassKind::Check => "Check every sector",
+            PassKind::Check => "Test every sector",
             PassKind::Protection => "Look for copy protection",
             PassKind::Hash => "Checksums",
         }
@@ -1072,13 +1072,13 @@ impl Live {
         s
     }
 
-    /// What came back so far: *2 recovered so far*.
+    /// What came back so far: *2 put right so far*.
     pub fn recovered_text(&self) -> String {
-        format!("{} recovered so far", thousands(self.recovered))
+        format!("{} put right so far", thousands(self.recovered))
     }
 
     /// The card's line: *Re-reading bad parts: sector 147,223 (54%), try
-    /// 19 of 20 · 2 recovered so far*.
+    /// 19 of 20 · 2 put right so far*.
     pub fn line(&self) -> String {
         let mut s = format!("Re-reading bad parts: {} · {}", self.place(), self.recovered_text());
         if let Some(l) = self.left_secs {
@@ -1089,7 +1089,7 @@ impl Live {
 
     /// The card's line, its parts least needed first, since a card short
     /// of room drops them from the front: *Re-reading bad parts: sector
-    /// 147,223 (54%) · 2 recovered so far · try 19 of 20*; crawling, what
+    /// 147,223 (54%) · 2 put right so far · try 19 of 20*; crawling, what
     /// the drive can't do last.
     pub fn card(&self) -> String {
         let mut parts = vec![format!("Re-reading bad parts: sector {} ({}%)", thousands(self.at), (self.position() * 100.0) as u32), self.recovered_text()];
@@ -1578,8 +1578,8 @@ mod tests {
         w.line(&at(147_223, 19, 454_524), t);
         let l = w.live();
         assert_eq!((l.done, l.total, l.recovered, l.retry), (2, Some(774), 1, 19));
-        assert_eq!(l.line(), "Re-reading bad parts: sector 147,223 (54%), try 19 of 20 · 1 recovered so far");
-        assert_eq!(l.card(), "Re-reading bad parts: sector 147,223 (54%) · 1 recovered so far · try 19 of 20");
+        assert_eq!(l.line(), "Re-reading bad parts: sector 147,223 (54%), try 19 of 20 · 1 put right so far");
+        assert_eq!(l.card(), "Re-reading bad parts: sector 147,223 (54%) · 1 put right so far · try 19 of 20");
         assert_eq!(l.note(), "re-reading 0%, 2 of 774 bad sectors");
         assert!((l.fraction() - (2.0 + 19.0 / 21.0) / 774.0).abs() < 1e-6);
         assert!((l.position() - 0.547).abs() < 1e-3, "the place on the disc is the line's own");
