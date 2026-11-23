@@ -2673,6 +2673,8 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     app_mut(&mut h).close_tray();
     let i = app(&h).sel;
     app_mut(&mut h).m.set_param(i, "g_check", "if_no_match", Value::from("ask")).unwrap();
+    // No rips again by itself: asked, it's still offered, once at least.
+    app_mut(&mut h).m.set_param(i, "g_check", "extra_rips", Value::from(0)).unwrap();
     h.run_steps(2);
     click(&mut h, "Start");
     until(&mut h, "Check to hold the dump", |a| a.m.snapshot(a.sel).steps["g_check"].items.first().is_some_and(|i| i.state == ItemState::Bad));
@@ -4603,6 +4605,12 @@ impl HeldRip {
                     "C2: 0 samples",
                     "Q: 0 sectors",
                     "*** END (time check: 1s)",
+                    // Stopped on the sectors it couldn't read; then, as
+                    // Rip's settings say, made anyway with them blank.
+                    "*** SPLIT (time check: 0s)",
+                    "errors detected, track: 1, sectors: {SKIP: 34, C2: 0}, samples: {SKIP: 19992, C2: 0}",
+                    "error: data errors detected, unable to continue",
+                    "image: 34 unreadable sectors; making it anyway, as Rip's settings say, with them left blank for Check and fix to read again",
                     "*** SPLIT (time check: 0s)",
                     "errors detected, track: 1, sectors: {SKIP: 34, C2: 0}, samples: {SKIP: 19992, C2: 0}",
                     "*** END (time check: 1s)",
@@ -5749,6 +5757,7 @@ fn the_game_rip_sidebars_in_their_four_states() {
         assert!(row_says(&h, &["2, Re-read bad parts", "1,336 put right", "20 tries each"]));
         assert!(row_says(&h, &["3, Write the tracks", "34 left blank"]));
         assert!(row_says(&h, &["4, Test every sector", "No others wrong"]));
+        assert!(!row_says(&h, &["Write the tracks", "34 unreadable"]), "the try it stopped on is one row with the one that made it");
         h.get_by_label("Map of the disc: 267,789 good · 1,336 put right on a re-read · 34 unreadable");
         h.get_by_label("Two patches, about 4.4 cm and 4.9 cm out: each a single spot, once per turn.");
         assert!(h.query_by_label_contains("SCSI").is_none(), "the drive's counts are the log's");

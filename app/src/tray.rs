@@ -3302,9 +3302,17 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     let left = sectors_map.map(|m| m.total(Mark::Unreadable) + m.total(Mark::C2));
     let mut list: Vec<Row> = vec![];
     let last = passes.len().saturating_sub(1);
+    let later = |k: usize, kind| passes[k + 1..].iter().any(|q| q.kind == kind);
+    let mut n = 0u32;
     for (k, ps) in passes.iter().enumerate() {
         use drt_steps::real::redumper::{left_after, PassKind};
-        let mut r = Row::new(Some(k as u32 + 1), ps.kind.name());
+        // Writing the tracks again, made anyway: the first try, stopped on
+        // what it couldn't read, is one row with the second.
+        if ps.kind == PassKind::Tracks && later(k, PassKind::Tracks) {
+            continue;
+        }
+        n += 1;
+        let mut r = Row::new(Some(n), ps.kind.name());
         let now = busy && k == last;
         // Its time, from its heading to the next one's (or now).
         let from = v.record.log.get(ps.at).map(|l| l.at);
@@ -3335,6 +3343,8 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
                 (PassKind::Read, Some(n)) => (format!("{} bad", thousands(n)), Tone::Plain, String::new()),
                 (PassKind::Read, None) if left_after(&passes, k) == 0 => ("No errors".into(), Tone::Ok, String::new()),
                 (PassKind::Read, None) => ("Errors".into(), Tone::Plain, String::new()),
+                // A re-read before another: the map counts them all on the last.
+                (PassKind::Reread, Some(_)) if later(k, PassKind::Reread) => (if left_after(&passes, k) == 0 { "All put right" } else { "Some left" }.into(), Tone::Plain, String::new()),
                 (PassKind::Reread, Some(_)) => {
                     let back = count(Mark::Recovered).unwrap_or(0);
                     let tone = if left == Some(0) { Tone::Ok } else { Tone::Plain };
@@ -3476,9 +3486,11 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     let held = it.state == ItemState::Bad;
     let pct = progress(&it.note).0;
     let size = m.as_ref().and_then(crate::compare::copy_bytes).map(drt_steps::real::media::size);
+    let stopped = it.state == ItemState::Skipped && it.note == drt_engine::snapshot::STOPPED;
     let (cell, word) = match it.state {
         ItemState::Busy => (crate::card::Cell::Busy, "checking"),
         ItemState::Waiting => (crate::card::Cell::Wait, "waiting"),
+        ItemState::Skipped if stopped => (crate::card::Cell::Out, "stopped"),
         ItemState::Skipped => (crate::card::Cell::Out, "skipped"),
         ItemState::Bad => (crate::card::Cell::Needs, "not verified"),
         _ if verified => (crate::card::Cell::Verified, "verified"),
@@ -3500,6 +3512,9 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
             return;
         }
         let (head, lines): (String, Vec<String>) = match v.status.as_str() {
+            // Stopped part way, whatever it was at.
+            _ if stopped => ("Stopped".into(), vec![]),
+            _ if it.state == ItemState::Skipped => ("Skipped".into(), vec![]),
             _ if verified => ("Verified".into(), vec![entry.clone().map(|e| format!("Matches Redump's {e}")).unwrap_or_default()]),
             _ if held => (v.status.clone(), vec![m.as_ref().map(crate::compare::still_line).unwrap_or_default()]),
             "" => (cap(&it.note), vec![]),
@@ -3518,11 +3533,12 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     // What needs you: why, and only what can still help. Ripping again is
     // offered again until as many rips as Check's settings allow are made.
     if held {
-        let rips = m.as_ref().and_then(|m| m.combined.as_ref()).map_or(1, |c| c.rips.len());
+        // (Never hidden before it has run: asked, you can always rip again once.)
+        let rips = m.as_ref().and_then(|m| m.combined.as_ref()).map(|c| c.rips.len());
         let most = info.params.iter().find(|s| s.key == "extra_rips").and_then(|s| app.m.param(i, id, s).resolve(None)).and_then(|v| v.as_u64()).unwrap_or(drt_steps::real::game::EXTRA_RIPS as u64)
             as usize
             + 1;
-        let options: Vec<(String, String)> = it.options.iter().filter(|o| !(o.0 == "combine" && rips >= most)).cloned().collect();
+        let options: Vec<(String, String)> = it.options.iter().filter(|o| !(o.0 == "combine" && rips.is_some_and(|r| r >= most))).cloned().collect();
         let mut r = Row::new(None, it.label.clone());
         offered(&mut r, &options);
         let reason = m.as_ref().and_then(|m| crate::compare::reason(m, &it.note));
@@ -4805,6 +4821,12 @@ mod tests {
         assert_eq!(v(ItemState::Bad, "1 unreadable sector").0, "1 sector couldn't be read");
         assert_eq!(v(ItemState::Bad, "drive not ready").0, "Drive not ready");
         assert_eq!(thousands(2_298_496), "2,298,496");
+    }
+
+    #[test]
+    fn times_read_as_a_clock_and_in_words() {
+        assert_eq!((clock(41), clock(2_292), clock(6_730)), ("0:41".into(), "38:12".into(), "1:52:10".into()));
+        assert_eq!((span(41), span(2_820), span(9_060)), ("41 s".into(), "47 min".into(), "2 h 31 min".into()));
     }
 
     #[test]
