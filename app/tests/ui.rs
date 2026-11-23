@@ -5653,12 +5653,15 @@ fn the_plus_on_each_cards_edge_has_its_path_buttons_above_and_below() {
 #[test]
 fn follow_doesnt_go_back_to_the_drive() {
     let e = env();
-    let mut h = window(&e, None, true, 0.0);
+    // At a pace, not all at once: on a slow machine an instant run can
+    // reach its question before Follow has seen a step change.
+    let mut h = window(&e, None, true, 0.03);
     app_mut(&mut h).set_follow(true);
     click(&mut h, "Start");
     let mut seen = vec![];
-    for _ in 0..400 {
+    for _ in 0..5000 {
         h.step();
+        std::thread::sleep(Duration::from_millis(2));
         if let Some(f) = app(&h).followed() {
             seen.push(f.to_owned());
         }
