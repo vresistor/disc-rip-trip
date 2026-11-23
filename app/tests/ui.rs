@@ -4458,6 +4458,8 @@ fn handed_map() -> (drt_steps::map::SectorMap, Vec<u64>) {
 enum CheckAt {
     Verified,
     Holding,
+    /// Read again, stopped as nothing came back, and held.
+    Stopped,
 }
 
 /// Check and fix as the real one reports a copy Rip handed on with
@@ -4480,6 +4482,7 @@ impl drt_engine::Step for HeldCheck {
         use drt_steps::real::mismatch::{Combination, File, Fixing, Mismatch, Pair, Read, RipRead};
         let Some(dump) = inlet.recv().await else { return Ok(()) };
         let done = self.at == CheckAt::Verified;
+        let stopped = self.at == CheckAt::Stopped;
         let blank = handed_map().1;
         let file = |sha1: &str| File { name: "SLES_147.11.bin".into(), size: DISC_4 * 2352, sha1: sha1.into() };
         let left = if done { 0 } else { 3 };
@@ -4493,8 +4496,23 @@ impl drt_engine::Step for HeldCheck {
             }],
             read: Some(Read { drive: "ACME DVD-RW XY123".into(), generic: true, read_offset: Some(0), scsi: 19_992, disc_sectors: DISC_4, ..Read::default() }),
             can_combine: true,
-            fixed: Some(Fixing { bad: HANDED_ON, fixed: 31, left: 3, left_at: blank[31..].iter().map(|l| *l as i64).collect(), tries: 10, secs: Some(250), ..Fixing::default() }),
-            combined: Some(Combination {
+            fixed: Some(if stopped {
+                Fixing {
+                    bad: 1_226,
+                    fixed: 9,
+                    left: 1_217,
+                    left_at: (0..10).map(|k| 150_000 + k * 7).collect(),
+                    tries: 10,
+                    secs: Some(3_130),
+                    stalled: 3,
+                    given_up: true,
+                    not_tried: 1_100,
+                    ..Fixing::default()
+                }
+            } else {
+                Fixing { bad: HANDED_ON, fixed: 31, left: 3, left_at: blank[31..].iter().map(|l| *l as i64).collect(), tries: 10, secs: Some(250), ..Fixing::default() }
+            }),
+            combined: (!stopped).then_some(Combination {
                 rips: (1..=rips).map(|n| RipRead { n, bad: if n == 1 || !done { 3 } else { 0 } }).collect(),
                 sectors: DISC_4,
                 differing: 3,
@@ -4508,7 +4526,12 @@ impl drt_engine::Step for HeldCheck {
             }),
             ..Mismatch::default()
         };
-        let found: Vec<(u64, Mark)> = blank.iter().enumerate().map(|(k, l)| (*l, if done || k < 31 { Mark::Recovered } else { Mark::Unreadable })).collect();
+        let found: Vec<(u64, Mark)> = if stopped {
+            // A long scratch: the first few put right, the rest still bad.
+            (0..1_226u64).map(|k| (150_000 + k * 7, if k < 9 { Mark::Recovered } else { Mark::Wrong })).collect()
+        } else {
+            blank.iter().enumerate().map(|(k, l)| (*l, if done || k < 31 { Mark::Recovered } else { Mark::Unreadable })).collect()
+        };
         cx.item(&dump, ItemState::Busy, "checking");
         cx.map(serde_json::to_value(SectorMap::checked(DISC_4, &found, true)).ok());
         cx.report(serde_json::to_value(&m).ok());
@@ -5838,6 +5861,14 @@ fn the_game_rip_sidebars_in_their_four_states() {
         h.get_by_label("Size: Redump 269,159 sectors, this copy 269,159 sectors, the same");
         assert!(h.query_by_label_contains("Compares the copy's checksums").is_none(), "no sentence under the header");
         shot(&mut h, &format!("ripside-c-verified{tag}"));
+
+        // Read again, and stopped as nothing came back: said plainly.
+        let e = env();
+        let mut h = held_game(&e, At::HandedOn, Some(CheckAt::Stopped), "g_check", size);
+        shot(&mut h, &format!("ripside-stopped{tag}"));
+        assert!(row_says(&h, &["2, Read bad sectors again", "9 put right", "3 skipped, the drive stalled"]));
+        h.get_by_label(drt_steps::real::fix::STOPPED);
+        h.get_by_label("Rip again and combine, SLES_147.11");
 
         // D: still 3 it can't read; only what can still help.
         let e = env();

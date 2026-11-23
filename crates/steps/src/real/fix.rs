@@ -273,7 +273,12 @@ pub fn reread(source: &mut dyn Source, lba: i64, before: &[u8], tries: u32, stop
             Err(e) => {
                 let e = e.to_string();
                 (errors, last_error, same, last) = (errors + 1, Some(e.clone()), false, Some(Last::Failed));
-                stalls = if slow && (stalls == 0 || stall_error.as_deref() == Some(&e)) { stalls + 1 } else { 0 };
+                // A slow try with another error starts the count again at itself.
+                stalls = match (slow, stall_error.as_deref() == Some(&e)) {
+                    (false, _) => 0,
+                    (true, true) => stalls + 1,
+                    (true, false) => 1,
+                };
                 stall_error = Some(e);
                 if stalls >= STALLED_AFTER && t < tries {
                     return Ok((None, Outcome::Left { tries: t, same, alike, differed, errors, last_error, stalled: true }));
@@ -1010,6 +1015,12 @@ pub(crate) mod tests {
         f.takes = Box::new(|_| Duration::from_secs(60));
         let (_, o) = reread(&mut f, lba, &slipped(lba), 10, &|| false, &mut |_, _| {}).unwrap();
         assert!(matches!(o, Outcome::Left { tries: 10, stalled: false, .. }), "{o:?}");
+        // Another error, then the same one three times, all slow: the count
+        // starts again at the new one, so given up after the fourth.
+        let mut f = fake(vec![(lba, vec![Err(io::Error::other("a")), Err(io::Error::other("b"))])]);
+        f.takes = Box::new(|_| Duration::from_secs(60));
+        let (_, o) = reread(&mut f, lba, &slipped(lba), 10, &|| false, &mut |_, _| {}).unwrap();
+        assert!(matches!(o, Outcome::Left { tries: 4, stalled: true, .. }), "{o:?}");
         // Slow and failing, then right: taken, as ever, before giving up.
         let mut f = fake(vec![(lba, vec![Err(io::Error::other("a")), Err(io::Error::other("a")), Ok(good(lba, false))])]);
         f.takes = Box::new(|_| Duration::from_secs(60));

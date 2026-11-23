@@ -3549,6 +3549,10 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
         for l in lines.iter().filter(|l| !l.is_empty()) {
             ring_note(ui, p, l);
         }
+        // Reading bad sectors again stopped, getting nowhere: said plainly.
+        if !verified && m.as_ref().and_then(|m| m.fixed.as_ref()).is_some_and(|f| f.given_up) {
+            ring_note(ui, p, drt_steps::real::fix::STOPPED);
+        }
         if let Some(l) = took(v, "Done").filter(|_| !held) {
             ring_note(ui, p, &l);
         }
@@ -3603,10 +3607,7 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
             let mut r = next("Read bad sectors again");
             let mut dest = format!("up to {} tries each", f.tries);
             if f.stalled > 0 {
-                dest.push_str(&format!(" · {} skipped, the drive stalled on every try", thousands(f.stalled)));
-            }
-            if f.given_up {
-                dest.push_str(&format!(" · stopped with {} not read again: none of the last 50 came back", thousands(f.not_tried)));
+                dest.push_str(&format!(" · {} skipped, the drive stalled", thousands(f.stalled)));
             }
             r.dest = Some((dest, String::new()));
             r.two_line = true;
