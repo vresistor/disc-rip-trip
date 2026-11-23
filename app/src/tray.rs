@@ -3453,7 +3453,7 @@ fn check_doing(status: &str) -> Option<(&'static str, &'static str)> {
     let s = status;
     if s == "Looking for bad sectors" {
         Some(("Read bad sectors again", "Looking"))
-    } else if s.starts_with("Re-reading ") && (s.ends_with(" bad sectors") || s.ends_with(" bad sector")) {
+    } else if s == drt_steps::real::game::REREADING || (s.starts_with("Re-reading ") && (s.ends_with(" bad sectors") || s.ends_with(" bad sector"))) {
         Some(("Read bad sectors again", "Re-reading"))
     } else if (s.starts_with("Rip ") && s.contains(" of ")) || s.starts_with("Ripping again") {
         Some(("Rip again and combine", "Ripping"))
@@ -3484,7 +3484,9 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     let busy = it.state == ItemState::Busy;
     let verified = it.verified || matches!(v.status.as_str(), "Verified" | "Matches Redump");
     let held = it.state == ItemState::Bad;
-    let pct = progress(&it.note).0;
+    // Reading bad sectors again: where, which try, what's come back.
+    let rereading: Option<drt_steps::real::fix::Rereading> = v.now.clone().and_then(|n| serde_json::from_value(n).ok()).filter(|_| busy);
+    let pct = rereading.as_ref().map(|r| r.fraction()).or(progress(&it.note).0);
     let size = m.as_ref().and_then(crate::compare::copy_bytes).map(drt_steps::real::media::size);
     let stopped = it.state == ItemState::Skipped && it.note == drt_engine::snapshot::STOPPED;
     let (cell, word) = match it.state {
@@ -3502,9 +3504,31 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
         (ItemState::Busy, None) => pct.map_or("…".into(), |f| format!("{}%", (f * 100.0).floor())),
         (_, None) => "1/1".to_owned(),
     };
+    // Reading again, how far through the bad sectors, not the copy's size.
+    let (big, word) = match (&rereading, pct) {
+        (Some(_), Some(f)) => (format!("{}%", (f * 100.0).floor()), "re-read"),
+        _ => (big, word),
+    };
     let entry = m.as_ref().map(|m| m.entry.clone()).filter(|e| !e.is_empty()).or_else(|| ctx.and_then(|c| c.get(Subject::Disc, "name")).map(str::to_owned));
     let arcs = [Arc { cell, share: 1.0, fill: pct.unwrap_or(0.0) }];
-    ring_head(ui, p, &arcs, None, None, big, word.to_owned(), |ui, _| {
+    // A mark at the ring's end that grows each new try, as Rip's does, so
+    // a drive that takes a minute a try doesn't look stopped.
+    let here = rereading.as_ref().map(|r| {
+        let key = egui::Id::NULL.with(("check-here", id));
+        let now = ui.input(|i| i.time);
+        let mark = (r.at, r.attempt);
+        let (seen, since) = ui.ctx().data(|d| d.get_temp::<((i64, u32), f64)>(key)).unwrap_or((mark, now));
+        let since = if seen == mark { since } else { now };
+        ui.ctx().data_mut(|d| d.insert_temp(key, (mark, since)));
+        Here { at: r.fraction(), t, since }
+    });
+    ring_head(ui, p, &arcs, None, here, big, word.to_owned(), |ui, _| {
+        if let Some(r) = &rereading {
+            let mut lines = vec![cap(&r.place()), r.so_far(), cap(&r.left_text())];
+            lines.extend(r.last_text());
+            working(ui, p, drt_steps::real::game::REREADING, pct, &lines, t);
+            return;
+        }
         if busy {
             let head = if v.status.is_empty() { "Checking".to_owned() } else { v.status.clone() };
             let line = if v.status.is_empty() { cap(&v.detail) } else { String::new() };
@@ -3577,7 +3601,14 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
         if let Some(f) = &m.fixed {
             tried = true;
             let mut r = next("Read bad sectors again");
-            r.dest = Some((format!("up to {} tries each", f.tries), String::new()));
+            let mut dest = format!("up to {} tries each", f.tries);
+            if f.stalled > 0 {
+                dest.push_str(&format!(" · {} skipped, the drive stalled on every try", thousands(f.stalled)));
+            }
+            if f.given_up {
+                dest.push_str(&format!(" · stopped with {} not read again: none of the last 50 came back", thousands(f.not_tried)));
+            }
+            r.dest = Some((dest, String::new()));
             r.two_line = true;
             r.len = secs(f.secs);
             r.verdict = Some(match (f.other_disc, f.bad, f.fixed) {

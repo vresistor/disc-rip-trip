@@ -408,12 +408,48 @@ impl game::Reread for Reread {
     }
 
     async fn fix(&self, cx: &Cx, dump: &Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)> {
+        use crate::map::{Mark, SectorMap};
+        use crate::real::fix::{self, Last, Outcome, Rereading, Sector};
         let bad = RIP_BAD[0];
         cx.item(dump, ItemState::Busy, "looking for bad sectors");
         cx.sleep(600).await?;
-        cx.item(dump, ItemState::Busy, format!("re-reading {bad} bad sectors"));
-        cx.status(format!("Re-reading {bad} bad sectors"), "");
-        cx.sleep(1500).await?;
+        // Each read again in turn, as the drive would: the first never
+        // comes back, the rest do on their first try or two.
+        let at = |k: u64| 98_000 + k as i64 * 731;
+        let lbas: Vec<i64> = (0..bad).map(at).collect();
+        let mut live = game::LiveMap::new(SectorMap::checked(200_000, &[], true));
+        live.found(cx, &lbas);
+        let mut r = Rereading { total: bad, tries, ..Rereading::default() };
+        for (k, &lba) in lbas.iter().enumerate() {
+            let takes = if k == 0 { tries } else { 1 + (k % 5 == 0) as u32 };
+            r.at = lba;
+            for t in 1..=takes {
+                (r.attempt, r.last) = (t, (t > 1).then_some(if k == 0 { Last::Failed } else { Last::Wrong }));
+                game::say_rereading(cx, dump, &r);
+                if t == 1 {
+                    live.at(cx, lba);
+                }
+                cx.sleep(if k == 0 { 60 } else { 40 }).await?;
+            }
+            r.done += 1;
+            let outcome = if k == 0 {
+                r.left += 1;
+                Outcome::Left { tries, same: false, alike: 0, differed: false, errors: tries, last_error: Some("sense 3/11/05".into()), stalled: false }
+            } else {
+                r.fixed += 1;
+                Outcome::Fixed { tries: takes }
+            };
+            if r.done >= fix::PACE_AFTER {
+                r.left_secs = Some((bad - r.done) * 20);
+            }
+            let s = Sector { lba, why: "wrong address", outcome };
+            cx.log(fix::sector_line(&s, tries));
+            live.done(cx, &s);
+        }
+        cx.now(None);
+        cx.progress(None);
+        let found: Vec<(u64, Mark)> = lbas.iter().enumerate().map(|(k, l)| (*l as u64, if k == 0 { Mark::Wrong } else { Mark::Recovered })).collect();
+        cx.map(serde_json::to_value(SectorMap::checked(200_000, &found, true)).ok());
         *self.fixed.lock().unwrap() = true;
         let f = Fixing { bad, fixed: bad - 1, left: 1, left_at: vec![98_000], same: 0, tries, other_disc: false, verified: false, read_differently: vec![98_000], ..Fixing::default() };
         cx.log(format!("fix bad sectors: {bad} fail their own check; {} read right and put in place; sector 98000: no good copy in {tries} tries", bad - 1));

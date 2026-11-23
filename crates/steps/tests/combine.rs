@@ -364,6 +364,66 @@ async fn by_itself_bad_sectors_read_again_make_it_match() {
     std::fs::remove_dir_all(base).unwrap();
 }
 
+/// A drive that reads every sector right, but holds on to sector `wait`
+/// until it's let go.
+struct Held {
+    wait: i64,
+    go: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Source for Held {
+    fn read(&mut self, lba: i64) -> std::io::Result<Vec<u8>> {
+        if lba == self.wait {
+            let _ = self.go.lock().unwrap().recv();
+        }
+        Ok(sector(lba))
+    }
+
+    fn clear_cache(&mut self, _near: i64) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_bad_sectors_again_says_how_it_goes_as_it_goes() {
+    use drt_steps::real::fix::Rereading;
+    let base = base("fix-live");
+    let first = rip(&[3, 7], &[9]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let rx = Arc::new(std::sync::Mutex::new(Some(rx)));
+    let source: SourceFn = Arc::new(move |_dump: &Item| Ok(Box::new(Held { wait: 7, go: std::sync::Mutex::new(rx.lock().unwrap().take().unwrap()) }) as Box<dyn Source>));
+    let (run, _e) = start_with(&base, &first, vec![], true, "fix", source);
+    // Held on sector 7, its first try: 3 is put right already.
+    let mut snap = run.snapshot.clone();
+    let s = loop {
+        let s = snap.borrow_and_update().clone();
+        let now = s.steps["check"].now.clone().and_then(|n| serde_json::from_value::<Rereading>(n).ok());
+        if now.as_ref().is_some_and(|n| n.at == 7 && n.attempt == 1) && s.steps["check"].record.map.as_ref().is_some_and(|m| m["at"] == 7) {
+            break s;
+        }
+        assert!(!s.finished);
+        snap.changed().await.unwrap();
+    };
+    let check = &s.steps["check"];
+    let now: Rereading = serde_json::from_value(check.now.clone().unwrap()).unwrap();
+    assert_eq!((now.done, now.total, now.fixed, now.left), (1, 3, 1, 0));
+    assert_eq!(now.line(), "Reading bad sectors again: sector 7 · 2 of 3 · try 1 of 10");
+    assert_eq!(check.status, drt_steps::real::game::REREADING);
+    assert_eq!(check.items[0].note, "re-reading 33%, 1 of 3 bad sectors");
+    let map = map_of(&s);
+    assert_eq!((map.total(Mark::Recovered), map.total(Mark::Wrong), map.at), (1, 2, Some(7)), "3 put right, 7 and 9 still to go");
+    assert!(log_of(&s).contains("fix bad sectors: sector 3: read right on try 1"), "{}", log_of(&s));
+    assert!(!log_of(&s).contains("sector 7:"));
+    tx.send(()).unwrap();
+    let s = finish(run).await;
+    let check = &s.steps["check"];
+    assert!(check.items[0].verified);
+    assert!(check.now.is_none(), "nothing going on now");
+    let map = map_of(&s);
+    assert_eq!((map.total(Mark::Recovered), map.total(Mark::Wrong), map.at), (3, 0, None));
+    std::fs::remove_dir_all(base).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn by_itself_a_sector_the_drive_never_reads_right_comes_from_a_second_rip() {
     let base = base("fix-then-rip");

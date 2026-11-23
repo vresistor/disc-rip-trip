@@ -324,6 +324,20 @@ pub struct Fixing {
     /// How long it took, in seconds, when it was timed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secs: Option<u64>,
+    /// Of those left, the ones given up on early: the drive stalled on
+    /// every try the same way.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stalled: u64,
+    /// The pass stopped, none of the last fifty coming back: so many of
+    /// those left weren't read again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub given_up: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub not_tried: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Fixing {
@@ -341,6 +355,9 @@ impl Fixing {
             read_alike: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { alike, .. } if alike > 0)).map(|s| s.lba).collect(),
             read_differently: left.iter().filter(|s| matches!(s.outcome, super::fix::Outcome::Left { alike: 0, differed: true, .. })).map(|s| s.lba).collect(),
             secs: None,
+            stalled: f.stalled().count() as u64,
+            given_up: f.given_up,
+            not_tried: f.not_tried().count() as u64,
         }
     }
 
@@ -788,7 +805,7 @@ fn fix_reading(f: &Fixing, in_redump: bool, combined: bool, repaired: bool) -> S
     }
     let read = format!(
         "Fix bad sectors read {} again, up to {} times each, and put {} that passed {} own check in place.",
-        sectors(f.bad),
+        sectors(f.bad.saturating_sub(f.not_tried)),
         f.tries,
         if f.fixed == 1 { "the 1 copy".to_owned() } else { format!("the {} copies", f.fixed) },
         if f.fixed == 1 { "its" } else { "their" }
@@ -803,6 +820,13 @@ fn fix_reading(f: &Fixing, in_redump: bool, combined: bool, repaired: bool) -> S
         ),
         (n, _) => format!(" {} still {} no copy that passes.", sectors(n), if n == 1 { "has" } else { "have" }),
     };
+    let mut left = left;
+    if f.stalled > 0 {
+        left.push_str(&format!(" {} {} skipped early: the drive stalled on every try.", sectors(f.stalled), if f.stalled == 1 { "was" } else { "were" }));
+    }
+    if f.given_up {
+        left.push_str(&format!(" It stopped with {} not read again: none of the last 50 came back, so this drive can't read these; another drive may.", sectors(f.not_tried)));
+    }
     let then = match (f.verified, in_redump, combined, f.left) {
         // What came after says the rest.
         _ if repaired && !combined => String::new(),
@@ -1022,6 +1046,14 @@ CD-ROM [GAME_1.bin]:
         assert!(!fixed.reading.iter().any(|l| l.contains("wrong address")), "the first rip's addresses are old news: {:?}", fixed.reading);
         let opts = |m: &Mismatch| m.options().into_iter().map(|o| o.0).collect::<Vec<_>>();
         assert_eq!(opts(&fixed), ["combine", "repair", "keep", "leave_out"], "fixed once is enough");
+        // Stopped, nothing coming back, some skipped as the drive stalled:
+        // said plainly, and ripping again is still offered.
+        let stopped = m.clone().fixing(Some(Fixing { bad: 300, fixed: 4, left: 296, stalled: 3, given_up: true, not_tried: 200, ..f.clone() }));
+        assert_eq!(
+            stopped.reading[0],
+            "Fix bad sectors read 100 sectors again, up to 10 times each, and put the 4 copies that passed their own check in place. 296 sectors still have no copy that passes. 3 sectors were skipped early: the drive stalled on every try. It stopped with 200 sectors not read again: none of the last 50 came back, so this drive can't read these; another drive may. Rip again and combine may find a good copy in another rip."
+        );
+        assert_eq!(opts(&stopped), ["combine", "repair", "keep", "leave_out"]);
         // Pressed so: the same on every read.
         let pressed = m.clone().fixing(Some(Fixing { same: 1, ..f.clone() }));
         assert!(pressed.reading[0].contains("1 sector came back the same on every read and is left as it is: some discs are pressed with sectors like that on purpose."), "{:?}", pressed.reading);

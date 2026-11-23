@@ -903,6 +903,11 @@ impl Disc {
     /// that failed its checks over it, put right or not; else the checks
     /// alone.
     async fn show_map(&self, cx: &Cx, dump: &drt_engine::Item, main: &Path) {
+        let map = self.map_now(dump, main).await;
+        cx.map(serde_json::to_value(map).ok());
+    }
+
+    async fn map_now(&self, dump: &drt_engine::Item, main: &Path) -> crate::map::SectorMap {
         let found: Vec<(u64, crate::map::Mark)> = self.marks.lock().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect()).unwrap_or_default();
         let sectors = super::combine::layout(main).map(|ts| ts.iter().map(|t| (t.start.max(0) as u64) + t.size / super::combine::SECTOR as u64).max().unwrap_or(0)).unwrap_or(0);
         let sectors = sectors.max(found.iter().map(|f| f.0 + 1).max().unwrap_or(0));
@@ -915,14 +920,13 @@ impl Disc {
         .await
         .ok()
         .flatten();
-        let map = match read {
+        match read {
             Some(mut m) => {
                 m.overlay(&found);
                 m
             }
             None => crate::map::SectorMap::checked(sectors, &found, true),
-        };
-        cx.map(serde_json::to_value(map).ok());
+        }
     }
 
     fn mark(&self, lbas: impl IntoIterator<Item = i64>, m: crate::map::Mark) {
@@ -931,6 +935,59 @@ impl Disc {
                 marks.insert(l.max(0) as u64, m);
             }
         }
+    }
+}
+
+/// What Check and fix is doing while it reads bad sectors again, said the
+/// same from the drive and in the simulation: the try it's on for the
+/// window ([`Cx::now`]), how far through for the ring, and a line for the
+/// card.
+pub fn say_rereading(cx: &Cx, dump: &drt_engine::Item, r: &super::fix::Rereading) {
+    cx.now(serde_json::to_value(r).ok());
+    cx.progress(Some(r.fraction()));
+    cx.item(dump, ItemState::Busy, r.note());
+    cx.status(REREADING, r.card());
+}
+
+/// Check and fix's status while it reads bad sectors again.
+pub const REREADING: &str = "Reading bad sectors again";
+
+/// The map while bad sectors are read again: each found bad marked so
+/// first, each put right as it comes back, and the sector being read
+/// marked as where the drive is. Shown anew for each sector, never for
+/// each try.
+pub struct LiveMap {
+    map: crate::map::SectorMap,
+}
+
+impl LiveMap {
+    pub fn new(map: crate::map::SectorMap) -> LiveMap {
+        LiveMap { map }
+    }
+
+    /// The bad sectors about to be read again.
+    pub fn found(&mut self, cx: &Cx, bad: &[i64]) {
+        let marks: Vec<(u64, crate::map::Mark)> = bad.iter().map(|l| ((*l).max(0) as u64, crate::map::Mark::Wrong)).collect();
+        self.map.overlay(&marks);
+        self.show(cx);
+    }
+
+    /// The drive is on `lba` now.
+    pub fn at(&mut self, cx: &Cx, lba: i64) {
+        self.map.at = Some(lba.max(0) as u64);
+        self.show(cx);
+    }
+
+    /// What came of a sector: shown when it came back.
+    pub fn done(&mut self, cx: &Cx, s: &super::fix::Sector) {
+        if matches!(s.outcome, super::fix::Outcome::Fixed { .. }) {
+            self.map.overlay(&[(s.lba.max(0) as u64, crate::map::Mark::Recovered)]);
+            self.show(cx);
+        }
+    }
+
+    fn show(&self, cx: &Cx) {
+        cx.map(serde_json::to_value(&self.map).ok());
     }
 }
 
@@ -961,22 +1018,40 @@ impl Reread for Disc {
         let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
         let keep = Self::folders(cx)?.join("before-fix");
         let mut source = (self.source)(dump)?;
+        let base = self.map_now(dump, &main).await;
         let fixed = {
             let _drive = cx.lane(LaneKind::Drive).await;
-            let (cx2, d, main) = (cx.clone(), dump.clone(), main.clone());
+            let (cx2, d, cue) = (cx.clone(), dump.clone(), main.clone());
             let done = tokio::task::spawn_blocking(move || {
-                let mut said = String::new();
+                let mut live = LiveMap::new(base);
+                let mut looked = None;
                 fix::fix(
-                    &main,
+                    &cue,
                     &mut *source,
                     tries,
                     &keep,
-                    |p, doing| {
-                        cx2.progress(Some(p));
-                        if !doing.is_empty() && doing != said {
-                            cx2.item(&d, ItemState::Busy, doing.clone());
-                            cx2.status(cap(&doing), "");
-                            said = doing;
+                    |e| match e {
+                        fix::Event::Looking(p) => {
+                            cx2.progress(Some(p));
+                            let pc = (p * 100.0) as u32;
+                            if looked != Some(pc) {
+                                looked = Some(pc);
+                                cx2.item(&d, ItemState::Busy, format!("looking for bad sectors, {pc}%"));
+                            }
+                        }
+                        fix::Event::Found(bad) => live.found(&cx2, bad),
+                        fix::Event::Try(r) => {
+                            say_rereading(&cx2, &d, r);
+                            if r.attempt == 1 {
+                                live.at(&cx2, r.at);
+                            }
+                        }
+                        fix::Event::Done(s, r) => {
+                            cx2.log(fix::sector_line(s, tries));
+                            if r.given_up {
+                                cx2.log(format!("fix bad sectors: {}", fix::STOPPED));
+                            }
+                            live.done(&cx2, s);
                         }
                     },
                     &|| cx2.stopped(),
@@ -984,15 +1059,24 @@ impl Reread for Disc {
             })
             .await?;
             cx.drive_says(StepState::Idle, "Waiting", "");
-            done?
+            cx.now(None);
+            cx.progress(None);
+            match done {
+                Ok(f) => f,
+                Err(e) => {
+                    // Nothing read in this pass went in: the map as it was.
+                    self.show_map(cx, dump, &main).await;
+                    return Err(e.into());
+                }
+            }
         };
-        cx.progress(None);
         for l in fix::log_lines(&fixed, tries) {
             cx.log(l);
         }
         if fixed.other_disc.is_none() {
             self.mark(fixed.fixed().map(|s| s.lba), crate::map::Mark::Recovered);
             self.mark(fixed.left().map(|s| s.lba), crate::map::Mark::Wrong);
+            // With where the drive was gone from it.
             self.show_map(cx, dump, &main).await;
         }
         let roms = self.rehash(cx, dump).await?;
@@ -1692,11 +1776,6 @@ impl Step for LibCrypt {
         }
         Ok(())
     }
-}
-
-fn cap(s: &str) -> String {
-    let mut c = s.chars();
-    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 #[cfg(test)]

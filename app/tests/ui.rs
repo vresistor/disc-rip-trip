@@ -2984,17 +2984,17 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     app_mut(&mut h).close_tray();
     h.run_steps(2);
     click(&mut h, "Start");
-    until(&mut h, "Check to re-read the bad sectors", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Re-reading 140 bad sectors");
+    until(&mut h, "Check to re-read the bad sectors", |a| a.m.snapshot(a.sel).steps["g_check"].status == drt_steps::real::game::REREADING);
     // The sidebar first, while it's at it, then the card.
     open_id(&mut h, "g_check");
-    h.get_by_label("Re-reading 140 bad sectors");
+    h.get_by_label(drt_steps::real::game::REREADING);
     assert!(row_says(&h, &["2, Read bad sectors again", "Re-reading"]));
     shot(&mut h, "step-check-fixing");
     app_mut(&mut h).close_tray();
     let i = app(&h).sel;
     app_mut(&mut h).set_view(i, (0.9, egui::vec2(-560.0, 40.0)));
     h.run_steps(3);
-    h.get_by_label_contains("Check and fix, Re-reading 140 bad sectors");
+    h.get_by_label_contains("Check and fix, Reading bad sectors again");
     shot(&mut h, "games-check-fixing");
     until(&mut h, "the second rip", |a| a.m.snapshot(a.sel).steps["g_check"].status == "Rip 2 of 4");
     open_id(&mut h, "g_check");
@@ -3008,6 +3008,61 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     h.get_by_label("Matches Redump's Lantern Keep (Europe) (Disc 1)");
     assert!(row_says(&h, &["3, Rip again and combine", "1 taken from rip 2"]) && row_says(&h, &["4, Compare with Redump", "Matches"]));
     shot(&mut h, "step-check-fixed-verified");
+}
+
+/// Check's sector being read again now.
+fn rereading(a: &App) -> Option<drt_steps::real::fix::Rereading> {
+    a.m.snapshot(a.sel).steps["g_check"].now.clone().and_then(|n| serde_json::from_value(n).ok())
+}
+
+fn check_map(a: &App) -> drt_steps::map::SectorMap {
+    serde_json::from_value(a.m.snapshot(a.sel).steps["g_check"].record.map.clone().expect("a map")).unwrap()
+}
+
+/// Reading bad sectors again, the sidebar and the card say which sector,
+/// which try, how far through and what's come back so far, and the map
+/// turns each sector put right as it comes back, the one being read
+/// marked.
+#[test]
+fn reading_bad_sectors_again_says_how_it_goes_and_the_map_changes_as_it_goes() {
+    use drt_steps::map::Mark;
+    let e = env();
+    let mut reg = simulated(None);
+    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    // Twice as slow as real time: the pass is still going while it's
+    // looked at.
+    let mut h = window_on(&e, reg, true, 2.0, egui::vec2(1280.0, 1100.0), 1.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(2);
+    click(&mut h, "Start");
+    until(&mut h, "a few sectors put right", |a| rereading(a).is_some_and(|r| r.fixed >= 12));
+    let first = check_map(app(&h));
+    let back = first.total(Mark::Recovered);
+    assert!(back > 0 && back < 139, "{back}");
+    assert!(first.at.is_some(), "the sector being read is marked");
+    assert_eq!(first.total(Mark::Wrong) + back, 140, "each found bad is on the map, bad or put right");
+    open_id(&mut h, "g_check");
+    h.run_steps(3);
+    h.get_by_label(drt_steps::real::game::REREADING);
+    h.get_by_label_contains(" of 140 · try ");
+    h.get_by_label_contains("put right so far · 1 still bad");
+    assert!(h.query_by_label("Time left unknown").is_some() || h.query_all_by_label_contains(" left").any(|n| n.accesskit_node().value().is_some_and(|l| l.starts_with("About "))));
+    assert!(row_says(&h, &["2, Read bad sectors again", "Re-reading"]));
+    let shown = |h: &Harness<Window>| h.query_by_label_contains("Map of the disc: ").and_then(|n| n.accesskit_node().label()).unwrap_or_default();
+    assert!(shown(&h).contains(" put right"), "{}", shown(&h));
+    shot(&mut h, "step-check-rereading");
+    // Later in the same pass: more put right, on the map too.
+    let was = shown(&h);
+    until(&mut h, "more put right", |a| rereading(a).is_some_and(|r| r.fixed >= back + 20));
+    assert!(check_map(app(&h)).total(Mark::Recovered) >= back + 20);
+    assert_ne!(shown(&h), was, "the map in the sidebar changed");
+    // The card.
+    app_mut(&mut h).close_tray();
+    let i = app(&h).sel;
+    app_mut(&mut h).set_view(i, (0.9, egui::vec2(-560.0, 40.0)));
+    h.run_steps(3);
+    h.get_by_label_contains("Check and fix, Reading bad sectors again");
+    shot(&mut h, "games-check-rereading");
 }
 
 #[test]
