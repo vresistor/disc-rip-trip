@@ -25,6 +25,7 @@ pub mod net;
 pub mod offset;
 pub mod place;
 pub mod playstation;
+pub mod reach;
 pub mod redump;
 pub mod redumper;
 pub mod renames;
@@ -1628,7 +1629,8 @@ impl Step for Place {
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
         let folder = cx.text("folder");
         let names = cx.text("names");
-        let root = expand(&folder);
+        let mut to = Dest { root: expand(&folder), folder: folder.clone(), skip: false };
+        let lane = LaneKind::File(folder.clone());
         let mut done = 0;
         let mut last = String::new();
         // Files whose name is taken by a different file: they wait here for
@@ -1636,134 +1638,144 @@ impl Step for Place {
         let mut taken: Vec<(Item, PathBuf, PathBuf)> = Vec::new();
         while let Some(file) = inlet.recv().await {
             let src = file.path.clone().ok_or_else(|| anyhow!("{} has no file", file.label))?;
+            let need = size_of(&src);
             // A DVD or Blu-ray title, named for Jellyfin unless the template says otherwise.
             if file.id.starts_with(video::ITEM_PREFIX) {
-                let _f = cx.lane(LaneKind::File(folder.clone())).await;
-                cx.item(&file, ItemState::Busy, "copying");
-                filed_says(&cx, done, file.label.clone());
-                match video::place(&names, &root, &file).await {
-                    Ok(dest) => {
+                let filed = filing!(cx, to, file, need, |root| {
+                    let _f = cx.lane(lane.clone()).await;
+                    cx.item(&file, ItemState::Busy, "copying");
+                    filed_says(&cx, done, file.label.clone());
+                    video::place(&names, root, &file).await
+                });
+                match filed {
+                    Filed::Done(dest) => {
                         done += 1;
                         cx.item(&file, ItemState::Ok, dest.display().to_string());
-                        last = where_filed(&root, &dest);
+                        last = where_filed(&to.root, &dest);
                         filed_says(&cx, done, "");
                         outlet.send(file.becomes(file.kind, Some(dest))).await;
                     }
-                    Err(e) => {
+                    Filed::Failed(e) => {
                         cx.item(&file, ItemState::Bad, e.to_string());
                         cx.log(format!("couldn't file {}: {e}", file.label));
                     }
+                    Filed::Skipped => {}
                 }
                 continue;
             }
             // A disc image: its files together, in the folder its template names.
             if file.id == data::DUMP {
-                let dir = root.join(data::dump_folder(file.context(), &names));
-                let _f = cx.lane(LaneKind::File(folder.clone())).await;
-                cx.item(&file, ItemState::Busy, "copying");
-                filed_says(&cx, done, file.label.clone());
-                match data::place_dump(&src, &dir).await {
-                    Ok(dest) => {
+                let rel = data::dump_folder(file.context(), &names);
+                let filed = filing!(cx, to, file, need, |root| {
+                    let _f = cx.lane(lane.clone()).await;
+                    cx.item(&file, ItemState::Busy, "copying");
+                    filed_says(&cx, done, file.label.clone());
+                    let dir = root.join(&rel);
+                    data::place_dump(&src, &dir).await.map(|dest| (dir, dest))
+                });
+                match filed {
+                    Filed::Done((dir, dest)) => {
                         done += 1;
                         cx.item(&file, ItemState::Ok, dir.display().to_string());
-                        last = where_filed(&root, &dir.join("x"));
+                        last = where_filed(&to.root, &dir.join("x"));
                         filed_says(&cx, done, "");
                         outlet.send(file.becomes(file.kind, Some(dest))).await;
                     }
-                    Err(e) => {
+                    Filed::Failed(e) => {
                         cx.item(&file, ItemState::Bad, e.to_string());
                         cx.log(format!("couldn't file {}: {e}", file.label));
                     }
+                    Filed::Skipped => {}
                 }
                 continue;
             }
             let total = parts(file.context());
             let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let dest = match file.index {
+            // Where it goes, under the folder.
+            let rel = match file.index {
                 Some(t) => {
                     let rel = template::render(&names, &fields_in(file.context(), t, &file.label));
-                    root.join(format!("{}.{ext}", rel.display()))
+                    PathBuf::from(format!("{}.{ext}", rel.display()))
                 }
                 // A file that isn't a track (a cue sheet) goes beside the
                 // tracks, under its own name; a scan, in their Artwork folder.
                 None => {
                     let rel = template::render(&names, &fields_in(file.context(), 1, ""));
-                    let dir = rel.parent().map(|p| root.join(p)).unwrap_or_else(|| root.clone());
+                    let dir = rel.parent().map(Path::to_path_buf).unwrap_or_default();
                     let dir = if file.kind == ItemKind::PictureFile { dir.join(artwork::FOLDER) } else { dir };
                     dir.join(src.file_name().unwrap_or_default())
                 }
             };
-            let _f = cx.lane(LaneKind::File(folder.clone())).await;
-            // Never over a different file without asking.
-            match already_there(&src, &dest).await {
-                Ok(There::Nothing) => {}
-                Ok(There::Same) => {
-                    done += 1;
-                    cx.item(&file, ItemState::Ok, format!("{} (already there, the same)", dest.display()));
-                    last = where_filed(&root, &dest);
-                    filed_says(&cx, done, "");
-                    cx.progress(Some(done as f32 / total as f32));
-                    outlet.send(file.becomes(file.kind, Some(dest))).await;
-                    continue;
+            let filed = filing!(cx, to, file, need, |root| {
+                let dest = root.join(&rel);
+                let _f = cx.lane(lane.clone()).await;
+                // Never over a different file without asking.
+                match already_there(&src, &dest).await? {
+                    There::Nothing => {}
+                    There::Same => return Ok((dest, There::Same)),
+                    There::Different => return Ok((dest, There::Different)),
                 }
-                Ok(There::Different) => {
+                cx.item(&file, ItemState::Busy, "copying");
+                filed_says(&cx, done, file_name(&dest));
+                copy_in(&src, &dest).await.map(|()| (dest, There::Nothing))
+            });
+            match filed {
+                Filed::Done((dest, There::Different)) => {
                     cx.item(&file, ItemState::Waiting, "a different file has this name");
                     taken.push((file, src, dest));
-                    continue;
                 }
-                Err(e) => {
-                    cx.item(&file, ItemState::Bad, e.to_string());
-                    cx.log(format!("couldn't file {}: {e}", file.label));
-                    continue;
-                }
-            }
-            cx.item(&file, ItemState::Busy, "copying");
-            filed_says(&cx, done, file_name(&dest));
-            match copy_in(&src, &dest).await {
-                Ok(()) => {
+                Filed::Done((dest, there)) => {
                     done += 1;
-                    cx.item(&file, ItemState::Ok, dest.display().to_string());
-                    last = where_filed(&root, &dest);
+                    let note = if there == There::Same { format!("{} (already there, the same)", dest.display()) } else { dest.display().to_string() };
+                    cx.item(&file, ItemState::Ok, note);
+                    last = where_filed(&to.root, &dest);
                     filed_says(&cx, done, "");
                     cx.progress(Some(done as f32 / total as f32));
                     outlet.send(file.becomes(file.kind, Some(dest))).await;
                 }
-                Err(e) => {
+                Filed::Failed(e) => {
                     cx.item(&file, ItemState::Bad, e.to_string());
                     cx.log(format!("couldn't file {}: {e}", file.label));
                 }
+                Filed::Skipped => {}
             }
         }
         if !taken.is_empty() && !cx.stopped() {
-            let dirs: std::collections::BTreeSet<String> = taken.iter().map(|(_, _, d)| where_filed(&root, d)).collect();
+            let dirs: std::collections::BTreeSet<String> = taken.iter().map(|(_, _, d)| where_filed(&to.root, d)).collect();
             let place = match dirs.iter().next() {
                 Some(d) if dirs.len() == 1 && !d.is_empty() => d.clone(),
-                _ => folder.clone(),
+                _ => to.folder.clone(),
             };
             let Ok(answer) = cx.ask(name_taken(taken.len(), &place)).await else { return Ok(()) };
             let choice = taken_choice(answer);
-            let _f = cx.lane(LaneKind::File(folder.clone())).await;
             for (file, src, dest) in taken {
                 if choice == Taken::Skip {
                     cx.item(&file, ItemState::Skipped, "not filed: a different file has this name");
                     continue;
                 }
-                cx.item(&file, ItemState::Busy, "copying");
-                let filed = match choice {
-                    Taken::Replace => copy_in(&src, &dest).await.map(|()| dest),
-                    _ => keep_both(&src, &dest).await,
-                };
+                // Where it goes is fixed now: asked about by its name there.
+                let rel = dest.strip_prefix(&to.root).map(Path::to_path_buf).unwrap_or_else(|_| dest.clone());
+                let filed = filing!(cx, to, file, size_of(&src), |root| {
+                    let dest = root.join(&rel);
+                    let _f = cx.lane(lane.clone()).await;
+                    cx.item(&file, ItemState::Busy, "copying");
+                    match choice {
+                        Taken::Replace => copy_in(&src, &dest).await.map(|()| dest),
+                        _ => keep_both(&src, &dest).await,
+                    }
+                });
                 match filed {
-                    Ok(dest) => {
+                    Filed::Done(dest) => {
                         done += 1;
                         cx.item(&file, ItemState::Ok, dest.display().to_string());
-                        last = where_filed(&root, &dest);
+                        last = where_filed(&to.root, &dest);
                         outlet.send(file.becomes(file.kind, Some(dest))).await;
                     }
-                    Err(e) => {
+                    Filed::Failed(e) => {
                         cx.item(&file, ItemState::Bad, e.to_string());
                         cx.log(format!("couldn't file {}: {e}", file.label));
                     }
+                    Filed::Skipped => {}
                 }
             }
             cx.state(StepState::Busy);
@@ -1772,6 +1784,184 @@ impl Step for Place {
             filed_says(&cx, done, last);
         }
         Ok(())
+    }
+}
+
+/// Where a Folder files: the folder as set, or another you chose for this
+/// disc while it was away; and whether you said to skip the rest.
+struct Dest {
+    root: PathBuf,
+    folder: String,
+    skip: bool,
+}
+
+/// How filing one file went.
+enum Filed<T> {
+    Done(T),
+    Failed(anyhow::Error),
+    /// Not filed, on your say: it's still in the working folder.
+    Skipped,
+}
+
+/// How often a Folder whose folder is away looks for it again.
+pub const LOOK_AGAIN_MS: u64 = 20_000;
+
+/// A file's size, or a folder's (a dump's files together): what it needs
+/// where it's filed.
+fn size_of(p: &Path) -> u64 {
+    match std::fs::metadata(p) {
+        Ok(m) if m.is_dir() => std::fs::read_dir(p).map(|d| d.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0),
+        Ok(m) => {
+            // A dump's main file stands for the files beside it.
+            let beside = if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("chd")) {
+                0
+            } else {
+                redumper::dump_files(p).iter().filter(|f| *f != p).filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum()
+            };
+            m.len() + beside
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Files one file with the block, given the folder as it is now (`root`).
+/// While the folder is away (gone, not answering, out of room), before or
+/// when the block fails because of it, the Folder holds and tries again.
+/// Gives a [`Filed`].
+macro_rules! filing {
+    ($cx:ident, $to:ident, $file:ident, $need:expr, |$root:ident| $body:block) => {{
+        let need = $need;
+        loop {
+            if !until_there(&$cx, &mut $to, &$file, need).await {
+                skipped(&$cx, &$file);
+                break Filed::Skipped;
+            }
+            let r = {
+                let $root: &Path = &$to.root;
+                async { $body }.await
+            };
+            if let Some(f) = settle(r, &$cx, &$to, &$file).await {
+                break f;
+            }
+        }
+    }};
+}
+use filing;
+
+/// A file not filed on your say.
+fn skipped(cx: &Cx, file: &Item) {
+    cx.keep_work();
+    cx.item(file, ItemState::Skipped, format!("not filed: kept in {}", cx.work().map(|w| reach::shown(&w)).unwrap_or_default()));
+}
+
+/// How filing went, or `None` to try again: it failed because the folder
+/// went away.
+async fn settle<T>(r: Result<T>, cx: &Cx, to: &Dest, file: &Item) -> Option<Filed<T>> {
+    match r {
+        Ok(t) => Some(Filed::Done(t)),
+        Err(e) if !cx.stopped() && reach::check(&to.root, 0).await.is_err() => {
+            cx.log(format!("couldn't file {}: {e}", file.label));
+            None
+        }
+        Err(e) => Some(Filed::Failed(e)),
+    }
+}
+
+/// Waits until the folder can take `need` more bytes. While it can't, the
+/// Folder holds, says what it waits for, and looks again every
+/// [`LOOK_AGAIN_MS`]: once it's back, the file is filed by itself. You can
+/// choose another folder for this disc, or skip. True to file, false to
+/// skip (said, or the run stopped): the file stays where it is.
+async fn until_there(cx: &Cx, to: &mut Dest, file: &Item, need: u64) -> bool {
+    if to.skip {
+        return false;
+    }
+    let mut why = match reach::check(&to.root, need).await {
+        Ok(()) => return true,
+        Err(w) => w,
+    };
+    loop {
+        cx.log(why.sentence());
+        cx.item(file, ItemState::Waiting, why.sentence());
+        let answer = {
+            let ask = cx.ask(away(&why, &to.root, cx));
+            tokio::pin!(ask);
+            loop {
+                tokio::select! {
+                    a = &mut ask => break Some(a),
+                    slept = cx.sleep(LOOK_AGAIN_MS) => {
+                        if slept.is_err() {
+                            return false;
+                        }
+                        match reach::check(&to.root, need).await {
+                            Ok(()) => break None,
+                            Err(w) => {
+                                if w != why {
+                                    cx.item(file, ItemState::Waiting, w.sentence());
+                                }
+                                why = w;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        match answer {
+            // Back: the question goes, and the file is filed.
+            None => {
+                cx.log(format!("{} is back", reach::shown(&to.root)));
+                cx.state(StepState::Busy);
+                return true;
+            }
+            Some(Ok(drt_engine::Answer::Pick(0))) => {
+                let q = drt_engine::Question {
+                    prompt: "Which folder should this disc go in?".into(),
+                    shape: drt_engine::QuestionShape::Value { label: "Folder".into(), suggested: to.folder.clone(), folder: true },
+                };
+                if let Ok(drt_engine::Answer::Value(v)) = cx.ask(q).await {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        to.folder = v.to_owned();
+                        to.root = expand(v);
+                        cx.log(format!("filing the rest of this disc in {}", reach::shown(&to.root)));
+                    }
+                }
+                if cx.stopped() {
+                    return false;
+                }
+            }
+            Some(Ok(_)) => {
+                to.skip = true;
+                cx.log("skipped filing: the files stay in the working folder");
+                return false;
+            }
+            Some(Err(_)) => return false,
+        }
+        why = match reach::check(&to.root, need).await {
+            Ok(()) => {
+                cx.state(StepState::Busy);
+                return true;
+            }
+            Err(w) => w,
+        };
+    }
+}
+
+/// What a Folder asks while its folder is away: *Waiting for /run/…/FLAC
+/// to come back*.
+fn away(why: &reach::Unreachable, root: &Path, cx: &Cx) -> drt_engine::Question {
+    let choice = |l: &str, d: String| drt_engine::Choice { label: l.into(), detail: d, destructive: false, picture: None };
+    let at = reach::shown(root);
+    let prompt = if why.full() { format!("Waiting for room in {at}") } else { format!("Waiting for {at} to come back") };
+    let work = cx.work().map(|w| reach::shown(&w)).unwrap_or_default();
+    drt_engine::Question {
+        prompt,
+        shape: drt_engine::QuestionShape::PickOne {
+            options: vec![choice("Choose another folder", "For this disc only".into()), choice("Skip", format!("Not filed: the files stay in {work}"))],
+            preselected: 0,
+            details: None,
+            skip: false,
+        },
     }
 }
 

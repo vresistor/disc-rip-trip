@@ -4723,18 +4723,36 @@ fn two_columns(ui: &mut Ui, _p: &Pal, n: usize, mut each: impl FnMut(&mut Ui, us
 /// A question that wants a value: the box on the left; Use in the header.
 fn value_question(app: &mut App, lu: &mut Ui, p: &Pal, snap: &Snapshot, step: &str) {
     let Some((_, q)) = snap.question.clone() else { return };
-    let QuestionShape::Value { label, suggested } = &q.shape else { return };
+    let QuestionShape::Value { label, suggested, folder } = &q.shape else { return };
     let key = format!("q/{step}");
     let text = app.buffers.entry(key).or_insert_with(|| suggested.clone());
+    let mut pick = false;
     field(
         lu,
         p,
         label,
         |ui, l| {
-            ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width()).font(font(13.5, 400)).margin(vec2(8.0, 5.0))).labelled_by(l);
+            ui.horizontal(|ui| {
+                let w = ui.available_width() - if *folder { 40.0 } else { 0.0 };
+                ui.add(egui::TextEdit::singleline(text).desired_width(w).font(font(13.5, 400)).margin(vec2(8.0, 5.0))).labelled_by(l);
+                pick = *folder && Btn::new("folder-link", "").name("Choose folder").pad(vec2(7.0, 6.0)).show(ui, p).clicked();
+            });
         },
         None,
     );
+    // A folder picked in the portal fills the box; Use sends it.
+    if pick {
+        let hook = app.m.pick_folder.clone();
+        let tx = app.picked_answer.0.clone();
+        let ctx = lu.ctx().clone();
+        let (step, start) = (step.to_owned(), expand(text).ancestors().find(|a| a.is_dir()).map(|a| a.to_owned()));
+        std::thread::spawn(move || {
+            if let Some(path) = hook(start) {
+                let _ = tx.send((step, path.display().to_string()));
+                ctx.request_repaint();
+            }
+        });
+    }
 }
 
 #[cfg(test)]

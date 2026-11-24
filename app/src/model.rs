@@ -27,6 +27,78 @@ pub type SendTest = Arc<dyn Fn(bool, String, String) -> std::pin::Pin<Box<dyn st
 pub type OpenTray = Arc<dyn Fn(&str) -> std::result::Result<(), String> + Send + Sync>;
 /// The optical drives connected just now, by name (cheap: sysfs).
 pub type ListDrives = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+/// Whether a folder can take this many bytes now, as
+/// [`drt_steps::real::reach::look`]. Blocks, and may hang on a dead
+/// network folder: called on a thread of its own, and given up on.
+pub type Reach = Arc<dyn Fn(&Path, u64) -> std::result::Result<(), Unreachable> + Send + Sync>;
+
+pub use drt_steps::real::reach::Unreachable;
+
+/// How often the folders recipes file into are looked at while idle.
+pub const LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// A folder a recipe needs before it starts: a Folder tile's (by its id),
+/// or the working folder (`None`), with about how much room.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Needed {
+    pub step: Option<String>,
+    pub path: PathBuf,
+    pub need: u64,
+}
+
+/// A folder's last look, by path and room needed.
+type Looked = HashMap<(PathBuf, u64), std::result::Result<(), Unreachable>>;
+type LookedOne = ((PathBuf, u64), std::result::Result<(), Unreachable>);
+
+/// Looks at folders off the window's thread, one look per folder at a
+/// time, and wakes the window only when one has changed.
+#[derive(Clone)]
+struct Looker {
+    reach: Arc<std::sync::Mutex<Reach>>,
+    /// Folders being looked at just now: one that hangs stays here until
+    /// it answers, and isn't looked at again meanwhile.
+    looking: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
+    /// What each look came to last, to tell news from the same again.
+    last: Arc<std::sync::Mutex<Looked>>,
+    tx: std::sync::mpsc::Sender<LookedOne>,
+    wake: Arc<std::sync::OnceLock<egui::Context>>,
+    /// The folders to look at again every [`LOOK_EVERY`]: every idle
+    /// recipe's, as last worked out.
+    watched: Arc<std::sync::Mutex<Vec<(PathBuf, u64)>>>,
+}
+
+impl Looker {
+    /// One look at a folder, unless one is already under way.
+    fn look(&self, rt: &tokio::runtime::Handle, path: PathBuf, need: u64) {
+        if !self.looking.lock().unwrap().insert(path.clone()) {
+            return;
+        }
+        let reach = self.reach.lock().unwrap().clone();
+        let (looking, me) = (self.looking.clone(), self.clone());
+        let (otx, orx) = tokio::sync::oneshot::channel();
+        let p = path.clone();
+        // A thread, not the runtime's: a look stuck on a dead mount must
+        // not keep the app from closing.
+        std::thread::spawn(move || {
+            let _ = otx.send(reach(&p, need));
+            looking.lock().unwrap().remove(&p);
+        });
+        rt.spawn(async move {
+            let r = match tokio::time::timeout(drt_steps::real::reach::TIMEOUT, orx).await {
+                Ok(Ok(r)) => r,
+                _ => Err(Unreachable::NotAnswering { path: path.clone() }),
+            };
+            let key = (path, need);
+            let news = me.last.lock().unwrap().insert(key.clone(), r.clone()).as_ref() != Some(&r);
+            let _ = me.tx.send((key, r));
+            if news {
+                if let Some(ctx) = me.wake.get() {
+                    ctx.request_repaint();
+                }
+            }
+        });
+    }
+}
 
 /// Everything the window is given rather than makes, so a test can give
 /// it a simulated engine, a temporary folder and harmless hooks.
@@ -43,6 +115,8 @@ pub struct Deps {
     pub send_test: SendTest,
     /// Opens a drive's tray: [`drt_steps::real::open_tray`], or a stand-in.
     pub open_tray: OpenTray,
+    /// Looks at a folder: [`drt_steps::real::reach::look`], or a stand-in.
+    pub reach: Reach,
 }
 
 /// One disc going through a recipe.
@@ -148,6 +222,10 @@ pub struct Model {
     /// Each Rip's pace as it reads (by recipe, run and step), and what it
     /// last came to: for its card and its sidebar.
     pace: std::sync::Mutex<HashMap<PaceKey, (crate::pace::Pace, Option<crate::pace::Reading>)>>,
+    looker: Looker,
+    /// What each folder came to when last looked at.
+    looked: Looked,
+    looked_rx: std::sync::mpsc::Receiver<LookedOne>,
 }
 
 impl Model {
@@ -185,6 +263,7 @@ impl Model {
         known.extend([drt_steps::recipes::BLU_RAY.to_owned(), drt_steps::recipes::DVD.to_owned()]);
         let drives = d.drives.iter().map(|n| known_name(n, &known)).collect();
         let (found_tx, found_rx) = std::sync::mpsc::channel();
+        let (looked_tx, looked_rx) = std::sync::mpsc::channel();
         // Watch the drives on the runtime, every 2 s; only a change is
         // news, and only news wakes the window.
         let (drives_tx, drives_rx) = std::sync::mpsc::channel();
@@ -208,6 +287,21 @@ impl Model {
                         last = Some(now);
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            });
+        }
+        // Look at the folders recipes file into every so often, on the
+        // runtime; only a change is news, and only news wakes the window.
+        let looker = Looker { reach: Arc::new(std::sync::Mutex::new(d.reach)), looking: Arc::default(), last: Arc::default(), tx: looked_tx, wake: wake.clone(), watched: Arc::default() };
+        {
+            let (looker, rt) = (looker.clone(), d.rt.clone());
+            d.rt.spawn(async move {
+                loop {
+                    tokio::time::sleep(LOOK_EVERY).await;
+                    let watched = looker.watched.lock().unwrap().clone();
+                    for (path, need) in watched {
+                        looker.look(&rt, path, need);
+                    }
                 }
             });
         }
@@ -248,6 +342,9 @@ impl Model {
             ctx: None,
             saved: Default::default(),
             pace: Default::default(),
+            looker: looker.clone(),
+            looked: HashMap::new(),
+            looked_rx,
         };
         // Which drives are here, before anything looks them up.
         m.refresh_drives();
@@ -255,6 +352,8 @@ impl Model {
         for i in 0..m.recipes.len() {
             m.look_up(i, false);
         }
+        // And the folders they file into.
+        m.look_at_folders();
         m
     }
 
@@ -377,6 +476,10 @@ impl Model {
             self.drives_at = Some(at);
             self.apply_drives(now);
             changed = true;
+        }
+        while let Ok((key, r)) = self.looked_rx.try_recv() {
+            changed |= self.looked.get(&key) != Some(&r);
+            self.looked.insert(key, r);
         }
         while let Ok((i, measured, still)) = self.found_rx.try_recv() {
             if i >= self.recipes.len() {
@@ -769,14 +872,20 @@ impl Model {
                 }
                 return snap;
             }
-            return r.snap.clone();
+            let mut snap = r.snap.clone();
+            if snap.finished && self.shows_newest(i) {
+                self.away_on_cards(i, &mut snap);
+            }
+            return snap;
         }
         let recipe = &self.recipes[i];
         let mut snap = self.engine.idle(recipe);
         // After a restart, the last run as it was left, while the recipe
         // still has the same steps.
         if let Some(k) = self.last.get(&recipe.name).filter(|k| k.snap.order == snap.order) {
-            return k.snap.clone();
+            let mut snap = k.snap.clone();
+            self.away_on_cards(i, &mut snap);
+            return snap;
         }
         // A step these steps don't have: a muted tile that says so.
         for id in self.unavailable(i) {
@@ -805,11 +914,130 @@ impl Model {
             }
             seen.push(m.step);
         }
+        self.away_on_cards(i, &mut snap);
         snap
     }
 
     pub fn drive(&self, i: usize) -> String {
         Engine::drive_of(&self.recipes[i])
+    }
+
+    /// The folders the recipe needs before it starts: each Folder's, with
+    /// about how much room one disc takes there, and the working folder,
+    /// with room for the rip and what's made from it.
+    pub fn needed(&self, i: usize) -> Vec<Needed> {
+        use drt_steps::real::reach;
+        let recipe = {
+            let mut r = self.recipes[i].clone();
+            r.upgrade();
+            r
+        };
+        let reg = &self.engine.registry;
+        let flows = flows_in(&recipe.root, reg);
+        let drive = Engine::drive_of(&recipe);
+        let settings = self.engine.settings.lock().unwrap();
+        let mut out = Vec::new();
+        let mut kinds: Vec<&str> = Vec::new();
+        for node in recipe.root.steps() {
+            let Node::Step { id, step, params, .. } = node else { continue };
+            let Some(info) = reg.info(step) else { continue };
+            kinds.push(info.kind);
+            let flow = flows.get(id);
+            for spec in info.params.iter().filter(|p| p.kind == ParamKind::Folder) {
+                let Some(v) = info.resolve_in(spec.key, params, &settings, &drive, flow) else { continue };
+                let Some(text) = v.as_str().filter(|t| !t.trim().is_empty()) else { continue };
+                let seen: Vec<&str> = flow.map(|f| f.seen.iter().copied().collect()).unwrap_or_default();
+                let need = reach::need_for(flow.map_or(drt_engine::ItemKind::AnyFile, |f| f.kind), &seen, None);
+                out.push(Needed { step: Some(id.clone()), path: drt_steps::real::expand(text), need });
+            }
+        }
+        if !out.is_empty() {
+            out.push(Needed { step: None, path: self.engine.work_root.clone(), need: reach::work_need(&kinds, None) });
+        }
+        out
+    }
+
+    /// The folders the recipe needs that can't take a disc now, as last
+    /// looked at. One not looked at yet counts as fine.
+    pub fn unreachable(&self, i: usize) -> Vec<(Needed, Unreachable)> {
+        self.needed(i).into_iter().filter_map(|n| self.looked.get(&(n.path.clone(), n.need)).and_then(|r| r.clone().err()).map(|why| (n, why))).collect()
+    }
+
+    /// A Folder whose folder can't take a disc says so on its card.
+    fn away_on_cards(&self, i: usize, snap: &mut Snapshot) {
+        if self.running(i) {
+            return;
+        }
+        for (n, why) in self.unreachable(i) {
+            let Some(v) = n.step.and_then(|id| snap.steps.get_mut(&id)) else { continue };
+            let (status, detail) = why.card();
+            v.state = StepState::Needs;
+            v.status = status;
+            v.qualifier.clear();
+            v.detail = detail;
+        }
+    }
+
+    /// Looks at the recipe's folders, off the window's thread; the answers
+    /// come in through [`Model::poll`].
+    pub fn look_at(&mut self, i: usize) {
+        if i >= self.recipes.len() || self.ripping(i) {
+            return;
+        }
+        for n in self.needed(i) {
+            self.looker.look(&self.rt, n.path, n.need);
+        }
+        self.watch_folders();
+    }
+
+    /// Looks at every recipe's folders: when the window opens, and when
+    /// it comes back to the front.
+    pub fn look_at_folders(&mut self) {
+        for i in 0..self.recipes.len() {
+            self.look_at(i);
+        }
+    }
+
+    /// The folders looked at every [`LOOK_EVERY`]: the idle recipes'.
+    fn watch_folders(&self) {
+        let mut all: Vec<(PathBuf, u64)> = (0..self.recipes.len()).filter(|&i| !self.ripping(i)).flat_map(|i| self.needed(i)).map(|n| (n.path, n.need)).collect();
+        all.sort();
+        all.dedup();
+        *self.looker.watched.lock().unwrap() = all;
+    }
+
+    /// Looks at folders another way from now on (a test's stand-in), and
+    /// forgets what was seen before.
+    pub fn set_reach(&mut self, reach: Reach) {
+        *self.looker.reach.lock().unwrap() = reach;
+        self.looker.last.lock().unwrap().clear();
+        self.looked.clear();
+    }
+
+    /// Looks at the recipe's folders now, waiting (a short while at most)
+    /// for the answers: just before a Start.
+    fn look_now(&mut self, i: usize) {
+        let deadline = std::time::Instant::now() + drt_steps::real::reach::TIMEOUT;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let needed = self.needed(i);
+        let reach = self.looker.reach.lock().unwrap().clone();
+        for n in &needed {
+            let (reach, tx, n) = (reach.clone(), tx.clone(), n.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send(((n.path.clone(), n.need), reach(&n.path, n.need)));
+            });
+        }
+        drop(tx);
+        let mut left: std::collections::HashSet<(PathBuf, u64)> = needed.iter().map(|n| (n.path.clone(), n.need)).collect();
+        while !left.is_empty() {
+            let Ok((key, r)) = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) else { break };
+            left.remove(&key);
+            self.looker.last.lock().unwrap().insert(key.clone(), r.clone());
+            self.looked.insert(key, r);
+        }
+        for (path, need) in left {
+            self.looked.insert((path.clone(), need), Err(Unreachable::NotAnswering { path }));
+        }
     }
 
     /// Why the recipe can't start, if it can't.
@@ -835,6 +1063,13 @@ impl Model {
         }
         if let Some(id) = self.unavailable(i).first() {
             return Some(format!("{} isn't in this version of the app", self.tile_name(i, id)));
+        }
+        if let Some((n, why)) = self.unreachable(i).first() {
+            return Some(match &n.step {
+                None if why.full() => why.sentence().replacen("Not enough room in", "Not enough room to rip in", 1),
+                None => format!("The working folder: {}", why.sentence()),
+                Some(_) => why.sentence(),
+            });
         }
         if let Some(id) = self.misfit(i) {
             return Some(format!("{} doesn't fit where it is", self.tile_name(i, &id)));
@@ -889,6 +1124,11 @@ impl Model {
 
     /// Start, by hand: this disc, and the ones after it through Next disc.
     pub fn start(&mut self, i: usize) -> Result<()> {
+        if let Some(why) = self.cant_start(i) {
+            bail!("{why}");
+        }
+        // The folders again, now: one may have gone since it was last looked at.
+        self.look_now(i);
         if let Some(why) = self.cant_start(i) {
             bail!("{why}");
         }
@@ -991,6 +1231,22 @@ impl Model {
             return ("Drive busy".into(), StepState::Wait);
         }
         let missing = self.engine.missing(&self.recipes[i]);
+        if let Some((n, why)) = self.unreachable(i).first().filter(|_| missing.is_empty() && self.check_word(i).is_none()) {
+            let line = match &n.step {
+                None => "No room to rip".to_owned(),
+                Some(id) => {
+                    let name = self.tile_name(i, id);
+                    let plain = name.eq_ignore_ascii_case("folder");
+                    match (why.full(), plain) {
+                        (true, true) => "No room in the folder".to_owned(),
+                        (true, false) => format!("No room in {name}"),
+                        (false, true) => "Folder unavailable".to_owned(),
+                        (false, false) => format!("{name} folder unavailable"),
+                    }
+                }
+            };
+            return (line, StepState::Needs);
+        }
         match missing.len() {
             0 if self.check_word(i).is_some() => (cap(self.check_word(i).unwrap()), StepState::Idle),
             0 => ("Ready".into(), StepState::Idle),
@@ -1298,6 +1554,10 @@ impl Model {
         // A new drive: look up what's known about it at once.
         if key == "drive" {
             self.look_up(i, false);
+        }
+        // A new folder: looked at at once.
+        if spec.kind == ParamKind::Folder {
+            self.look_at(i);
         }
         Ok(())
     }

@@ -76,6 +76,8 @@ fn make_app(e: &Env, reg: drt_engine::Registry, time_scale: f64, motion: bool) -
     }
     let drives = vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()];
     let deps = Deps {
+        // Every folder can take a disc; a test that looks gives its own.
+        reach: Arc::new(|_, _| Ok(())),
         engine,
         store: Store::new(e.dir.path().join("config")),
         drives: drives.clone(),

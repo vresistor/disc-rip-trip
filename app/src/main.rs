@@ -59,6 +59,8 @@ fn main() -> eframe::Result<()> {
         send_test: Arc::new(|desktop, server, topic| Box::pin(async move { drt_steps::real::tell::send_test(desktop, &server, &topic).await })),
         // A simulated drive has no tray to open.
         open_tray: if simulate { Arc::new(|_| Ok(())) } else { Arc::new(drt_steps::real::open_tray) },
+        // Simulated steps write nothing, so their folders aren't looked at.
+        reach: if simulate { Arc::new(|_, _| Ok(())) } else { Arc::new(|p, need| drt_steps::real::reach::look(p, need, drt_steps::real::reach::statvfs_free)) },
         connected: if simulate { Arc::new(|| vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()]) } else { Arc::new(|| drt_steps::real::drives().into_iter().map(|(name, _)| name).collect()) },
     };
     let mut model = Model::new(deps);

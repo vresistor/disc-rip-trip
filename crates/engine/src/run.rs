@@ -288,6 +288,7 @@ impl Engine {
             sides: Mutex::default(),
             holding: watch::channel(0).0,
             work,
+            keep_work: Default::default(),
         });
 
         // One channel per wire.
@@ -407,6 +408,7 @@ impl Engine {
                 let snap = s.snap.lock().unwrap();
                 !snap.stopped && snap.steps.values().all(|v| v.state != StepState::Bad && v.count(ItemState::Bad) == 0)
             };
+            let clean = clean && !s.keep_work.load(std::sync::atomic::Ordering::Relaxed);
             if clean && s.work.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&s.work) {
                     s.log.lock().unwrap().push(format!("couldn't tidy {}: {e}", s.work.display()));
@@ -512,6 +514,9 @@ pub(crate) struct Shared {
     /// The steps with a path for when they fail or need you, and where to
     /// say one has begun to; gone once the rest of the run is done.
     pub sides: Mutex<Option<SideWatch>>,
+    /// Set by a step that left files unfiled on purpose (a Folder you told
+    /// to skip while its folder was away): the working folder stays.
+    pub keep_work: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) type SideWatch = (Vec<(String, Side)>, mpsc::UnboundedSender<(String, Side, StepView)>);

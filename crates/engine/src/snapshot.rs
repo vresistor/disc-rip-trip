@@ -223,7 +223,13 @@ pub enum QuestionShape {
         skip: bool,
     },
     /// A value: a folder, an offset, a name.
-    Value { label: String, suggested: String },
+    Value {
+        label: String,
+        suggested: String,
+        /// A folder: offered with a button that picks one.
+        #[serde(default)]
+        folder: bool,
+    },
     /// A choice per item: which episode each DVD title is, or skip it.
     /// Every item picks from the same `options`; each comes with the best
     /// guess already picked (`None`: skipped unless you say otherwise).

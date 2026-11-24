@@ -26,6 +26,8 @@ struct Env {
     tests_sent: Arc<Mutex<Vec<(bool, String, String)>>>,
     /// Each drive whose tray was opened.
     trays: Arc<Mutex<Vec<String>>>,
+    /// Folders are really looked at (else every one can take a disc).
+    folders: bool,
 }
 
 fn env() -> Env {
@@ -37,6 +39,7 @@ fn env() -> Env {
         picked_from: Arc::default(),
         tests_sent: Arc::default(),
         trays: Arc::default(),
+        folders: false,
     }
 }
 
@@ -62,6 +65,8 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
     let opened = e.opened.clone();
     let picked = e.dir.path().join("picked");
     let deps = Deps {
+        // Every folder can take a disc, unless the test looks.
+        reach: if e.folders { Arc::new(|p, need| drt_steps::real::reach::look(p, need, drt_steps::real::reach::statvfs_free)) } else { Arc::new(|_, _| Ok(())) },
         engine,
         store: Store::new(e.dir.path().join("config")),
         // The drives known: those plugged in (a test can start with one).
@@ -3271,6 +3276,83 @@ fn a_drive_unplugged_says_so_calmly_and_comes_back() {
     h.get_by_label_contains("CDs, Ready");
     assert!(!h.get_by_label("Start").accesskit_node().is_disabled());
     assert!(app(&h).m.cant_start(0).is_none());
+}
+
+/// A Folder whose folder can't be made (it's under one nothing can be
+/// written in, as a drive's mount point is while it's away) says so on its
+/// card and in the list, and Start says why it can't; once the folder is
+/// there, Start can.
+#[test]
+fn a_folder_that_isnt_there_stops_start_until_it_is() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut e = env();
+    e.folders = true;
+    let mut h = window(&e, None, true, 0.0);
+    let base = e.dir.path().join("lib");
+    let away = base.join("away");
+    std::fs::create_dir_all(&away).unwrap();
+    // Every folder in a folder of the test's; the Library's can't be made.
+    for (id, sub) in [("review", "Review"), ("lib2", "MP3")] {
+        app_mut(&mut h).m.set_param(0, id, "folder", Value::from(base.join(sub).display().to_string())).unwrap();
+    }
+    let flac = away.join("FLAC");
+    app_mut(&mut h).m.set_param(0, "lib1", "folder", Value::from(flac.display().to_string())).unwrap();
+    std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // As root, nothing is read-only: nothing to see.
+    if std::fs::write(away.join("x"), "").is_ok() {
+        return;
+    }
+    app_mut(&mut h).m.look_at(0);
+    until(&mut h, "the look", |a| !a.m.unreachable(0).is_empty());
+    let why = app(&h).m.cant_start(0).unwrap();
+    assert!(why.starts_with("Can't make the folder ") && why.ends_with("FLAC"), "{why}");
+    assert!(h.get_by_label("Start").accesskit_node().is_disabled());
+    let v = &snap(&h).steps["lib1"];
+    assert_eq!((v.state, v.status.as_str()), (StepState::Needs, "Can't make the folder"));
+    h.get_by_label_contains("CDs, Library folder unavailable");
+    app_mut(&mut h).select_tile("lib1".into());
+    h.run_steps(4);
+    shot(&mut h, "folder-unavailable");
+    // Start, pressed anyway, looks again and says the same.
+    assert_eq!(app_mut(&mut h).m.start(0).unwrap_err().to_string(), why);
+
+    // The folder made: Start can, once it's looked at again.
+    std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::create_dir(&flac).unwrap();
+    std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o555)).unwrap();
+    app_mut(&mut h).m.look_at_folders();
+    until(&mut h, "the look", |a| a.m.unreachable(0).is_empty());
+    assert!(app(&h).m.cant_start(0).is_none(), "{:?}", app(&h).m.cant_start(0));
+    assert!(!h.get_by_label("Start").accesskit_node().is_disabled());
+    h.get_by_label_contains("CDs, Ready");
+    std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Not enough room for the rip, in the working folder or a Folder's: said
+/// with how much is needed and free.
+#[test]
+fn not_enough_room_is_said_with_the_sizes() {
+    let mut e = env();
+    e.folders = true;
+    let mut h = window(&e, None, true, 0.0);
+    for id in ["review", "lib1", "lib2"] {
+        app_mut(&mut h).m.set_param(0, id, "folder", Value::from(e.dir.path().join(id).display().to_string())).unwrap();
+    }
+    // A drive with room for anything, then one with 0.4 GB.
+    let small = |p: &Path, need: u64| drt_steps::real::reach::look(p, need, |_| Ok(Some(400_000_000)));
+    app_mut(&mut h).m.set_reach(Arc::new(small));
+    app_mut(&mut h).m.look_at(0);
+    // Both FLAC folders and the working folder; the MP3s fit.
+    until(&mut h, "the look", |a| a.m.unreachable(0).len() == 3);
+    let why = app(&h).m.cant_start(0).unwrap();
+    assert!(why.starts_with("Not enough room in ") && why.contains(" GB needed, 0.4 GB free"), "{why}");
+    let v = &snap(&h).steps["review"];
+    assert_eq!((v.status.as_str(), v.state), ("Not enough room", StepState::Needs));
+    assert!(v.detail.ends_with("needed, 0.4 GB free"), "{}", v.detail);
+    h.get_by_label_contains("CDs, No room in Review");
+    app_mut(&mut h).select_tile("lib1".into());
+    h.run_steps(4);
+    shot(&mut h, "folder-full");
 }
 
 #[test]

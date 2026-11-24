@@ -66,6 +66,11 @@ pub struct App {
     pub(crate) focus_done: bool,
     /// Folders picked in the portal, arriving off the UI thread.
     pub(crate) picked: Channel<Picked>,
+    /// Folders picked in the portal for a question, by the step asking.
+    pub(crate) picked_answer: Channel<(String, String)>,
+    /// Whether the window had the focus last frame: coming back to it
+    /// looks at the folders again.
+    was_focused: bool,
     /// A refusal to show for a moment: *doesn't fit here*.
     pub(crate) flash: Option<(String, f64)>,
     /// Fields holding text that doesn't read as their value, and why:
@@ -218,6 +223,8 @@ impl App {
             buffers: HashMap::new(),
             focus_done: false,
             picked: mpsc::channel(),
+            picked_answer: mpsc::channel(),
+            was_focused: true,
             flash: None,
             invalid: HashMap::new(),
             per_item: HashMap::new(),
@@ -462,6 +469,7 @@ impl App {
             self.sel = i;
             self.close_tray();
             self.editing = false;
+            self.m.look_at(i);
         }
     }
 
@@ -641,6 +649,15 @@ impl App {
         if self.confirm_quit && self.ripping().is_none() {
             self.confirm_quit = false;
         }
+        while let Ok((step, path)) = self.picked_answer.1.try_recv() {
+            self.buffers.insert(format!("q/{step}"), path);
+        }
+        // Back to the window: a drive may have been plugged in meanwhile.
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        if focused && !self.was_focused {
+            self.m.look_at_folders();
+        }
+        self.was_focused = focused;
         while let Ok((i, id, key, path)) = self.picked.1.try_recv() {
             if let Err(e) = self.m.set_param(i, &id, &key, path.into()) {
                 self.refuse(&ctx, e.to_string());

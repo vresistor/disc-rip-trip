@@ -243,6 +243,24 @@ impl Registry {
     }
 }
 
+/// Takes a step's question down when its asking ends, however it ends.
+struct TakeDown<'a>(&'a Cx);
+
+impl Drop for TakeDown<'_> {
+    fn drop(&mut self) {
+        let id = self.0.id.clone();
+        self.0.shared.answers.lock().unwrap().remove(&id);
+        self.0.shared.update(|s| {
+            if s.question.as_ref().is_some_and(|(q, _)| *q == id) {
+                s.question = None;
+            }
+            if let Some(v) = s.steps.get_mut(&id) {
+                v.state = StepState::Busy;
+            }
+        });
+    }
+}
+
 /// A request to try an item again, from the item's *Retry* menu.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetryRequest {
@@ -542,6 +560,9 @@ impl Cx {
         };
         let (tx, rx) = oneshot::channel();
         self.shared.answers.lock().unwrap().insert(self.id.clone(), tx);
+        // Taken down however this ends: answered, stopped, or given up by
+        // the step (a Folder whose folder came back while it asked).
+        let _down = TakeDown(self);
         let (id, prompt) = (self.id.clone(), q.prompt.clone());
         self.shared.update(|s| {
             s.question = Some((id.clone(), q));
@@ -554,15 +575,6 @@ impl Cx {
             a = rx => a.ok(),
             _ = self.shared.cancel.cancelled() => None,
         };
-        let id = self.id.clone();
-        self.shared.update(|s| {
-            if s.question.as_ref().is_some_and(|(q, _)| *q == id) {
-                s.question = None;
-            }
-            if let Some(v) = s.steps.get_mut(&id) {
-                v.state = StepState::Busy;
-            }
-        });
         match answer {
             Some(a) => Ok(a),
             None => bail!("stopped"),
@@ -653,6 +665,12 @@ impl Cx {
                 }
             }
         });
+    }
+
+    /// Keeps this run's working folder when it ends, even if nothing went
+    /// wrong: what's in it was left unfiled on purpose.
+    pub fn keep_work(&self) {
+        self.shared.keep_work.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// This run's working folder, where rips and encodes land before
