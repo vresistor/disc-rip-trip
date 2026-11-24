@@ -66,7 +66,13 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
     let picked = e.dir.path().join("picked");
     let deps = Deps {
         // Every folder can take a disc, unless the test looks.
-        reach: if e.folders { Arc::new(|p, need| drt_steps::real::reach::look(p, need, drt_steps::real::reach::statvfs_free)) } else { Arc::new(|_, _| Ok(())) },
+        // Only the test's own folders: never this computer's.
+        reach: if e.folders {
+            let mine = e.dir.path().to_owned();
+            Arc::new(move |p, need| if p.starts_with(&mine) { drt_steps::real::reach::look(p, need, drt_steps::real::reach::statvfs_free) } else { Ok(()) })
+        } else {
+            Arc::new(|_, _| Ok(()))
+        },
         engine,
         store: Store::new(e.dir.path().join("config")),
         // The drives known: those plugged in (a test can start with one).
@@ -3287,22 +3293,21 @@ fn a_folder_that_isnt_there_stops_start_until_it_is() {
     use std::os::unix::fs::PermissionsExt;
     let mut e = env();
     e.folders = true;
-    let mut h = window(&e, None, true, 0.0);
     let base = e.dir.path().join("lib");
     let away = base.join("away");
     std::fs::create_dir_all(&away).unwrap();
+    std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // As root, nothing is read-only: nothing to see.
+    if std::fs::write(away.join("x"), "").is_ok() {
+        return;
+    }
+    let mut h = window(&e, None, true, 0.0);
     // Every folder in a folder of the test's; the Library's can't be made.
     for (id, sub) in [("review", "Review"), ("lib2", "MP3")] {
         app_mut(&mut h).m.set_param(0, id, "folder", Value::from(base.join(sub).display().to_string())).unwrap();
     }
     let flac = away.join("FLAC");
     app_mut(&mut h).m.set_param(0, "lib1", "folder", Value::from(flac.display().to_string())).unwrap();
-    std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o555)).unwrap();
-    // As root, nothing is read-only: nothing to see.
-    if std::fs::write(away.join("x"), "").is_ok() {
-        return;
-    }
-    app_mut(&mut h).m.look_at(0);
     until(&mut h, "the look", |a| !a.m.unreachable(0).is_empty());
     let why = app(&h).m.cant_start(0).unwrap();
     assert!(why.starts_with("Can't make the folder ") && why.ends_with("FLAC"), "{why}");
@@ -3316,11 +3321,11 @@ fn a_folder_that_isnt_there_stops_start_until_it_is() {
     // Start, pressed anyway, looks again and says the same.
     assert_eq!(app_mut(&mut h).m.start(0).unwrap_err().to_string(), why);
 
-    // The folder made: Start can, once it's looked at again.
+    // The folder made: Start can, once the watcher has looked again.
     std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::create_dir(&flac).unwrap();
     std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o555)).unwrap();
-    app_mut(&mut h).m.look_at_folders();
+    app(&h).m.look_again();
     until(&mut h, "the look", |a| a.m.unreachable(0).is_empty());
     assert!(app(&h).m.cant_start(0).is_none(), "{:?}", app(&h).m.cant_start(0));
     assert!(!h.get_by_label("Start").accesskit_node().is_disabled());
@@ -3329,7 +3334,7 @@ fn a_folder_that_isnt_there_stops_start_until_it_is() {
 }
 
 /// Not enough room for the rip, in the working folder or a Folder's: said
-/// with how much is needed and free.
+/// with how much is needed and free, in the list too after a disc.
 #[test]
 fn not_enough_room_is_said_with_the_sizes() {
     let mut e = env();
@@ -3338,14 +3343,35 @@ fn not_enough_room_is_said_with_the_sizes() {
     for id in ["review", "lib1", "lib2"] {
         app_mut(&mut h).m.set_param(0, id, "folder", Value::from(e.dir.path().join(id).display().to_string())).unwrap();
     }
-    // A drive with room for anything, then one with 0.4 GB.
-    let small = |p: &Path, need: u64| drt_steps::real::reach::look(p, need, |_| Ok(Some(400_000_000)));
-    app_mut(&mut h).m.set_reach(Arc::new(small));
-    app_mut(&mut h).m.look_at(0);
+    app_mut(&mut h).m.set_param(2, "d_lib", "folder", Value::from(e.dir.path().join("images").display().to_string())).unwrap();
+    // A disc of data through first, while there's room.
+    app_mut(&mut h).select(2);
+    h.run_steps(2);
+    app_mut(&mut h).m.start(2).unwrap();
+    until(&mut h, "the disc", |a| a.m.newest(2).is_some_and(|r| r.snap.finished));
+    // Then the drive with 0.4 GB free.
+    let full = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mine = e.dir.path().to_owned();
+    let f = full.clone();
+    app_mut(&mut h).m.set_reach(Arc::new(move |p: &Path, need| {
+        let free: drt_steps::real::reach::FreeFn = if f.load(std::sync::atomic::Ordering::Relaxed) { |_| Ok(Some(400_000_000)) } else { |_| Ok(None) };
+        if p.starts_with(&mine) {
+            drt_steps::real::reach::look(p, need, free)
+        } else {
+            Ok(())
+        }
+    }));
+    app_mut(&mut h).m.look_at_folders();
     // Both FLAC folders and the working folder; the MP3s fit.
-    until(&mut h, "the look", |a| a.m.unreachable(0).len() == 3);
+    until(&mut h, "the look", |a| a.m.unreachable(0).len() == 3 && !a.m.unreachable(2).is_empty());
     let why = app(&h).m.cant_start(0).unwrap();
     assert!(why.starts_with("Not enough room in ") && why.contains(" GB needed, 0.4 GB free"), "{why}");
+    // After a disc, the list says so as well as the card.
+    h.get_by_label_contains("Data discs, No room in Library");
+    assert!(app(&h).m.cant_start(2).unwrap().starts_with("Not enough room"));
+    assert_eq!(snap(&h).steps["d_lib"].status, "Not enough room");
+    app_mut(&mut h).select(0);
+    h.run_steps(2);
     let v = &snap(&h).steps["review"];
     assert_eq!((v.status.as_str(), v.state), ("Not enough room", StepState::Needs));
     assert!(v.detail.ends_with("needed, 0.4 GB free"), "{}", v.detail);
@@ -3353,6 +3379,13 @@ fn not_enough_room_is_said_with_the_sizes() {
     app_mut(&mut h).select_tile("lib1".into());
     h.run_steps(4);
     shot(&mut h, "folder-full");
+
+    // Room again: the watcher's next look clears every recipe, the working
+    // folder too though each recipe needs a different amount there.
+    full.store(false, std::sync::atomic::Ordering::Relaxed);
+    app(&h).m.look_again();
+    until(&mut h, "room", |a| a.m.unreachable(0).is_empty() && a.m.unreachable(1).is_empty() && a.m.unreachable(2).is_empty());
+    assert!(app(&h).m.cant_start(0).is_none());
 }
 
 #[test]

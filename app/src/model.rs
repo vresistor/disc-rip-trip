@@ -57,7 +57,7 @@ struct Looker {
     reach: Arc<std::sync::Mutex<Reach>>,
     /// Folders being looked at just now: one that hangs stays here until
     /// it answers, and isn't looked at again meanwhile.
-    looking: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
+    looking: Arc<std::sync::Mutex<std::collections::HashSet<(PathBuf, u64)>>>,
     /// What each look came to last, to tell news from the same again.
     last: Arc<std::sync::Mutex<Looked>>,
     tx: std::sync::mpsc::Sender<LookedOne>,
@@ -70,7 +70,7 @@ struct Looker {
 impl Looker {
     /// One look at a folder, unless one is already under way.
     fn look(&self, rt: &tokio::runtime::Handle, path: PathBuf, need: u64) {
-        if !self.looking.lock().unwrap().insert(path.clone()) {
+        if !self.looking.lock().unwrap().insert((path.clone(), need)) {
             return;
         }
         let reach = self.reach.lock().unwrap().clone();
@@ -81,7 +81,7 @@ impl Looker {
         // not keep the app from closing.
         std::thread::spawn(move || {
             let _ = otx.send(reach(&p, need));
-            looking.lock().unwrap().remove(&p);
+            looking.lock().unwrap().remove(&(p, need));
         });
         rt.spawn(async move {
             let r = match tokio::time::timeout(drt_steps::real::reach::TIMEOUT, orx).await {
@@ -97,6 +97,14 @@ impl Looker {
                 }
             }
         });
+    }
+
+    /// Looks again at every folder watched.
+    fn look_again(&self, rt: &tokio::runtime::Handle) {
+        let watched = self.watched.lock().unwrap().clone();
+        for (path, need) in watched {
+            self.look(rt, path, need);
+        }
     }
 }
 
@@ -298,10 +306,7 @@ impl Model {
             d.rt.spawn(async move {
                 loop {
                     tokio::time::sleep(LOOK_EVERY).await;
-                    let watched = looker.watched.lock().unwrap().clone();
-                    for (path, need) in watched {
-                        looker.look(&rt, path, need);
-                    }
+                    looker.look_again(&rt);
                 }
             });
         }
@@ -998,9 +1003,15 @@ impl Model {
         }
     }
 
-    /// The folders looked at every [`LOOK_EVERY`]: the idle recipes'.
+    /// What the watcher does every [`LOOK_EVERY`]: looks again at every
+    /// recipe's folders.
+    pub fn look_again(&self) {
+        self.looker.look_again(&self.rt);
+    }
+
+    /// The folders looked at every [`LOOK_EVERY`]: every recipe's.
     fn watch_folders(&self) {
-        let mut all: Vec<(PathBuf, u64)> = (0..self.recipes.len()).filter(|&i| !self.ripping(i)).flat_map(|i| self.needed(i)).map(|n| (n.path, n.need)).collect();
+        let mut all: Vec<(PathBuf, u64)> = (0..self.recipes.len()).flat_map(|i| self.needed(i)).map(|n| (n.path, n.need)).collect();
         all.sort();
         all.dedup();
         *self.looker.watched.lock().unwrap() = all;
@@ -1017,7 +1028,9 @@ impl Model {
     /// Looks at the recipe's folders now, waiting (a short while at most)
     /// for the answers: just before a Start.
     fn look_now(&mut self, i: usize) {
-        let deadline = std::time::Instant::now() + drt_steps::real::reach::TIMEOUT;
+        // Short: the window waits for it. A folder slower than this is
+        // said not to answer.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         let (tx, rx) = std::sync::mpsc::channel();
         let needed = self.needed(i);
         let reach = self.looker.reach.lock().unwrap().clone();
@@ -1221,17 +1234,7 @@ impl Model {
         if self.stopping(i) {
             return ("Stopping…".into(), StepState::Busy);
         }
-        if let Some(r) = self.newest(i) {
-            return run_line(&r.snap, false);
-        }
-        if self.finding.contains_key(&i) {
-            return ("Looking up".into(), StepState::Busy);
-        }
-        if self.drive_busy(i) && self.engine.missing(&self.recipes[i]).is_empty() {
-            return ("Drive busy".into(), StepState::Wait);
-        }
-        let missing = self.engine.missing(&self.recipes[i]);
-        if let Some((n, why)) = self.unreachable(i).first().filter(|_| missing.is_empty() && self.check_word(i).is_none()) {
+        if let Some((n, why)) = self.unreachable(i).first().filter(|_| !self.ripping(i) && self.engine.missing(&self.recipes[i]).is_empty() && self.check_word(i).is_none()) {
             let line = match &n.step {
                 None => "No room to rip".to_owned(),
                 Some(id) => {
@@ -1247,6 +1250,16 @@ impl Model {
             };
             return (line, StepState::Needs);
         }
+        if let Some(r) = self.newest(i) {
+            return run_line(&r.snap, false);
+        }
+        if self.finding.contains_key(&i) {
+            return ("Looking up".into(), StepState::Busy);
+        }
+        if self.drive_busy(i) && self.engine.missing(&self.recipes[i]).is_empty() {
+            return ("Drive busy".into(), StepState::Wait);
+        }
+        let missing = self.engine.missing(&self.recipes[i]);
         match missing.len() {
             0 if self.check_word(i).is_some() => (cap(self.check_word(i).unwrap()), StepState::Idle),
             0 => ("Ready".into(), StepState::Idle),

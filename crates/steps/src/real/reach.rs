@@ -132,9 +132,16 @@ fn network(p: &Path) -> bool {
 /// is a drives root: `/run/media/backup` for `/run/media/backup/Music`.
 fn drive_of(there: &Path, path: &Path) -> Option<PathBuf> {
     // Right under a root, or under its per-user folder (/run/media/alice).
-    DRIVE_ROOTS.iter().map(Path::new).find(|r| there == *r || there.parent() == Some(*r))?;
-    let next = path.strip_prefix(there).ok()?.components().next()?;
-    Some(there.join(next))
+    let root = DRIVE_ROOTS.iter().map(Path::new).find(|r| there == *r || there.parent() == Some(*r))?;
+    let mut rest = path.strip_prefix(there).ok()?.components().map(|c| c.as_os_str().to_owned());
+    let next = rest.next()?;
+    // The per-user folder itself missing (no drive plugged in since the
+    // computer started): the drive is the folder after it.
+    let user = std::env::var_os("USER").filter(|u| there == root && *u == next);
+    match user.and_then(|_| rest.next()) {
+        Some(drive) => Some(there.join(next).join(drive)),
+        None => Some(there.join(next)),
+    }
 }
 
 /// Looks at a folder now, blocking: there or makeable, writable, with
@@ -167,6 +174,11 @@ pub fn look(path: &Path, need: u64, free: FreeFn) -> Result<(), Unreachable> {
         let remote = network(path) || portal(&there);
         let refused = matches!(e.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem);
         return Err(if refused && !remote { Unreachable::CantWrite { path: path.into(), missing } } else { Unreachable::CantReach { path: path.into(), network: network(path) } });
+    }
+    // What the document portal or GVFS says is free is the computer's own
+    // disk's, or nothing: not the network folder's. Not counted.
+    if portal(&there) || network(path) {
+        return Ok(());
     }
     match free(&there) {
         Ok(Some(f)) if f < need => Err(Unreachable::NoRoom { path: path.into(), need, free: f }),
@@ -400,6 +412,11 @@ mod tests {
         assert_eq!(drive_of(Path::new("/run/media"), Path::new("/run/media/backup/Music")), Some(PathBuf::from("/run/media/backup")));
         assert_eq!(drive_of(Path::new("/run/media/alice"), Path::new("/run/media/alice/backup/Music")), Some(PathBuf::from("/run/media/alice/backup")));
         assert_eq!(drive_of(Path::new("/home/alice"), Path::new("/home/alice/Music")), None);
+        // No drive since the computer started: no per-user folder either.
+        if let Some(me) = std::env::var_os("USER").map(|u| u.to_string_lossy().into_owned()) {
+            let want = PathBuf::from(format!("/run/media/{me}/backup"));
+            assert_eq!(drive_of(Path::new("/run/media"), &want.join("Music")), Some(want));
+        }
         let r = Unreachable::Unplugged { drive: "/run/media/backup".into() };
         assert_eq!(r.sentence(), "The drive /run/media/backup isn't plugged in");
     }
