@@ -13,19 +13,16 @@ use std::sync::Arc;
 /// The app's id, which flatpak knows it by.
 pub const APP_ID: &str = "io.github.vresistor.disc-rip-trip";
 
-/// The command that lets this app's flatpak start programs on the host.
-pub fn override_command() -> String {
-    format!("flatpak override --user --talk-name=org.freedesktop.Flatpak {APP_ID}")
-}
-
 /// Where to get it.
 pub const GET_URL: &str = "https://www.makemkv.com/download/";
 
 /// What the sidebar says first, when it isn't set up.
 pub const WHY: &str = "Video discs are read by MakeMKV, which doesn't come with this app: it isn't free software, and it gets round copy protection. Disc Rip Trip only runs it if you say so.";
 
-/// What the permission lets the app do, said plainly.
-pub const GRANTS: &str = "This lets Disc Rip Trip start any program on your computer as you, not just MakeMKV.";
+/// What the sidebar says when the flatpak's permission to start programs
+/// outside it has been taken away. It comes with it; choosing MakeMKV is
+/// all it should take.
+pub const TAKEN_AWAY: &str = "Disc Rip Trip has been stopped from starting programs outside its flatpak, so it can't start MakeMKV. This is usually turned off in Flatseal (\"Talk to org.freedesktop.Flatpak\"). Turn it back on there, then close Disc Rip Trip and open it again.";
 
 pub type Candidates = Arc<dyn Fn() -> Vec<Location> + Send + Sync>;
 pub type Version = Arc<dyn Fn(Location) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> + Send + Sync>;
@@ -116,7 +113,7 @@ impl Readiness {
         match self {
             Readiness::Ready => (String::new(), String::new()),
             Readiness::NotChosen => ("MakeMKV not set up".into(), "Choose where MakeMKV is".into()),
-            Readiness::NeedsPermission => ("MakeMKV can't be started".into(), "The flatpak needs your permission".into()),
+            Readiness::NeedsPermission => ("MakeMKV can't be started".into(), "Starting programs outside the flatpak was turned off".into()),
             Readiness::Checking => ("Checking MakeMKV".into(), String::new()),
         }
     }
@@ -126,7 +123,7 @@ impl Readiness {
         match self {
             Readiness::Ready => String::new(),
             Readiness::NotChosen => "Video discs need MakeMKV: choose where it is first".into(),
-            Readiness::NeedsPermission => "MakeMKV is outside the flatpak, and the flatpak needs your permission to start it".into(),
+            Readiness::NeedsPermission => "MakeMKV is outside the flatpak, and starting programs outside it was turned off".into(),
             Readiness::Checking => "Still checking MakeMKV".into(),
         }
     }
@@ -186,7 +183,7 @@ impl MakeMkv {
         }
         match (self.readiness(), &self.saved) {
             (Readiness::Checking, _) => "Checking…".into(),
-            (Readiness::NeedsPermission, _) => "Needs a permission".into(),
+            (Readiness::NeedsPermission, _) => "Can't be started".into(),
             // The version, without the name the row already says.
             (_, Some(s)) => s.version.as_deref().map_or("Chosen".into(), |v| v.trim_start_matches("MakeMKV ").to_owned()),
             (_, None) => "Not set up".into(),

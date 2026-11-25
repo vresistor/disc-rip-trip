@@ -450,7 +450,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     Readiness::Ready => ("Ready".into(), Tone::Ok, Some(StepState::Ok)),
                     Readiness::Checking => ("Checking".into(), Tone::Busy, Some(StepState::Busy)),
                     Readiness::NotChosen => ("Not set up".into(), Tone::Warn, Some(StepState::Needs)),
-                    Readiness::NeedsPermission => ("Needs a permission".into(), Tone::Warn, Some(StepState::Needs)),
+                    Readiness::NeedsPermission => ("Can't be started".into(), Tone::Warn, Some(StepState::Needs)),
                 }),
                 say: "Reads video discs, for Video disc and Rip.".into(),
                 acts: vec![],
@@ -787,7 +787,7 @@ fn makemkv_page(app: &mut App, ui: &mut Ui, p: &Pal, full: bool) {
             |ui, l| {
                 ui.add(egui::Label::new(RichText::new(&label).font(font(13.5, 500)).color(p.ink)).wrap()).labelled_by(l);
                 let v = match (r, version) {
-                    (Readiness::NeedsPermission, _) => "Not run yet: the flatpak needs your permission".to_owned(),
+                    (Readiness::NeedsPermission, _) => "Not run yet: it can't be started from here".to_owned(),
                     (_, Some(v)) => v,
                     (_, None) => "Version not known yet".to_owned(),
                 };
@@ -796,29 +796,14 @@ fn makemkv_page(app: &mut App, ui: &mut Ui, p: &Pal, full: bool) {
             None,
         );
         if r == Readiness::NeedsPermission {
-            wrap(
-                ui,
-                "Disc Rip Trip runs in a flatpak, which can't start programs outside itself unless you let it. To let it, run this in a terminal, then close Disc Rip Trip and open it again:",
-                p.ink,
-            );
+            // The app comes allowed to start MakeMKV; this is only seen
+            // when someone has taken that away (Flatseal, or an override).
+            wrap(ui, crate::makemkv::TAKEN_AWAY, p.ink);
             ui.add_space(6.0);
-            let cmd = crate::makemkv::override_command();
-            egui::Frame::new().fill(p.bg).stroke(Stroke::new(1.0, p.line)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(&cmd).font(crate::theme::mono(12.5)).color(p.ink)).wrap().selectable(true));
-            });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if Btn::new("", "Copy").look(Look::Plain).font(font(13.0, 500)).name("Copy the command").show(ui, p).clicked() {
-                    ui.ctx().copy_text(cmd.clone());
-                }
-                if Btn::new("", "Check again").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked() {
-                    app.m.look_for_makemkv();
-                    app.m.check_saved_makemkv();
-                }
-            });
-            ui.add_space(4.0);
-            wrap(ui, crate::makemkv::GRANTS, p.muted);
+            if Btn::new("", "Check again").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked() {
+                app.m.look_for_makemkv();
+                app.m.check_saved_makemkv();
+            }
             ui.add_space(8.0);
         }
         ui.horizontal(|ui| {

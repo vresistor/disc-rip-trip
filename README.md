@@ -67,18 +67,11 @@ library can be on a network share, an external drive or anywhere else.
 So the sandbox doesn't wall it off from the rest of your system. Treat
 it like any program you install.
 
-It can't start programs outside itself, and MakeMKV lives outside it
-(on your system, or in its own flatpak). If you choose a MakeMKV for
-video discs, the app shows the one command that lets it, with a Copy
-button:
-
-```sh
-flatpak override --user --talk-name=org.freedesktop.Flatpak io.github.vresistor.disc-rip-trip
-```
-
-Run it, then close the app and open it again. It lets the app start any
-program on your computer as you, not just MakeMKV. To take it back:
-`flatpak override --user --reset io.github.vresistor.disc-rip-trip`.
+It can also start programs outside itself, which is how it runs MakeMKV
+(on your system, or from MakeMKV's own flatpak). The app uses that only
+for the MakeMKV you choose in it, and runs nothing until you have: for
+video discs it lists the copies it found and lets you pick one, or
+choose the file yourself. Nothing to set up beyond that.
 
 ## Your first CD
 

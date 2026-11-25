@@ -6108,7 +6108,7 @@ fn approved_makemkv_is_remembered_and_not_run_again_at_the_next_start() {
 }
 
 #[test]
-fn in_the_flatpak_a_host_makemkv_needs_a_permission_and_the_command_is_shown() {
+fn in_a_flatpak_whose_permission_was_taken_away_makemkv_isnt_run_and_it_says_why() {
     let ran = Arc::new(Mutex::new(Vec::new()));
     let mut e = env();
     e.makemkv = makemkv_hooks(true, false, ran.clone());
@@ -6122,10 +6122,9 @@ fn in_the_flatpak_a_host_makemkv_needs_a_permission_and_the_command_is_shown() {
     assert!(ran.lock().unwrap().is_empty());
     assert_eq!(snap(&h).steps["v_disc"].status, "MakeMKV can't be started");
     assert!(h.get_by_label("Start").accesskit_node().is_disabled());
-    assert!(app(&h).m.cant_start(i).unwrap().contains("permission"));
-    h.get_by_label("flatpak override --user --talk-name=org.freedesktop.Flatpak io.github.vresistor.disc-rip-trip");
-    h.get_by_label("Copy the command");
-    h.get_by_label_contains("start any program on your computer as you");
+    assert!(app(&h).m.cant_start(i).unwrap().contains("turned off"));
+    assert!(h.query_by_label_contains("flatpak override").is_none(), "no command to type");
+    h.get_by_label_contains("Flatseal");
     h.get_by_label_contains("close Disc Rip Trip and open it again");
     shot(&mut h, "makemkv-permission");
     // Checking again can't see a change made after the app started.
