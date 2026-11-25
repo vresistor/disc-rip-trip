@@ -149,6 +149,33 @@ impl Store {
         Ok(())
     }
 
+    /// Where MakeMKV may be run from, as you chose it; none if you haven't.
+    pub fn load_makemkv(&self) -> Option<crate::makemkv::Saved> {
+        serde_json::from_str(&std::fs::read_to_string(self.dir.join("makemkv")).ok()?).ok()
+    }
+
+    /// Saves it, or (`None`) forgets it.
+    pub fn save_makemkv(&self, s: Option<&crate::makemkv::Saved>) -> Result<()> {
+        match s {
+            Some(s) => write(&self.dir.join("makemkv"), serde_json::to_string_pretty(s)?.as_bytes()),
+            None => match std::fs::remove_file(self.dir.join("makemkv")) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+                _ => Ok(()),
+            },
+        }
+    }
+
+    /// Whether MakeMKV's beta key is kept up to date: "on", else off.
+    pub fn load_makemkv_key_updates(&self) -> bool {
+        std::fs::read_to_string(self.dir.join("makemkv-key-updates")).is_ok_and(|s| s.trim() == "on")
+    }
+
+    pub fn save_makemkv_key_updates(&self, on: bool) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join("makemkv-key-updates"), if on { "on" } else { "off" })?;
+        Ok(())
+    }
+
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         if self.settings_unreadable.is_some() {
             return Ok(());

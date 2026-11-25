@@ -302,8 +302,9 @@ fn device(c: &Context) -> Result<String> {
     c.get(Subject::Disc, "device").map(str::to_owned).ok_or_else(|| anyhow!("no drive before this step"))
 }
 
-/// Runs `f` with MakeMKV; if it says it isn't registered, refreshes the
-/// beta key (only then, as the old app did) and tries once more.
+/// Runs `f` with MakeMKV; if it says it isn't registered and you've let
+/// the app keep the beta key up to date, refreshes it (only then, as the
+/// old app did) and tries once more.
 async fn with_key<T, F, Fut>(cx: &Cx, mut f: F) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -311,8 +312,11 @@ where
 {
     match f().await {
         Err(e) if e.downcast_ref::<makemkv::NotRegistered>().is_some() => {
+            if !makemkv::key_updates() {
+                bail!("{}", key::TURNED_OFF);
+            }
             cx.status("Refreshing MakeMKV's key", "the beta key has expired");
-            let k = key::refresh().await.map_err(|r| anyhow!("MakeMKV isn't registered, and its key couldn't be refreshed: {r}"))?;
+            let k = key::refresh_if_allowed(makemkv::key_updates()).await.map_err(|r| anyhow!("MakeMKV isn't registered, and its key couldn't be refreshed: {r}"))?;
             cx.log(format!("installed MakeMKV beta key {}…", &k[..8.min(k.len())]));
             f().await
         }
@@ -333,9 +337,10 @@ impl Step for VideoDisc {
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
         while let Some(disc) = inlet.recv().await {
             let dev = device(disc.context())?;
-            let Some(launcher) = makemkv::locate().await else {
+            // Only where you said it may be run from.
+            let Some(launcher) = makemkv::launcher() else {
                 cx.state(StepState::Bad);
-                cx.status("MakeMKV isn't installed", makemkv::install_hint());
+                cx.status("MakeMKV isn't set up", "choose where it is first");
                 return Ok(());
             };
             let minlength = cx.param("min_length").and_then(|v| v.as_u64()).unwrap_or(60) as u32;
@@ -459,7 +464,7 @@ impl Step for RipVideo {
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, cx: Cx) -> Result<()> {
         let Some(mut disc) = inlet.recv().await else { return Ok(()) };
         let dev = device(disc.context())?;
-        let launcher = makemkv::locate().await.ok_or(makemkv::Missing)?;
+        let launcher = makemkv::launcher().ok_or(makemkv::NotApproved)?;
         let n = to_rip(disc.context()).len();
         if n == 0 {
             cx.status("Nothing to rip", "no videos chosen");

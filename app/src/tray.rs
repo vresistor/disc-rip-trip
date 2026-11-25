@@ -5,7 +5,8 @@
 //! and Log (its lines and its tool's output). Questions open here too.
 //! Built from real widgets, so a screen reader sees all of it.
 
-use crate::app::{App, Tray};
+use crate::app::{App, Page, Tray};
+use crate::makemkv::Readiness;
 use crate::model::{text_value, value_text};
 use crate::theme::{font, kind_icon, mix, state_icon, Pal};
 use crate::widgets::{pill, segmented, Btn, Look, Tone};
@@ -106,6 +107,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
     let key = match &tray {
         Tray::Step { id, .. } => id.clone(),
         Tray::Question { step } => format!("q/{step}"),
+        Tray::App(page) => format!("app/{page:?}"),
     };
     egui::ScrollArea::vertical().id_salt(("side", key)).auto_shrink([false, false]).show(&mut bu, |ui| {
         // Room for the scroll bar, so it never sits on a field.
@@ -117,24 +119,34 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
             (Tray::Question { step }, Body::Choose) => choose(app, ui, p, snap, step, t),
             (Tray::Question { step }, Body::Answers) => answers(app, ui, p, snap, step),
             (Tray::Question { step }, Body::Pictures) => pictures(app, ui, p, snap, step),
-            (Tray::Step { id, focus }, body) => match tab {
-                Some(Tab::Progress) if *body == Body::Choose => choose(app, ui, p, snap, id, t),
-                Some(Tab::Progress) => result(app, ui, p, snap, id, t),
-                Some(Tab::Settings) => {
-                    if let Some(info) = app.m.info(app.sel, id) {
-                        settings(app, ui, p, id, &info, focus.as_deref());
-                        if info.kind == "tell" {
-                            send_test(app, ui, p, id, &info);
+            (Tray::App(Page::MakeMkv), _) => makemkv_page(app, ui, p, true),
+            (Tray::Step { id, focus }, body) => {
+                // A step that runs MakeMKV, while it isn't set up: that first.
+                if snap.steps.get(id).is_some_and(|v| crate::makemkv::runs_makemkv(&v.step)) && app.m.makemkv_blocks(app.sel).is_some() && !app.m.ripping(app.sel) {
+                    makemkv_page(app, ui, p, false);
+                    ui.add_space(8.0);
+                    ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, p.line_soft));
+                    ui.add_space(8.0);
+                }
+                match tab {
+                    Some(Tab::Progress) if *body == Body::Choose => choose(app, ui, p, snap, id, t),
+                    Some(Tab::Progress) => result(app, ui, p, snap, id, t),
+                    Some(Tab::Settings) => {
+                        if let Some(info) = app.m.info(app.sel, id) {
+                            settings(app, ui, p, id, &info, focus.as_deref());
+                            if info.kind == "tell" {
+                                send_test(app, ui, p, id, &info);
+                            }
                         }
                     }
-                }
-                Some(Tab::Log) => {
-                    if let Some(v) = snap.steps.get(id).cloned() {
-                        log_view(app, ui, p, id, &v);
+                    Some(Tab::Log) => {
+                        if let Some(v) = snap.steps.get(id).cloned() {
+                            log_view(app, ui, p, id, &v);
+                        }
                     }
+                    None => {}
                 }
-                None => {}
-            },
+            }
             _ => {}
         }
         ui.add_space(20.0);
@@ -393,6 +405,8 @@ enum Body {
     Value,
     /// A choice for each item.
     PerItem,
+    /// One of the app's own settings.
+    App,
     /// Header only.
     None,
 }
@@ -408,6 +422,27 @@ fn room(ui: &Ui) -> f32 {
 fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
     let i = app.sel;
     match tray {
+        Tray::App(Page::MakeMkv) => {
+            let p = Pal::get(app.dark);
+            let r = app.m.makemkv.readiness();
+            Some(Plan {
+                icon: "rip-video".into(),
+                colour: p.kind("rip-video"),
+                name: "MakeMKV".into(),
+                pill: Some(match r {
+                    Readiness::Ready => ("Ready".into(), Tone::Ok, Some(StepState::Ok)),
+                    Readiness::Checking => ("Checking".into(), Tone::Busy, Some(StepState::Busy)),
+                    Readiness::NotChosen => ("Not set up".into(), Tone::Warn, Some(StepState::Needs)),
+                    Readiness::NeedsPermission => ("Needs a permission".into(), Tone::Warn, Some(StepState::Needs)),
+                }),
+                say: "Reads video discs, for Video disc and Rip.".into(),
+                acts: vec![],
+                body: Body::App,
+                rename: None,
+                remove: false,
+                corner: None,
+            })
+        }
         Tray::Question { step } => {
             let (qstep, q) = snap.question.clone()?;
             if qstep != *step {
@@ -661,6 +696,145 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
             }
             Some(confirming(app, plan, id, &v))
         }
+    }
+}
+
+// ---- MakeMKV --------------------------------------------------------------------------------
+
+/// Where MakeMKV is, and your OK to run it: what's found, *Choose…* and
+/// *Get MakeMKV* until you've said; then what you chose, and the flatpak's
+/// permission if it needs one. `full` is the app's own page, with the key
+/// setting; else it's the part a step that needs it shows.
+fn makemkv_page(app: &mut App, ui: &mut Ui, p: &Pal, full: bool) {
+    let wrap = |ui: &mut Ui, text: &str, col: Color32| {
+        ui.add(egui::Label::new(RichText::new(text).font(font(13.0, 400)).color(col)).wrap());
+    };
+    let mk = &app.m.makemkv;
+    if mk.hooks.from_env {
+        wrap(ui, "MakeMKV is run as DRT_MAKEMKVCON says, which you set yourself.", p.ink);
+        return;
+    }
+    let r = mk.readiness();
+    let choosing = r == Readiness::NotChosen || mk.changing;
+    if !full || r == Readiness::NotChosen {
+        wrap(ui, crate::makemkv::WHY, p.ink);
+        ui.add_space(8.0);
+    }
+    if let (Some(s), false) = (&mk.saved, mk.changing) {
+        let (label, version) = (s.location.label(), s.version.clone());
+        field(
+            ui,
+            p,
+            "Runs MakeMKV from",
+            |ui, l| {
+                ui.add(egui::Label::new(RichText::new(&label).font(font(13.5, 500)).color(p.ink)).wrap()).labelled_by(l);
+                let v = match (r, version) {
+                    (Readiness::NeedsPermission, _) => "Not run yet: the flatpak needs your permission".to_owned(),
+                    (_, Some(v)) => v,
+                    (_, None) => "Version not known yet".to_owned(),
+                };
+                ui.label(RichText::new(v).font(font(12.5, 400)).color(p.muted));
+            },
+            None,
+        );
+        if r == Readiness::NeedsPermission {
+            wrap(
+                ui,
+                "Disc Rip Trip runs in a flatpak, which can't start programs outside itself unless you let it. To let it, run this in a terminal, then close Disc Rip Trip and open it again:",
+                p.ink,
+            );
+            ui.add_space(6.0);
+            let cmd = crate::makemkv::override_command();
+            egui::Frame::new().fill(p.bg).stroke(Stroke::new(1.0, p.line)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(egui::Label::new(RichText::new(&cmd).font(crate::theme::mono(12.5)).color(p.ink)).wrap().selectable(true));
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if Btn::new("", "Copy").look(Look::Plain).font(font(13.0, 500)).name("Copy the command").show(ui, p).clicked() {
+                    ui.ctx().copy_text(cmd.clone());
+                }
+                if Btn::new("", "Check again").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked() {
+                    app.m.look_for_makemkv();
+                    app.m.check_saved_makemkv();
+                }
+            });
+            ui.add_space(4.0);
+            wrap(ui, crate::makemkv::GRANTS, p.muted);
+            ui.add_space(8.0);
+        }
+        ui.horizontal(|ui| {
+            if Btn::new("", "Change…").look(Look::Plain).font(font(13.0, 500)).show(ui, p).clicked() {
+                app.m.look_for_makemkv();
+                app.m.makemkv.changing = true;
+            }
+            if Btn::new("", "Don't use MakeMKV").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked() {
+                app.m.revoke_makemkv();
+            }
+        });
+    }
+    if let Some(loc) = &app.m.makemkv.checking {
+        ui.add_space(6.0);
+        wrap(ui, &format!("Checking {}…", loc.label()), p.muted);
+    } else if choosing {
+        let found = app.m.makemkv.candidates.clone();
+        heading(ui, p, if found.is_empty() { "Not found in the usual places" } else { "Found on this computer" });
+        let mut use_this = None;
+        for (k, loc) in found.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let label = loc.label();
+                let bw = 86.0;
+                ui.scope(|ui| {
+                    ui.set_width((ui.available_width() - bw - 8.0).max(80.0));
+                    ui.add(egui::Label::new(RichText::new(&label).font(font(13.0, 500)).color(p.ink)).wrap());
+                });
+                ui.with_layout(L::right_to_left(Align::Center), |ui| {
+                    let name = format!("Use this: {label}");
+                    if Btn::new("", "Use this").look(if k == 0 { Look::Primary } else { Look::Plain }).font(font(13.0, 500)).name(&name).show(ui, p).clicked() {
+                        use_this = Some(loc.clone());
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
+        if let Some(loc) = use_this {
+            app.m.approve_makemkv(loc);
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if Btn::new("folder-link", "Choose…").look(Look::Plain).font(font(13.0, 500)).name("Choose makemkvcon").show(ui, p).clicked() {
+                let (hook, tx, ctx) = (app.m.makemkv.hooks.pick_file.clone(), app.picked_file.0.clone(), ui.ctx().clone());
+                std::thread::spawn(move || {
+                    if let Some(path) = hook() {
+                        let _ = tx.send(path);
+                        ctx.request_repaint();
+                    }
+                });
+            }
+            if Btn::new("", "Get MakeMKV").look(Look::Link).show(ui, p).on_hover_text(crate::makemkv::GET_URL).clicked() {
+                app.m.open_url(crate::makemkv::GET_URL);
+            }
+            if app.m.makemkv.changing && Btn::new("", "Cancel").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked() {
+                app.m.makemkv.changing = false;
+                app.m.makemkv.error = None;
+            }
+        });
+        ui.add_space(4.0);
+        wrap(ui, "Get MakeMKV opens makemkv.com. On Linux it's also on Flathub, as com.makemkv.MakeMKV.", p.muted);
+    }
+    if let Some(e) = &app.m.makemkv.error {
+        ui.add_space(6.0);
+        wrap(ui, e, p.bad);
+    }
+    if full {
+        heading(ui, p, "MakeMKV's key");
+        let on = app.m.makemkv.key_updates;
+        let name = "Keep MakeMKV's beta key up to date";
+        if crate::widgets::switch(ui, p, name, name, on, font(13.0, 500)).clicked() {
+            app.m.set_makemkv_key_updates(!on);
+        }
+        ui.add_space(2.0);
+        wrap(ui, "MakeMKV needs a key, and its free beta key runs out every couple of months. When MakeMKV says it has, Disc Rip Trip fetches the current one from the MakeMKV forum and saves it in MakeMKV's settings. A key you bought is never changed. Off until you turn it on.", p.muted);
     }
 }
 

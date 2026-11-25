@@ -46,6 +46,7 @@ fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, plugged: Vec<
     let deps = Deps {
         // Every folder can take a disc; a test that looks gives its own.
         reach: Arc::new(|_, _| Ok(())),
+        makemkv: drt_app::makemkv::Hooks::not_needed(),
         engine,
         store: Store::new(e.dir.path().join("config")),
         drives: vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()],

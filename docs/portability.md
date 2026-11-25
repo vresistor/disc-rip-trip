@@ -26,10 +26,10 @@ in `/app/bin`, which is on `PATH`, so it finds them with no `DRT_*` set.
 | `redumper` | Image, Rip for games | `DRT_REDUMPER`, then PATH | In the flatpak (b744) | GPL-3.0 | Red card, `couldn't start "redumper"`. On Linux a drive-permission pre-check names the group to join first (`redumper.rs::drive_access`). |
 | `ffmpeg` | Every encoder, ReplayGain (ebur128), Transcode, Remux, interlace check (idet), tag rewrite | `DRT_FFMPEG`, then PATH | In the flatpak (BtbN GPL build, with x265) | GPL-3.0 as built | Red card, `couldn't start "ffmpeg"`. If ffmpeg is there but lacks an encoder (e.g. `libx265`), the card shows ffmpeg's last line. |
 | `ffprobe` | Checking a MakeMKV title is whole, field order, `drt fix-tags` | `DRT_FFPROBE`, then PATH | In the flatpak | GPL-3.0 | Whole-title check: red card, `couldn't run ffprobe`. In Transcode a missing ffprobe only loses the field-order hint; ffmpeg's idet still decides. |
-| `makemkvcon` | Video disc (scan titles), Rip for DVD and Blu-ray | `DRT_MAKEMKVCON`, then PATH, then the installer's path for the OS (`/usr/bin`, `/Applications/MakeMKV.app/…`, `%ProgramFiles%\MakeMKV\makemkvcon64.exe`), then the `com.makemkv.MakeMKV` flatpak. Inside a flatpak it runs via `flatpak-spawn --host`. | **Never** (CI fails any artifact that contains it) | Proprietary; free while in beta (beta key) or paid | The one clear message: card says **"MakeMKV isn't installed"** with the hint *flatpak install flathub com.makemkv.MakeMKV, or makemkv.com*. |
+| `makemkvcon` | Video disc (scan titles), Rip for DVD and Blu-ray | `DRT_MAKEMKVCON`, else only the place you approved in the app (the app's `makemkv` setting). To offer choices it checks, without running anything, that files exist on PATH, at the installer's path for the OS (`/usr/bin`, `/Applications/MakeMKV.app/…`, `%ProgramFiles%\MakeMKV\makemkvcon64.exe`), and for the `com.makemkv.MakeMKV` flatpak's folder. Inside a flatpak it runs via `flatpak-spawn --host`, which needs `--talk-name=org.freedesktop.Flatpak` granted by `flatpak override`. | **Never** (CI fails any artifact that contains it) | Proprietary; free while in beta (beta key) or paid | Until approved, Video disc and Rip are in Needs and Start is off: *Video discs need MakeMKV: choose where it is first*. Without the flatpak permission: the override command to copy. |
 | `gdbus` / `notify-send` | Desktop notification (Notify step): portal, then freedesktop, then notify-send | PATH | Present in the GNOME runtime *(ran)* | n/a (system) | Notify reports `desktop: …` as an error. ntfy over HTTP still works. |
 | `gsettings` | Reduced motion (GNOME `enable-animations`) | PATH | GNOME runtime | n/a | Silent: animations stay on. Harmless. |
-| `flatpak`, `flatpak-spawn`, `sh`, `pkill` | Finding and stopping MakeMKV across the sandbox | PATH / host | Host | n/a | MakeMKV reads as not installed; a Stop may leave makemkvcon holding the drive. |
+| `flatpak`, `flatpak-spawn`, `pkill` | Running and stopping an approved MakeMKV across the sandbox | PATH / host | Host | n/a | Without the permission MakeMKV can't be started, and the app says so; a Stop may leave makemkvcon holding the drive. |
 | `chdman` | **Not run.** CHD is in-process through `libchdman-rs` (MAME's CHD core). | linked in | yes | BSD-3-Clause | n/a |
 | `flac`, `metaflac`, `eject` | **Not used.** FLAC goes through ffmpeg, tags through `lofty`, eject is an ioctl. | n/a | n/a | n/a | n/a |
 
@@ -37,7 +37,7 @@ in `/app/bin`, which is on `PATH`, so it finds them with no `DRT_*` set.
 (`tool::missing`: the first word of `DRT_<NAME>`, else the name on `PATH`) and
 says in the header which aren't there: *cyanrip isn't installed*. The cards
 still fail with the raw error if you start a step anyway. MakeMKV isn't in
-that check; its card says how to install it.
+that check; a video recipe's cards ask where it is.
 
 **ffmpeg encoders the recipes ask for:** `flac`, `alac`, `aac`, `wavpack`,
 `pcm_s16le` (native), plus `libmp3lame`, `libopus`, `libvorbis`, `libx265`
@@ -64,7 +64,7 @@ these.
 | `scripts/build-flatpak.sh` | Runs everything inside `org.gnome.Sdk//50` with `org.freedesktop.Sdk.Extension.rust-stable//25.08`, so glibc matches the runtime: `fetch-tools.sh` once into `target/flatpak/tools`, then `cargo build --release --locked -p drt-app -p drt` with `LIBCHDMAN_CPU=portable` into `target/flatpak`, then `flatpak-builder` and `flatpak build-bundle` to `dist/disc-rip-trip-<version>-x86_64.flatpak`. `--install` installs it. |
 | `scripts/fetch-tools.sh` | ffmpeg and ffprobe from BtbN (static, GPL, checked for x264, x265, LAME, Opus, Vorbis and SVT-AV1), redumper b744 (static), cyanrip from `build-cyanrip.sh`. Writes `PROVENANCE.txt`. Linux x86_64 only. |
 | `scripts/build-cyanrip.sh` | cyanrip 0.9.3 against an audio-only LGPL ffmpeg, lame and libcdio, static except glibc, libcurl and libxml2 (*(ran)*: needs GLIBC_2.38). |
-| `packaging/flatpak/io.github.vresistor.disc-rip-trip.yml` | Packages the payload: `disc-rip-trip`, `drt` and the four tools into `/app/bin`, `PROVENANCE.txt` into `/app/share/doc`, the desktop file, metainfo and icons. GNOME 50 runtime. `--device=all` (`/dev/sr*` and the GPU), `--filesystem=host` (libraries anywhere, `xdg-music` included), `--share=network`, Wayland with X11 fallback, `--talk-name=org.freedesktop.Flatpak` (MakeMKV through `flatpak-spawn --host`). Notifications and the folder picker go through portals, which need no permission. |
+| `packaging/flatpak/io.github.vresistor.disc-rip-trip.yml` | Packages the payload: `disc-rip-trip`, `drt` and the four tools into `/app/bin`, `PROVENANCE.txt` into `/app/share/doc`, the desktop file, metainfo and icons. GNOME 50 runtime. `--device=all` (`/dev/sr*` and the GPU), `--filesystem=host` (libraries anywhere, `xdg-music` included), `--share=network`, Wayland with X11 fallback. Not `--talk-name=org.freedesktop.Flatpak`: that would let it run anything on the host, so it's yours to grant with `flatpak override` if you choose a MakeMKV. Notifications and the folder picker go through portals, which need no permission. |
 | `.github/workflows/build.yml` | `check`: tests, clippy and rustfmt on ubuntu-24.04 with lavapipe. `flatpak`: builds the bundle, fails if anything MakeMKV- or libdvdcss-like is in it, uploads it as an artifact; on a `v*` tag, makes a draft release with the bundle and `tools-provenance.txt`. |
 
 **Where the flatpak keeps things.** `$XDG_CONFIG_HOME` is
@@ -78,9 +78,9 @@ they are (`Store::adopt`). Working files and downloaded lists go in
 
 **The app id** is `io.github.vresistor.disc-rip-trip`, so it maps to the
 repository (`github.com/vresistor/disc-rip-trip`) the way Flathub expects.
-Builds before the rename used `io.github.vresistor.DiscRipTrip`; flatpak
-treats that as a different app, and nothing moves its folder in
-`~/.var/app/` across. Move it by hand if you had one.
+Builds before November 2026 used a CamelCase id; flatpak treats that as a
+different app, and nothing moves its folder in `~/.var/app/` across. Move
+it by hand if you had one.
 
 ### What a user on a fresh machine would install
 

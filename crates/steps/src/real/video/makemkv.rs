@@ -4,11 +4,12 @@
 //! it now reads the audio and subtitle tracks too, and runs through the pty
 //! like every other tool, so progress arrives as it happens.
 //!
-//! MakeMKV isn't bundled. Its licence allows redistribution only unmodified,
-//! and on Windows and macOS what's distributed is an installer, so it's
-//! found where it's installed: on the PATH, in the usual places, or as
-//! MakeMKV's own flatpak. From inside this app's flatpak every one of those
-//! is on the host, reached through `flatpak-spawn --host`.
+//! MakeMKV isn't bundled: it isn't free software. It's run only from where
+//! you said it may be ([`approve`]), or as `DRT_MAKEMKVCON` if you set
+//! that. The usual places are looked at for you to choose from, by
+//! checking that files exist; nothing is run until you've said yes. From
+//! inside this app's flatpak it's on the host, reached through
+//! `flatpak-spawn --host`, which the flatpak may only use if you let it.
 
 use super::super::tool;
 use anyhow::{anyhow, bail, Result};
@@ -143,26 +144,17 @@ impl std::fmt::Display for TooOld {
 
 impl std::error::Error for TooOld {}
 
-/// MakeMKV isn't installed anywhere it's looked for.
+/// Nobody has said where MakeMKV may be run from.
 #[derive(Debug)]
-pub struct Missing;
+pub struct NotApproved;
 
-impl std::fmt::Display for Missing {
+impl std::fmt::Display for NotApproved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MakeMKV isn't installed")
+        write!(f, "MakeMKV isn't set up: choose where it is in Disc Rip Trip first")
     }
 }
 
-impl std::error::Error for Missing {}
-
-/// Where to get it, for the tile.
-pub fn install_hint() -> &'static str {
-    if cfg!(target_os = "linux") {
-        "get it from your software store or makemkv.com"
-    } else {
-        "download it from makemkv.com"
-    }
-}
+impl std::error::Error for NotApproved {}
 
 // ---- robot mode -------------------------------------------------------------------------------
 
@@ -425,22 +417,127 @@ pub fn select(titles: &[Title], kind: Kind) -> Vec<Title> {
 // ---- running it -----------------------------------------------------------------------------------
 
 /// How makemkvcon is started here.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Launcher {
-    /// A program and its first arguments, run as they are: a native
+    /// A program and its first arguments, run as they are: an approved
     /// install, or `DRT_MAKEMKVCON`.
     Direct(Vec<String>),
     /// MakeMKV's own flatpak, which can only write where it's let: each run
     /// is let into the folder it writes to.
     Flatpak { via_host: bool },
-    /// A native install on the host, from inside this app's flatpak.
-    Host,
+    /// makemkvcon at this path on the host, from inside this app's flatpak.
+    Host(PathBuf),
 }
 
-const FLATPAK_ID: &str = "com.makemkv.MakeMKV";
+pub const FLATPAK_ID: &str = "com.makemkv.MakeMKV";
 
-fn sandboxed() -> bool {
+/// Where MakeMKV is, as you chose it. Saved by the app.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Location {
+    /// makemkvcon at this path: on this computer, or on the host from
+    /// inside this app's flatpak.
+    Program { path: PathBuf },
+    /// MakeMKV's own flatpak, `com.makemkv.MakeMKV`.
+    Flatpak,
+}
+
+impl Location {
+    /// How it's shown: the path, or *MakeMKV's flatpak*.
+    pub fn label(&self) -> String {
+        match self {
+            Location::Program { path } => path.display().to_string(),
+            Location::Flatpak => format!("MakeMKV's flatpak ({FLATPAK_ID})"),
+        }
+    }
+
+    /// Whether running it from here needs `flatpak-spawn --host`.
+    pub fn needs_host(&self, sandboxed: bool) -> bool {
+        sandboxed
+    }
+}
+
+impl Launcher {
+    /// How an approved location is run, from inside a flatpak or not.
+    pub fn of(loc: &Location, sandboxed: bool) -> Launcher {
+        match (loc, sandboxed) {
+            (Location::Program { path }, false) => Launcher::Direct(vec![path.display().to_string()]),
+            (Location::Program { path }, true) => Launcher::Host(path.clone()),
+            (Location::Flatpak, via_host) => Launcher::Flatpak { via_host },
+        }
+    }
+}
+
+/// Where you said MakeMKV may be run from. Set by the app from its saved
+/// setting; nothing else sets it.
+static APPROVED: std::sync::RwLock<Option<Location>> = std::sync::RwLock::new(None);
+
+/// Whether the free beta key may be fetched and written into MakeMKV's
+/// settings when it runs out. Off unless you turn it on.
+static KEY_UPDATES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Says where MakeMKV may be run from (or, `None`, that it may not).
+pub fn approve(loc: Option<Location>) {
+    *APPROVED.write().unwrap() = loc;
+}
+
+pub fn approved() -> Option<Location> {
+    APPROVED.read().unwrap().clone()
+}
+
+pub fn set_key_updates(on: bool) {
+    KEY_UPDATES.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn key_updates() -> bool {
+    KEY_UPDATES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `DRT_MAKEMKVCON`, a whole command line: set by you, so it counts as
+/// your OK.
+pub fn from_env() -> Option<Vec<String>> {
+    let line = std::env::var("DRT_MAKEMKVCON").ok()?;
+    let parts: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
+    (!parts.is_empty()).then_some(parts)
+}
+
+/// The only way to a [`Launcher`]: `DRT_MAKEMKVCON`, else where you said.
+/// `None` when you haven't said, and then MakeMKV is never run.
+pub fn launcher() -> Option<Launcher> {
+    if let Some(parts) = from_env() {
+        return Some(Launcher::Direct(parts));
+    }
+    approved().map(|l| Launcher::of(&l, sandboxed()))
+}
+
+/// Whether this is running inside a flatpak.
+pub fn sandboxed() -> bool {
     cfg!(target_os = "linux") && Path::new("/.flatpak-info").is_file()
+}
+
+/// Whether the flatpak may start programs on the host: its
+/// `[Session Bus Policy]` lets it talk to `org.freedesktop.Flatpak`. Read
+/// from the file flatpak writes when the app starts, so a change made
+/// with `flatpak override` shows here only after the app is reopened.
+pub fn host_allowed(flatpak_info: &str) -> bool {
+    let mut in_policy = false;
+    for line in flatpak_info.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_policy = line == "[Session Bus Policy]";
+        } else if in_policy {
+            if let Some((name, level)) = line.split_once('=') {
+                if name.trim() == "org.freedesktop.Flatpak" && matches!(level.trim(), "talk" | "own") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// [`host_allowed`] for this app, as it was started; true outside a flatpak.
+pub fn host_allowed_here() -> bool {
+    !sandboxed() || std::fs::read_to_string("/.flatpak-info").is_ok_and(|t| host_allowed(&t))
 }
 
 /// A command on the host when sandboxed, here otherwise.
@@ -469,43 +566,135 @@ fn install_candidates() -> Vec<PathBuf> {
     } else if cfg!(target_os = "windows") {
         ["ProgramFiles(x86)", "ProgramFiles"].iter().filter_map(std::env::var_os).map(|r| PathBuf::from(r).join("MakeMKV").join("makemkvcon64.exe")).collect()
     } else {
-        vec![PathBuf::from("/usr/bin/makemkvcon"), PathBuf::from("/usr/local/bin/makemkvcon")]
+        vec![PathBuf::from("/usr/bin/makemkvcon"), PathBuf::from("/usr/local/bin/makemkvcon"), PathBuf::from("/opt/makemkv/bin/makemkvcon")]
     }
 }
 
-fn on_path(bin: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(bin)).find(|f| f.is_file()))
+/// Where to look, as plain data, so a test can point it at its own folders.
+#[derive(Clone, Debug, Default)]
+pub struct Places {
+    /// Folders a makemkvcon may be in, as the computer that runs it sees them.
+    pub dirs: Vec<PathBuf>,
+    /// Whole paths an installer leaves it at.
+    pub programs: Vec<PathBuf>,
+    /// Folders that exist when MakeMKV's flatpak is installed.
+    pub flatpak: Vec<PathBuf>,
+    /// Where this app sees the host's `/usr` (`/run/host` inside a
+    /// flatpak, nothing outside).
+    pub host_root: Option<PathBuf>,
 }
 
-/// Finds MakeMKV: `DRT_MAKEMKVCON` if set, then a native install, then
-/// MakeMKV's flatpak (it costs a sandbox launch, so last). `None` when
-/// there's none.
-pub async fn locate() -> Option<Launcher> {
-    if let Ok(line) = std::env::var("DRT_MAKEMKVCON") {
-        return Some(Launcher::Direct(line.split_whitespace().map(str::to_owned).collect()));
-    }
-    if sandboxed() {
-        let mut probe = host("sh");
-        probe.args(["-c", "command -v makemkvcon"]);
-        if quietly(probe).await {
-            return Some(Launcher::Host);
+impl Places {
+    /// This computer's: the PATH and the usual places, or inside the
+    /// flatpak, the host's usual places.
+    pub fn here() -> Places {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let bin = if cfg!(windows) { "makemkvcon64.exe" } else { "makemkvcon" };
+        let mut dirs: Vec<PathBuf> = if sandboxed() {
+            // The sandbox's PATH isn't the host's: the host's usual ones.
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]
+        } else {
+            std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default()
+        };
+        if let Some(h) = &home {
+            let local = h.join(".local/bin");
+            if !dirs.contains(&local) {
+                dirs.push(local);
+            }
         }
-        let mut probe = host("flatpak");
-        probe.args(["info", FLATPAK_ID]);
-        return quietly(probe).await.then_some(Launcher::Flatpak { via_host: true });
-    }
-    let bin = if cfg!(windows) { "makemkvcon64.exe" } else { "makemkvcon" };
-    if let Some(p) = on_path(bin).or_else(|| install_candidates().into_iter().find(|p| p.is_file())) {
-        return Some(Launcher::Direct(vec![p.display().to_string()]));
-    }
-    if cfg!(target_os = "linux") {
-        let mut probe = tokio::process::Command::new("flatpak");
-        probe.args(["info", FLATPAK_ID]);
-        if quietly(probe).await {
-            return Some(Launcher::Flatpak { via_host: false });
+        let mut flatpak = vec![PathBuf::from(format!("/var/lib/flatpak/app/{FLATPAK_ID}/current"))];
+        if let Some(h) = &home {
+            flatpak.insert(0, h.join(format!(".local/share/flatpak/app/{FLATPAK_ID}/current")));
+        }
+        Places {
+            dirs: dirs.into_iter().map(|d| d.join(bin)).collect(),
+            programs: install_candidates(),
+            flatpak: if cfg!(target_os = "linux") { flatpak } else { vec![] },
+            host_root: sandboxed().then(|| PathBuf::from("/run/host")),
         }
     }
-    None
+
+    /// Where this app can see a host path: the host's `/usr` is under
+    /// `/run/host` inside a flatpak; the rest is where it is.
+    fn visible(&self, p: &Path) -> PathBuf {
+        match &self.host_root {
+            Some(root) if ["/usr", "/bin", "/sbin", "/lib"].iter().any(|top| p.starts_with(top)) => root.join(p.strip_prefix("/").unwrap_or(p)),
+            _ => p.to_owned(),
+        }
+    }
+}
+
+fn runnable(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        p.metadata().is_ok_and(|m| m.is_file() && std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
+}
+
+/// The MakeMKVs that seem to be installed, for you to choose from. Only
+/// looks at whether files exist: nothing is run.
+pub fn candidates(places: &Places) -> Vec<Location> {
+    let mut out: Vec<Location> = Vec::new();
+    for p in places.dirs.iter().chain(&places.programs) {
+        let seen = places.visible(p);
+        // The same program by another route (/bin is /usr/bin) is listed once.
+        let real = std::fs::canonicalize(&seen).unwrap_or(seen.clone());
+        let dup = out.iter().any(|l| matches!(l, Location::Program { path } if std::fs::canonicalize(places.visible(path)).unwrap_or(places.visible(path)) == real));
+        if runnable(&seen) && !dup {
+            out.push(Location::Program { path: p.clone() });
+        }
+    }
+    if places.flatpak.iter().any(|d| d.is_dir()) {
+        out.push(Location::Flatpak);
+    }
+    out
+}
+
+/// A file chosen in the picker, as a location. From inside the flatpak, a
+/// host path shown under `/run/host` is given as the host's own.
+pub fn chosen_file(p: &Path) -> Result<Location> {
+    let path = match p.strip_prefix("/run/host") {
+        Ok(rest) => Path::new("/").join(rest),
+        Err(_) => p.to_owned(),
+    };
+    if p.starts_with("/run/user") && p.components().any(|c| c.as_os_str() == "doc") {
+        bail!("that file came through the file chooser's own folder, which can't be run; choose makemkvcon from its real place, such as /usr/bin");
+    }
+    if !runnable(p) {
+        bail!("{} isn't a program that can be run", path.display());
+    }
+    Ok(Location::Program { path })
+}
+
+/// The version text in what makemkvcon printed: `MakeMKV v1.17.7`.
+pub fn version_in(text: &str) -> Option<String> {
+    let i = text.find("MakeMKV v")?;
+    let v: String = text[i + "MakeMKV v".len()..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+    (!v.is_empty()).then(|| format!("MakeMKV v{v}"))
+}
+
+/// Runs makemkvcon once, to say which version it is: only for a location
+/// you've just approved. It's asked for nothing a disc is needed for.
+pub async fn version(launcher: &Launcher, dir: &Path) -> Result<String> {
+    std::fs::create_dir_all(dir)?;
+    let mut cmd = launcher.command(dir);
+    cmd.arg("--version").current_dir(dir).stdin(Stdio::null());
+    let out =
+        tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output()).await.map_err(|_| anyhow!("it didn't answer within 30 seconds"))?.map_err(|e| anyhow!("couldn't start it: {e}"))?;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if let Some(v) = version_in(&text) {
+        return Ok(v);
+    }
+    match tool::last_meaningful_line(&text) {
+        Some(l) if out.status.success() => Ok(l.chars().take(80).collect()),
+        Some(l) => bail!("it didn't run: {}", l.chars().take(160).collect::<String>()),
+        None if out.status.success() => Ok("version not given".into()),
+        None => bail!("it didn't run ({})", out.status),
+    }
 }
 
 impl Launcher {
@@ -522,7 +711,7 @@ impl Launcher {
                 c.kill_on_drop(true);
                 c
             }
-            Launcher::Host => host("makemkvcon"),
+            Launcher::Host(path) => host(&path.display().to_string()),
             Launcher::Flatpak { via_host } => {
                 let mut c = if *via_host { host("flatpak") } else { tokio::process::Command::new("flatpak") };
                 c.kill_on_drop(true);
@@ -933,5 +1122,93 @@ MSG:5011,0,0,"Operation successfully completed","Operation successfully complete
         assert_eq!(whole(7959, zulu).unwrap_err().to_string(), "its picture runs 0:02:15 but the video is 2:12:39");
         // Cut off mid-write: no tag, judged on the container.
         assert!(whole(7959, Lengths { container: 3000.0, video: None }).is_err());
+    }
+
+    /// A stand-in makemkvcon that writes a line to `ran` each time it's run.
+    fn stand_in(dir: &Path, ran: &Path) -> PathBuf {
+        let p = dir.join("makemkvcon");
+        std::fs::write(&p, format!("#!/bin/sh\necho \"$@\" >> '{}'\necho 'MakeMKV v1.18.2 linux(x64-release) started'\n", ran.display())).unwrap();
+        std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[test]
+    fn looking_for_makemkv_only_checks_files_and_runs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ran = dir.path().join("ran");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let prog = stand_in(&bin, &ran);
+        // A file that isn't a program isn't offered.
+        std::fs::create_dir_all(dir.path().join("other")).unwrap();
+        std::fs::write(dir.path().join("other/makemkvcon"), "not a program").unwrap();
+        let fp = dir.path().join("flatpak/app/com.makemkv.MakeMKV/current");
+        let places = || Places {
+            dirs: vec![bin.join("makemkvcon"), dir.path().join("other/makemkvcon"), dir.path().join("none/makemkvcon")],
+            programs: vec![prog.clone()],
+            flatpak: vec![fp.clone()],
+            host_root: None,
+        };
+        assert_eq!(candidates(&places()), vec![Location::Program { path: prog.clone() }], "listed once, though found twice");
+        std::fs::create_dir_all(&fp).unwrap();
+        assert_eq!(candidates(&places()), vec![Location::Program { path: prog.clone() }, Location::Flatpak]);
+        assert!(!ran.exists(), "nothing was run");
+    }
+
+    #[test]
+    fn inside_the_flatpak_the_hosts_usr_is_looked_at_under_run_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let ran = dir.path().join("ran");
+        std::fs::create_dir_all(dir.path().join("usr/bin")).unwrap();
+        stand_in(&dir.path().join("usr/bin"), &ran);
+        let places = Places { dirs: vec![PathBuf::from("/usr/bin/makemkvcon")], programs: vec![], flatpak: vec![], host_root: Some(dir.path().to_owned()) };
+        // Offered as the host's own path, which is how it's run there.
+        assert_eq!(candidates(&places), vec![Location::Program { path: PathBuf::from("/usr/bin/makemkvcon") }]);
+        assert!(!ran.exists());
+        assert_eq!(Launcher::of(&Location::Program { path: "/usr/bin/makemkvcon".into() }, true), Launcher::Host("/usr/bin/makemkvcon".into()));
+        assert_eq!(Launcher::of(&Location::Flatpak, true), Launcher::Flatpak { via_host: true });
+        assert_eq!(Launcher::of(&Location::Program { path: "/usr/bin/makemkvcon".into() }, false), Launcher::Direct(vec!["/usr/bin/makemkvcon".into()]));
+    }
+
+    #[test]
+    fn a_file_chosen_in_the_picker() {
+        let dir = tempfile::tempdir().unwrap();
+        let prog = stand_in(dir.path(), &dir.path().join("ran"));
+        assert_eq!(chosen_file(&prog).unwrap(), Location::Program { path: prog.clone() });
+        std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+        assert!(chosen_file(&dir.path().join("notes.txt")).unwrap_err().to_string().contains("isn't a program"));
+        assert!(chosen_file(Path::new("/run/user/1000/doc/ab12/makemkvcon")).is_err());
+        assert!(!dir.path().join("ran").exists());
+    }
+
+    /// Approving is when it may run: once, for its version.
+    #[tokio::test]
+    async fn the_version_is_asked_once_and_read_from_its_started_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let ran = dir.path().join("ran");
+        let prog = stand_in(dir.path(), &ran);
+        let v = version(&Launcher::of(&Location::Program { path: prog }, false), &dir.path().join("work")).await.unwrap();
+        assert_eq!(v, "MakeMKV v1.18.2");
+        assert_eq!(std::fs::read_to_string(&ran).unwrap().lines().count(), 1, "run once");
+        assert_eq!(version_in(FILM).as_deref(), Some("MakeMKV v1.17.7"));
+        assert!(version(&Launcher::Direct(vec![dir.path().join("gone").display().to_string()]), dir.path()).await.is_err());
+    }
+
+    #[test]
+    fn the_flatpak_may_start_host_programs_only_if_its_policy_says_so() {
+        let granted = "[Application]\nname=x\n\n[Session Bus Policy]\norg.freedesktop.Flatpak=talk\n\n[Environment]\nA=b\n";
+        assert!(host_allowed(granted));
+        assert!(!host_allowed("[Application]\nname=x\n\n[Session Bus Policy]\norg.freedesktop.Notifications=talk\n"));
+        assert!(!host_allowed("[Application]\norg.freedesktop.Flatpak=talk\n"), "only in the bus policy");
+        assert!(!host_allowed(""));
+    }
+
+    /// Nothing approved and no DRT_MAKEMKVCON: no way to run it.
+    #[test]
+    fn with_no_ok_there_is_no_launcher() {
+        if std::env::var_os("DRT_MAKEMKVCON").is_none() {
+            assert_eq!(approved(), None, "nothing in this crate's tests approves one");
+            assert_eq!(launcher(), None);
+        }
     }
 }

@@ -2,7 +2,8 @@
 //! beta key expires about every two months, so left alone the app would
 //! break itself every couple of months.
 //!
-//! So the key is refreshed only when MakeMKV says it isn't registered:
+//! So, if you turn it on (it's off until you do), the key is refreshed
+//! only when MakeMKV says it isn't registered:
 //! fetch the current beta key from MakeMKV's own forum, write it, try
 //! again. No network in the usual case, and a refresh only when it's known
 //! to be the fix. Lifted from the old app's `key.rs`, with its rules:
@@ -15,6 +16,11 @@ use std::path::{Path, PathBuf};
 /// The thread the developer posts the beta key to: the vendor's own page,
 /// not a mirror, since what's read here is written into MakeMKV's config.
 const BETA_KEY_THREAD: &str = "https://forum.makemkv.com/forum/viewtopic.php?f=5&t=1053";
+
+/// What a run says when MakeMKV wants a key and you haven't let the app
+/// fetch one.
+pub const TURNED_OFF: &str =
+    "MakeMKV says it isn't registered: its free beta key has probably run out. Enter a key in MakeMKV, or turn on “Keep MakeMKV's beta key up to date” in Disc Rip Trip's MakeMKV settings.";
 
 /// Beta keys start with this; purchased ones don't, which is the only way
 /// to tell them apart.
@@ -90,6 +96,15 @@ pub fn find_key(text: &str) -> Option<String> {
     })
 }
 
+/// [`refresh`], only if you've turned key updates on; else nothing is
+/// fetched or written.
+pub async fn refresh_if_allowed(allowed: bool) -> Result<String> {
+    if !allowed {
+        bail!("{TURNED_OFF}");
+    }
+    refresh().await
+}
+
 /// Fetches the current beta key and installs it. Refuses when a purchased
 /// key is there, and when MakeMKV already has the current one (then a
 /// stale key isn't the problem).
@@ -145,6 +160,21 @@ mod tests {
         assert_eq!(parse_key(&new).as_deref(), Some(SAMPLE));
         assert!(new.contains("app_SiteInfoString = \"abc\"") && new.contains("app_UpdateLastCheck"));
         assert_eq!(parse_key(&with_key("", SAMPLE)).as_deref(), Some(SAMPLE));
+    }
+
+    /// Off, as it starts: MakeMKV's settings aren't read, fetched for or
+    /// written, and the run says what to do.
+    #[tokio::test]
+    async fn key_updates_are_off_until_turned_on_and_then_nothing_is_touched() {
+        assert!(!super::super::makemkv::key_updates(), "off by default");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("settings.conf");
+        std::fs::write(&p, "app_Key = \"T-old\"\n").unwrap();
+        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+        let e = refresh_if_allowed(false).await.unwrap_err().to_string();
+        assert!(e.contains("Keep MakeMKV's beta key up to date"), "{e}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "app_Key = \"T-old\"\n");
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), before);
     }
 
     #[test]

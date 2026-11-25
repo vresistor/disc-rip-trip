@@ -19,11 +19,12 @@
 #                           including NAS mounts, external drives and paths
 #                           typed as ~/…, which the folder portal can't grant
 #                           to a recipe saved before
-#   --talk-name=org.freedesktop.Flatpak
-#                           MakeMKV is not bundled; it's run on the host, or
-#                           from its own flatpak, through `flatpak-spawn --host`.
-#                           This lets the app run anything on the host as you,
-#                           so the sandbox is no boundary while it's granted.
+#
+# Not granted: --talk-name=org.freedesktop.Flatpak. MakeMKV isn't bundled
+# (it isn't free software), and it's run through `flatpak-spawn --host`,
+# on the host or from its own flatpak. That permission lets the app run
+# anything on the host as you, so it's left to you: the app shows the
+# `flatpak override` command once you've chosen a MakeMKV to use.
 # Notifications and the folder picker go through portals, which need nothing.
 id: io.github.vresistor.disc-rip-trip
 runtime: org.gnome.Platform
@@ -38,7 +39,6 @@ finish-args:
   - --socket=wayland
   - --device=all
   - --filesystem=host
-  - --talk-name=org.freedesktop.Flatpak
 
 modules:
   - name: disc-rip-trip

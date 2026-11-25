@@ -864,6 +864,7 @@ dependencies = [
  "image",
  "opener",
  "rfd",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

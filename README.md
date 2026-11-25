@@ -47,9 +47,16 @@ flatpak install --user ./disc-rip-trip-*.flatpak
 
 It brings cyanrip, redumper, ffmpeg and ffprobe with it.
 
-DVDs and Blu-rays also need [MakeMKV](https://www.makemkv.com). It's
-never bundled. Get the Flathub flatpak `com.makemkv.MakeMKV`, or get it
-from makemkv.com.
+DVDs and Blu-rays also need [MakeMKV](https://www.makemkv.com). It
+isn't free software, so it's never bundled. Get the Flathub flatpak
+`com.makemkv.MakeMKV`, or get it from makemkv.com. Disc Rip Trip never
+runs it until you say where it is: a recipe that reads video discs
+waits at its Video disc and Rip steps, which list the MakeMKVs found on
+your computer with **Use this**, or let you **Choose…** the program.
+Only then is it run, once, to show its version. You can change or
+revoke this under **MakeMKV** at the foot of the recipe list, where
+there's also a switch, off unless you turn it on, to fetch MakeMKV's
+free beta key from the MakeMKV forum when it runs out.
 
 You can also [build it from source](#building-from-source). Then you
 install the tools yourself.
@@ -57,9 +64,21 @@ install the tools yourself.
 **What the flatpak can reach.** It needs the disc drive, so it has
 access to all devices. It can see your whole filesystem, so your
 library can be on a network share, an external drive or anywhere else.
-To run MakeMKV, which lives outside it, it may start programs on your
-computer. So the sandbox doesn't wall it off from the rest of your
-system. Treat it like any program you install.
+So the sandbox doesn't wall it off from the rest of your system. Treat
+it like any program you install.
+
+It can't start programs outside itself, and MakeMKV lives outside it
+(on your system, or in its own flatpak). If you choose a MakeMKV for
+video discs, the app shows the one command that lets it, with a Copy
+button:
+
+```sh
+flatpak override --user --talk-name=org.freedesktop.Flatpak io.github.vresistor.disc-rip-trip
+```
+
+Run it, then close the app and open it again. It lets the app start any
+program on your computer as you, not just MakeMKV. To take it back:
+`flatpak override --user --reset io.github.vresistor.disc-rip-trip`.
 
 ## Your first CD
 

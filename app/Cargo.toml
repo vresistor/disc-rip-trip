@@ -16,6 +16,7 @@ drt-engine = { path = "../crates/engine" }
 drt-steps = { path = "../crates/steps" }
 drt-layout = { path = "../crates/layout" }
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 egui = "0.37"

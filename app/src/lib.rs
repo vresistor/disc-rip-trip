@@ -9,6 +9,7 @@ pub mod chrome;
 pub mod compare;
 pub mod discview;
 pub mod links;
+pub mod makemkv;
 pub mod model;
 pub mod motion;
 pub mod pace;
@@ -19,7 +20,7 @@ pub mod theme;
 pub mod tray;
 pub mod widgets;
 
-pub use app::{App, Appearance, Tray};
+pub use app::{App, Appearance, Page, Tray};
 pub use model::{Deps, Model};
 pub use store::Store;
 

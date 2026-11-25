@@ -61,6 +61,8 @@ fn main() -> eframe::Result<()> {
         open_tray: if simulate { Arc::new(|_| Ok(())) } else { Arc::new(drt_steps::real::open_tray) },
         // Simulated steps write nothing, so their folders aren't looked at.
         reach: if simulate { Arc::new(|_, _| Ok(())) } else { Arc::new(|p, need| drt_steps::real::reach::look(p, need, drt_steps::real::reach::statvfs_free)) },
+        // The simulation's video steps don't run MakeMKV.
+        makemkv: if simulate { drt_app::makemkv::Hooks::not_needed() } else { drt_app::makemkv::Hooks::real() },
         connected: if simulate { Arc::new(|| vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()]) } else { Arc::new(|| drt_steps::real::drives().into_iter().map(|(name, _)| name).collect()) },
     };
     let mut model = Model::new(deps);
@@ -83,7 +85,7 @@ fn main() -> eframe::Result<()> {
             .with_decorations(false)
             .with_transparent(true)
             .with_title("Disc Rip Trip")
-            .with_app_id("io.github.vresistor.disc-rip-trip"),
+            .with_app_id(drt_app::makemkv::APP_ID),
         ..Default::default()
     };
     eframe::run_native(

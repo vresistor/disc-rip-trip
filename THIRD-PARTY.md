@@ -135,10 +135,15 @@ own error reporting untouched.
 MakeMKV is proprietary, obtained by the user from
 [makemkv.com](https://www.makemkv.com), governed by its own EULA, and driven here
 as an ordinary external program over its documented `makemkvcon` interface.
-Nothing in this repository contains, embeds or redistributes it.
+**It is never bundled**: nothing in this repository, the flatpak or a release
+contains, embeds or redistributes it, and CI fails any build that does. The app
+runs it only from a place the user has approved in the app (or named in
+`DRT_MAKEMKVCON`); until then it only checks which files exist.
 
-Its EULA does permit redistribution, so licensing is not the reason it is absent.
-The reason is that MakeMKV decrypts CSS, and distributing circumvention software
+Why: MakeMKV isn't free software, so it can't go where the rest of the bundle
+goes (Flathub builds from source, and the bundle's other tools are all GPL or
+LGPL with their source published). And its EULA's permission to redistribute
+it unmodified doesn't settle the harder point: MakeMKV decrypts CSS, and distributing circumvention software
 is a materially different act from distributing something that drives it —
 CDPA s.296ZB in the UK, DMCA §1201 in the US. It is the same line HandBrake draws
 with libdvdcss.

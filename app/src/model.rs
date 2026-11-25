@@ -125,6 +125,9 @@ pub struct Deps {
     pub open_tray: OpenTray,
     /// Looks at a folder: [`drt_steps::real::reach::look`], or a stand-in.
     pub reach: Reach,
+    /// Finds and runs MakeMKV, only where you said: the real ones, or a
+    /// test's.
+    pub makemkv: crate::makemkv::Hooks,
 }
 
 /// One disc going through a recipe.
@@ -176,6 +179,8 @@ pub struct Model {
     /// The bundled tools that couldn't be found at start-up; said in the
     /// header. Empty in the flatpak, which has them all.
     pub missing_tools: Vec<&'static str>,
+    /// Where MakeMKV may be run from, and what's known of it.
+    pub makemkv: crate::makemkv::MakeMkv,
     auto_left: HashMap<usize, Option<usize>>,
     /// The disc before, as it ended: shown until the next disc goes in, so
     /// the graph doesn't empty the moment the tray opens.
@@ -310,6 +315,14 @@ impl Model {
                 }
             });
         }
+        let makemkv = {
+            let saved = d.store.load_makemkv();
+            let key_updates = d.store.load_makemkv_key_updates();
+            // The steps run it only from here.
+            drt_steps::real::video::makemkv::approve(saved.as_ref().map(|s| s.location.clone()));
+            drt_steps::real::video::makemkv::set_key_updates(key_updates);
+            crate::makemkv::MakeMkv::new(d.makemkv, saved, key_updates)
+        };
         let mut m = Model {
             engine: Arc::new(d.engine),
             store: d.store,
@@ -320,6 +333,7 @@ impl Model {
             no_repeat: Default::default(),
             repeat_limit: None,
             missing_tools: Vec::new(),
+            makemkv,
             auto_left: HashMap::new(),
             before_disc: HashMap::new(),
             stopping: HashMap::new(),
@@ -359,6 +373,8 @@ impl Model {
         }
         // And the folders they file into.
         m.look_at_folders();
+        // A MakeMKV approved while the flatpak couldn't start it.
+        m.check_saved_makemkv();
         m
     }
 
@@ -482,6 +498,7 @@ impl Model {
             self.apply_drives(now);
             changed = true;
         }
+        changed |= self.poll_makemkv();
         while let Ok((key, r)) = self.looked_rx.try_recv() {
             changed |= self.looked.get(&key) != Some(&r);
             self.looked.insert(key, r);
@@ -968,10 +985,20 @@ impl Model {
         self.needed(i).into_iter().filter_map(|n| self.looked.get(&(n.path.clone(), n.need)).and_then(|r| r.clone().err()).map(|why| (n, why))).collect()
     }
 
-    /// A Folder whose folder can't take a disc says so on its card.
+    /// A Folder whose folder can't take a disc says so on its card, and so
+    /// do the steps that run MakeMKV while it isn't set up.
     fn away_on_cards(&self, i: usize, snap: &mut Snapshot) {
         if self.running(i) {
             return;
+        }
+        if let Some(r) = self.makemkv_blocks(i) {
+            let (status, detail) = r.card();
+            for v in snap.steps.values_mut().filter(|v| crate::makemkv::runs_makemkv(&v.step)) {
+                v.state = StepState::Needs;
+                v.status = status.clone();
+                v.qualifier.clear();
+                v.detail = detail.clone();
+            }
         }
         for (n, why) in self.unreachable(i) {
             let Some(v) = n.step.and_then(|id| snap.steps.get_mut(&id)) else { continue };
@@ -1076,6 +1103,9 @@ impl Model {
         }
         if let Some(id) = self.unavailable(i).first() {
             return Some(format!("{} isn't in this version of the app", self.tile_name(i, id)));
+        }
+        if let Some(r) = self.makemkv_blocks(i) {
+            return Some(r.sentence());
         }
         if let Some((n, why)) = self.unreachable(i).first() {
             return Some(match &n.step {
@@ -1233,6 +1263,9 @@ impl Model {
         }
         if self.stopping(i) {
             return ("Stopping…".into(), StepState::Busy);
+        }
+        if let Some(r) = self.makemkv_blocks(i).filter(|_| !self.ripping(i) && self.engine.missing(&self.recipes[i]).is_empty()) {
+            return (r.card().0, if r == crate::makemkv::Readiness::Checking { StepState::Busy } else { StepState::Needs });
         }
         if let Some((n, why)) = self.unreachable(i).first().filter(|_| !self.ripping(i) && self.engine.missing(&self.recipes[i]).is_empty() && self.check_word(i).is_none()) {
             let line = match &n.step {

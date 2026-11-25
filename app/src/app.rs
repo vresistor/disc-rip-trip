@@ -26,6 +26,14 @@ pub enum Tray {
     /// A tile's parameters and items. `focus` is a parameter to put the
     /// cursor in: the one setup needs.
     Step { id: String, focus: Option<String> },
+    /// One of the app's own settings, from the foot of the recipe list.
+    App(Page),
+}
+
+/// The app's own settings, each a page of the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    MakeMkv,
 }
 
 /// The sidebar's least width, and its most: about a third of the window
@@ -68,6 +76,8 @@ pub struct App {
     pub(crate) picked: Channel<Picked>,
     /// Folders picked in the portal for a question, by the step asking.
     pub(crate) picked_answer: Channel<(String, String)>,
+    /// A program picked for MakeMKV with *Choose…*.
+    pub(crate) picked_file: Channel<std::path::PathBuf>,
     /// Whether the window had the focus last frame: coming back to it
     /// looks at the folders again.
     was_focused: bool,
@@ -224,6 +234,7 @@ impl App {
             focus_done: false,
             picked: mpsc::channel(),
             picked_answer: mpsc::channel(),
+            picked_file: mpsc::channel(),
             was_focused: true,
             flash: None,
             invalid: HashMap::new(),
@@ -491,8 +502,9 @@ impl App {
         self.focus_done = false;
         self.pick = None;
         self.rtab = None;
-        let (Tray::Question { step } | Tray::Step { id: step, .. }) = &t;
-        self.reveal = Some(step.clone());
+        if let Tray::Question { step } | Tray::Step { id: step, .. } = &t {
+            self.reveal = Some(step.clone());
+        }
         // It slides in from shut; switching tiles with it open doesn't.
         if self.tray.is_none() {
             self.side_t0 = Some((self.now, true));
@@ -648,6 +660,9 @@ impl App {
         }
         if self.confirm_quit && self.ripping().is_none() {
             self.confirm_quit = false;
+        }
+        while let Ok(path) = self.picked_file.1.try_recv() {
+            self.m.choose_makemkv_file(path);
         }
         while let Ok((step, path)) = self.picked_answer.1.try_recv() {
             self.buffers.insert(format!("q/{step}"), path);
@@ -868,17 +883,68 @@ impl App {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                let all = [Appearance::System, Appearance::Light, Appearance::Dark];
-                let at = Some(match self.appearance {
-                    Appearance::System => 0,
-                    _ if self.dark => 2,
-                    _ => 1,
-                });
-                if let Some(k) = segmented(ui, p, "Appearance", &["System", "Light", "Dark"], at, true) {
-                    self.set_appearance(all[k]);
-                }
+                self.appearance_control(ui, p);
             });
+            ui.add_space(6.0);
+            // The app's own settings, one line each, above it.
+            let mk = &self.m.makemkv;
+            if mk.hooks.required {
+                let (summary, tone) = (mk.summary(), if mk.readiness() == crate::makemkv::Readiness::Ready { p.subtle } else { p.warn });
+                if self.setting_row(ui, p, "MakeMKV", &summary, tone, crate::app::Page::MakeMkv) {
+                    self.open_page(crate::app::Page::MakeMkv);
+                }
+            }
         });
+    }
+
+    /// Opens one of the app's own settings in the sidebar.
+    pub fn open_page(&mut self, page: Page) {
+        if page == Page::MakeMkv {
+            self.m.look_for_makemkv();
+        }
+        self.open(Tray::App(page));
+    }
+
+    /// A line in the settings at the list's foot: its name, and what it's
+    /// set to. Clicked, it opens its page.
+    fn setting_row(&mut self, ui: &mut Ui, p: &Pal, name: &str, value: &str, col: egui::Color32, page: Page) -> bool {
+        let on = self.tray == Some(Tray::App(page));
+        let mut clicked = false;
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            let (rect, resp) = ui.allocate_exact_size(vec2(216.0, 28.0), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Button, true, on, format!("{name}, {value}")));
+            let pt = ui.painter();
+            if on {
+                pt.rect(rect, 6.0, p.raised, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
+            } else if resp.hovered() {
+                pt.rect_filled(rect, 6.0, p.bg);
+            }
+            let ng = pt.layout_no_wrap(name.to_owned(), font(13.0, 500), p.ink);
+            let mut job = egui::text::LayoutJob::single_section(value.to_owned(), egui::TextFormat::simple(font(12.5, 400), col));
+            job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - ng.size().x - 32.0);
+            let vg = pt.layout_job(job);
+            pt.galley(pos2(rect.left() + 10.0, rect.center().y - ng.size().y / 2.0), ng, p.ink);
+            pt.galley(pos2(rect.right() - 10.0 - vg.size().x, rect.center().y - vg.size().y / 2.0), vg, col);
+            crate::widgets::focus_ring(ui, &resp, rect, 6.0, p);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            clicked = resp.clicked();
+        });
+        clicked
+    }
+
+    fn appearance_control(&mut self, ui: &mut Ui, p: &Pal) {
+        let all = [Appearance::System, Appearance::Light, Appearance::Dark];
+        let at = Some(match self.appearance {
+            Appearance::System => 0,
+            _ if self.dark => 2,
+            _ => 1,
+        });
+        if let Some(k) = segmented(ui, p, "Appearance", &["System", "Light", "Dark"], at, true) {
+            self.set_appearance(all[k]);
+        }
     }
 
     fn recipe_row(&mut self, ui: &mut Ui, p: &Pal, t: f64, i: usize) {
@@ -1323,6 +1389,7 @@ impl App {
         let open = match &self.tray {
             Some(Tray::Step { id, .. }) => Some(id.clone()),
             Some(Tray::Question { step }) => Some(step.clone()),
+            Some(Tray::App(_)) => None,
             None => self.selected.clone(),
         };
         let plus_open = self.popover.as_ref().map(|p| p.at.clone());

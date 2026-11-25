@@ -28,6 +28,8 @@ struct Env {
     trays: Arc<Mutex<Vec<String>>>,
     /// Folders are really looked at (else every one can take a disc).
     folders: bool,
+    /// How MakeMKV is found and run: not needed, unless a test says.
+    makemkv: drt_app::makemkv::Hooks,
 }
 
 fn env() -> Env {
@@ -40,6 +42,7 @@ fn env() -> Env {
         tests_sent: Arc::default(),
         trays: Arc::default(),
         folders: false,
+        makemkv: drt_app::makemkv::Hooks::not_needed(),
     }
 }
 
@@ -65,6 +68,7 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
     let opened = e.opened.clone();
     let picked = e.dir.path().join("picked");
     let deps = Deps {
+        makemkv: e.makemkv.clone(),
         // Every folder can take a disc, unless the test looks.
         // Only the test's own folders: never this computer's.
         reach: if e.folders {
@@ -6002,4 +6006,130 @@ fn the_game_rip_sidebars_in_their_four_states() {
         h.get_by_label_contains("SHA-1: Redump 3a647314…, this copy 91c0d2e5…, different");
         shot(&mut h, &format!("ripside-d-holding{tag}"));
     }
+}
+
+// ---- MakeMKV, only with your OK -------------------------------------------------------------
+
+/// MakeMKV's hooks for a test: one found at a made-up path, and each time
+/// it's run (for its version) noted.
+fn makemkv_hooks(sandboxed: bool, host_allowed: bool, ran: Arc<Mutex<Vec<drt_steps::real::video::makemkv::Location>>>) -> drt_app::makemkv::Hooks {
+    use drt_steps::real::video::makemkv::Location;
+    drt_app::makemkv::Hooks {
+        required: true,
+        sandboxed,
+        host_allowed: Arc::new(move || host_allowed),
+        from_env: false,
+        candidates: Arc::new(|| vec![Location::Program { path: "/usr/bin/makemkvcon".into() }, Location::Flatpak]),
+        version: Arc::new(move |loc| {
+            ran.lock().unwrap().push(loc);
+            Box::pin(async { Ok("MakeMKV v1.18.2".to_owned()) })
+        }),
+        pick_file: Arc::new(|| None),
+    }
+}
+
+/// A video recipe, with TMDb's key given so MakeMKV is all that's left.
+fn makemkv_window(e: &Env) -> Harness<'static, Window> {
+    let mut h = video_window(e, drt_steps::real::video::sim::SimDisc::Film);
+    app(&h).m.engine.settings.lock().unwrap().set_app("tmdb", "api_key", Setting::chosen(Value::from("test-key")));
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn a_video_recipe_waits_for_your_ok_to_run_makemkv_and_runs_it_once_when_given() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let mut e = env();
+    e.makemkv = makemkv_hooks(false, true, ran.clone());
+    let mut h = makemkv_window(&e);
+    let i = app(&h).sel;
+    // Both steps that run it are in Needs, the list says so, and Start says why.
+    let s = snap(&h);
+    for id in ["v_disc", "v_rip"] {
+        assert_eq!((s.steps[id].state, s.steps[id].status.as_str()), (StepState::Needs, "MakeMKV not set up"), "{id}");
+    }
+    assert_eq!(app(&h).m.status_line(i), ("MakeMKV not set up".to_owned(), StepState::Needs));
+    assert!(h.get_by_label("Start").accesskit_node().is_disabled());
+    assert_eq!(app(&h).m.cant_start(i).as_deref(), Some("Video discs need MakeMKV: choose where it is first"));
+    assert!(app_mut(&mut h).m.start(i).is_err(), "Start refuses too");
+    // The step's sidebar says why, and offers what was found.
+    click_tile(&mut h, "Video disc, MakeMKV not set up");
+    h.get_by_label_contains("Disc Rip Trip only runs it if you say so.");
+    h.get_by_label("Use this: /usr/bin/makemkvcon");
+    h.get_by_label("Use this: MakeMKV's flatpak (com.makemkv.MakeMKV)");
+    h.get_by_label("Choose makemkvcon");
+    h.get_by_label("Get MakeMKV");
+    shot(&mut h, "makemkv-not-set-up");
+    assert!(ran.lock().unwrap().is_empty(), "nothing is run before you say so");
+    assert!(!e.dir.path().join("config/makemkv").exists());
+    // Use this: run once, for its version, then saved.
+    h.get_by_label("Use this: /usr/bin/makemkvcon").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "its version", |a| a.m.makemkv.readiness() == drt_app::makemkv::Readiness::Ready);
+    assert_eq!(ran.lock().unwrap().len(), 1, "run once, for its version");
+    let saved = std::fs::read_to_string(e.dir.path().join("config/makemkv")).unwrap();
+    assert!(saved.contains("/usr/bin/makemkvcon") && saved.contains("MakeMKV v1.18.2"), "{saved}");
+    assert!(!h.get_by_label("Start").accesskit_node().is_disabled());
+    assert_eq!(snap(&h).steps["v_disc"].state, StepState::Idle);
+    // Its page at the foot of the list: what's used, and its version;
+    // the key switch is off until turned on.
+    app_mut(&mut h).open_page(drt_app::Page::MakeMkv);
+    h.run_steps(3);
+    h.get_by_label("MakeMKV v1.18.2");
+    h.get_by_label("MakeMKV, v1.18.2");
+    let switch = h.get_by_label("Keep MakeMKV's beta key up to date");
+    assert_eq!(switch.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    assert!(!app(&h).m.makemkv.key_updates && !drt_steps::real::video::makemkv::key_updates());
+    shot(&mut h, "makemkv-page");
+    h.get_by_label("Keep MakeMKV's beta key up to date").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(std::fs::read_to_string(e.dir.path().join("config/makemkv-key-updates")).unwrap(), "on");
+    h.get_by_label("Keep MakeMKV's beta key up to date").click_accesskit();
+    h.run_steps(2);
+    // Revoked: back to asking, and nothing more was run.
+    h.get_by_label("Don't use MakeMKV").click_accesskit();
+    h.run_steps(3);
+    assert!(!e.dir.path().join("config/makemkv").exists());
+    assert!(h.get_by_label("Start").accesskit_node().is_disabled());
+    assert_eq!(ran.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn approved_makemkv_is_remembered_and_not_run_again_at_the_next_start() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let mut e = env();
+    e.makemkv = makemkv_hooks(false, true, ran.clone());
+    std::fs::create_dir_all(e.dir.path().join("config")).unwrap();
+    std::fs::write(e.dir.path().join("config/makemkv"), r#"{"location":{"kind":"flatpak"},"version":"MakeMKV v1.18.2"}"#).unwrap();
+    let h = makemkv_window(&e);
+    assert_eq!(app(&h).m.makemkv.readiness(), drt_app::makemkv::Readiness::Ready);
+    assert!(!h.get_by_label("Start").accesskit_node().is_disabled());
+    assert!(ran.lock().unwrap().is_empty(), "its version is known: not run");
+}
+
+#[test]
+fn in_the_flatpak_a_host_makemkv_needs_a_permission_and_the_command_is_shown() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let mut e = env();
+    e.makemkv = makemkv_hooks(true, false, ran.clone());
+    let mut h = makemkv_window(&e);
+    let i = app(&h).sel;
+    click_tile(&mut h, "Video disc, MakeMKV not set up");
+    h.get_by_label("Use this: MakeMKV's flatpak (com.makemkv.MakeMKV)").click_accesskit();
+    h.run_steps(3);
+    // Saved, but it can't be started from here, so it isn't run.
+    assert_eq!(app(&h).m.makemkv.readiness(), drt_app::makemkv::Readiness::NeedsPermission);
+    assert!(ran.lock().unwrap().is_empty());
+    assert_eq!(snap(&h).steps["v_disc"].status, "MakeMKV can't be started");
+    assert!(h.get_by_label("Start").accesskit_node().is_disabled());
+    assert!(app(&h).m.cant_start(i).unwrap().contains("permission"));
+    h.get_by_label("flatpak override --user --talk-name=org.freedesktop.Flatpak io.github.vresistor.disc-rip-trip");
+    h.get_by_label("Copy the command");
+    h.get_by_label_contains("start any program on your computer as you");
+    h.get_by_label_contains("close Disc Rip Trip and open it again");
+    shot(&mut h, "makemkv-permission");
+    // Checking again can't see a change made after the app started.
+    h.get_by_label("Check again").click_accesskit();
+    h.run_steps(2);
+    assert!(ran.lock().unwrap().is_empty());
 }
