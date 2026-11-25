@@ -1,12 +1,19 @@
 # Plan: proving it's right, then getting it to people
 
-24 November 2026. Proposed; nothing here is built yet.
+24 November 2026; revised 25 November. Proposed; nothing here is built yet.
 
 Disc Rip Trip rips well on one machine, two drives and a handful of discs,
 and nobody else has run it. This plan does two things:
 
 1. **Prove it**, in ways a stranger can check without taking our word.
-2. **Release it**, on Flathub, with the things a first release needs.
+2. **Release it on Windows, macOS and Linux**, with the things a first
+   release needs: Flathub for Linux, and an installer and a `.dmg` from our
+   own releases for Windows and macOS. How is in `cross-platform.md`.
+
+**This changed on 25 November.** The first version of this plan released
+on Flathub only and left Windows and macOS for later. That was wrong: the
+app is meant to be built and available for all three, so all three are
+part of the first release.
 
 Proof comes first. Flathub puts the app in front of people who will
 judge it on whether their rips come out right, and a bad first
@@ -28,7 +35,7 @@ means not known yet, and the phase that needs it says so.
 | PlayStation discs (image, Check and fix, CHD) | Yes, with Redump matches | Koudelka Discs 1–3 matched Redump on all four counts (size, CRC-32, MD5, SHA-1); Disc 4 is physically damaged and doesn't match |
 | Other data discs and games | No | Simulated discs only |
 | DVD and Blu-ray video | No | Simulated discs only; needs MakeMKV |
-| Windows, macOS | No | Doesn't build or find drives (see `portability.md`) |
+| Windows, macOS | No | Windows doesn't build; macOS finds no drives (`portability.md`). What it takes, and how to test with only Linux hardware: `cross-platform.md` |
 
 The README's Status section is out of date: it still says games are
 untested on real discs. Fixing it is the first change (phase P1).
@@ -147,7 +154,7 @@ From Flathub's rules (docs.flathub.org: *Requirements* and *Linter*)
 |---|---|
 | **Built from source, from a public URL; no prebuilt binaries** in the submission | The manifest installs `payload/`, which holds binaries built beforehand, plus ffmpeg and redumper downloaded already built (`fetch-tools.sh`). This is the main change. |
 | **No network during the build;** each Rust crate listed as a source, using `flatpak-cargo-generator` | Our build script fetches crates and tools over the network inside the SDK. |
-| **App id matches the repo:** `io.github.<user>.<repo>` maps to `github.com/<user>/<repo>`, and that page must exist | `io.github.vresistor.DiscRipTrip` maps to `github.com/vresistor/DiscRipTrip`, which **doesn't exist** *(ran)*. The repo is `disc-rip-trip`. See decision D1. |
+| **App id matches the repo:** `io.github.<user>.<repo>` maps to `github.com/<user>/<repo>`, and that page must exist | **Done (D1).** The id is now `io.github.vresistor.disc-rip-trip`, matching `github.com/vresistor/disc-rip-trip`. The old `io.github.vresistor.DiscRipTrip` pointed at a repo that doesn't exist. |
 | **Valid metainfo,** with the licence matching the source, and a licence file for each module | We have a metainfo file; it hasn't been through `flatpak-builder-lint`. **To find out.** |
 | **Stable releases only:** no snapshots or nightlies | We have no version tags yet. |
 | **Static permissions kept to a minimum,** with portals where they fit | We ask for `--device=all`, `--filesystem=host` and `--talk-name=org.freedesktop.Flatpak`. See 2.3. |
@@ -180,6 +187,16 @@ Fallbacks, best first:
 
 ### 2.4 The first release
 
+- **On all three OSes:** the Flathub app (or, until Flathub accepts it,
+  the `.flatpak` on Releases), a Windows installer and zip, and a macOS
+  `.dmg`, each with its licence files and a source archive for the tools
+  in it (`cross-platform.md` 4.4).
+- **Unsigned on Windows and macOS for 0.1.0.** SignPath only signs
+  projects that have already released, and Apple's signing would put a
+  legal name on the app (`cross-platform.md` 6.1, decision C1). The
+  release notes give the exact steps past SmartScreen and Gatekeeper.
+- **Each OS says how far it's been tested** (`cross-platform.md` 8.3). If
+  macOS hasn't been tried on real discs, its download says so.
 - **Version 0.1.0,** tagged, with the release notes in the metainfo's
   `<releases>`, which Flathub shows.
 - **A changelog** in plain words, written for people who rip discs, not
@@ -213,35 +230,28 @@ starts.
 
 | Phase | What | Done when |
 |---|---|---|
-| **P1** | README Status rewritten (1.1); the app id decided (D1) | The README matches what's been proven; the id is settled |
-| **P2** | Drive recordings (1.2) | Existing stand-ins replaced; Disc 4's patches replay |
+| **P1** | README Status rewritten (1.1); the app id decided (D1, done) | The README matches what's been proven; the id is settled |
+| **P2** | Drive recordings (1.2), replayed by a stand-in tool written in Rust, so the same tests run on every OS | Existing stand-ins replaced; Disc 4's patches replay |
 | **P3** | Rip log gaps, including track gaps (1.3), then CTDB check (1.4) | A real album's log matches CUETools; an edited log is caught |
 | **P4** | Flathub build: redumper offline first, then cyanrip, the app, and the runtime's ffmpeg (2.2) | `flatpak-builder --sandbox` builds with no network, and `flatpak-builder-lint` passes the manifest and the repo |
-| **P5** | Release: 0.1.0, changelog, Copy a report, issue templates, screenshots (2.4) | A tagged release with notes; the report copies nothing private |
-| **P6** | Submit to Flathub | Accepted, or the reviewers' requests answered |
-| **P7** | Tidy (1.5), and CTDB repair (1.4) | As in those sections |
+| **P4x** | Windows and macOS: `cross-platform.md` phases X0–X5. X0 (the licence correction, cyanrip that flushes, drive names per tool, pipes) and X1 (builds and tests on all three in CI) need only this machine | `cross-platform.md` 8.3: Windows rips checked in a VM; macOS checked on a borrowed Mac or labelled untested; a tag makes a draft release with all three packages and their sources |
+| **P5** | Release: 0.1.0 on all three, changelog, Copy a report, issue templates, screenshots (2.4) | A tagged release with notes and three OSes' packages; the report copies nothing private |
+| **P6** | Submit to Flathub; winget after it (`cross-platform.md` X7) | Accepted, or the reviewers' requests answered |
+| **P7** | Tidy (1.5), CTDB repair (1.4), and Windows signing through SignPath (`cross-platform.md` X6) | As in those sections; Windows builds after 0.1.0 signed, or the refusal recorded |
 
-P4 can start alongside P2 and P3. Doing its riskiest step (redumper)
-early means a refusal changes the plan sooner rather than later.
+P4 and P4x can start alongside P2 and P3. Doing P4's riskiest step
+(redumper) early means a refusal changes the plan sooner rather than
+later. In P4x, Windows and macOS can go side by side once X1 is done.
+The proof work (P2, P3) still comes before the public release (P5), on
+every OS.
 
 ---
 
 ## Decisions for you
 
-**D1. The app id.** Flathub reads `io.github.vresistor.DiscRipTrip` as
-`github.com/vresistor/DiscRipTrip`, which doesn't exist. Two ways to
-fix it:
-- **Change the id to `io.github.vresistor.disc-rip-trip`.** This matches
-  the repo exactly; dashes are allowed in the last part. Your recipes and
-  settings move to a new folder under `~/.var/app/`, and the app would
-  move them over once, on first start.
-- **Rename the repo to `DiscRipTrip`.** GitHub redirects the old address,
-  and the id stays.
-
-Either is cheap now, and very hard to change once the app is on Flathub.
-**To find out first:** whether Flathub really checks the repo name
-itself, or only that the GitHub account `vresistor` is yours. Its docs
-say the repo, but its verification may only look at the account.
+**D1. The app id. Made:** `io.github.vresistor.disc-rip-trip`, which
+matches the repo. Recipes and settings move from the old id's folder under
+`~/.var/app/` once, on first start.
 
 **D2. Who submits, and when.** Submitting to Flathub happens under a
 GitHub account, and the reviewers talk to it in the open. That would be
@@ -249,4 +259,9 @@ GitHub account, and the reviewers talk to it in the open. That would be
 proof work, not before.
 
 **D3. Games if redumper won't build** (2.2). Only needed if P4's first
-step fails.
+step fails. This is about Flathub only: on Windows and macOS redumper is
+upstream's own build.
+
+**C1–C5. Windows and macOS** (`cross-platform.md`, *Decisions for you*):
+signing and what to buy, how macOS gets tested, which macOS versions and
+chips, the Windows installer form, and whether the app fetches MakeMKV.
