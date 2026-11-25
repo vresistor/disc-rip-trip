@@ -35,12 +35,14 @@ command -v flatpak >/dev/null || { echo "error: flatpak is not installed" >&2; e
 
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 for ref in "org.gnome.Platform//$RUNTIME_VERSION" "org.gnome.Sdk//$RUNTIME_VERSION" "org.freedesktop.Sdk.Extension.rust-stable//$BASE_VERSION"; do
-  flatpak info "$ref" >/dev/null 2>&1 || flatpak install --user --noninteractive flathub "$ref"
+  flatpak info --user "$ref" >/dev/null 2>&1 || flatpak install --user --noninteractive flathub "$ref"
 done
 
-# Runs a command inside the SDK, with the network and this checkout.
+# Runs a command inside the SDK, with the network and this checkout. The
+# user installation's SDK, so a second one installed system-wide (as
+# org.flatpak.Builder brings) doesn't stop it to ask which.
 in_sdk() {
-  flatpak run --share=network --filesystem="$ROOT" \
+  flatpak run --user --share=network --filesystem="$ROOT" \
     --env=PATH=/usr/lib/sdk/rust-stable/bin:/usr/bin \
     --env=CARGO_HOME="$OUT/cargo" --env=CARGO_TARGET_DIR="$OUT" \
     --env=LIBCHDMAN_CPU=portable \
