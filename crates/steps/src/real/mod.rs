@@ -178,9 +178,14 @@ pub async fn find_offset(drive: &str, measure: bool) -> Option<(i64, String)> {
         Err(_) => None,
     };
     if measure {
-        let dir = std::env::temp_dir().join("disc-rip-trip-measure");
-        std::fs::create_dir_all(&dir).ok()?;
-        let (m, confidence) = offset::measure(&dev, &dir, std::future::pending()).await.ok()?;
+        // In the app's own cache, not a fixed name in the shared /tmp that
+        // someone else could have made first; made new, never reused.
+        let dir = cache.join(format!("measure-{}-{}", std::process::id(), drt_engine::setting::now()));
+        std::fs::create_dir_all(&cache).ok()?;
+        std::fs::create_dir(&dir).ok()?;
+        let measured = offset::measure(&dev, &dir, std::future::pending()).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        let (m, confidence) = measured.ok()?;
         return Some(judge_measurement(m, confidence, listed.as_ref()));
     }
     if let Some(l) = listed {

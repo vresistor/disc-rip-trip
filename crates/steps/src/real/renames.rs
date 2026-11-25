@@ -50,6 +50,16 @@ pub fn find<'a>(lists: &'a [Catalogue], roms: &[super::redump::Rom]) -> Option<&
     lists.iter().find_map(|c| c.by_hashes(roms))
 }
 
+/// A name from a list fetched over the network, if it's a plain file name:
+/// one part, no folder above or below it, nothing a cue sheet's quotes or
+/// a terminal would read as more than text. Redump's lists come over plain
+/// HTTP, so a name can't be trusted to stay in its folder.
+fn plain_name(name: &str) -> Option<&str> {
+    let one = matches!(Path::new(name).components().collect::<Vec<_>>()[..], [std::path::Component::Normal(_)]);
+    let clean = !name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | '"'));
+    (one && clean && !name.starts_with('.') && name.len() <= 240).then_some(name)
+}
+
 /// What to do with the set whose sheet is `cue`, given its tracks' hashes
 /// (in the sheet's order) and the entry they are, if any.
 pub fn plan(cue: &Path, roms: &[super::redump::Rom], game: Option<&Game>) -> Plan {
@@ -58,15 +68,21 @@ pub fn plan(cue: &Path, roms: &[super::redump::Rom], game: Option<&Game>) -> Pla
     let tracks = data::image_files(cue);
     let mut moves: Vec<(PathBuf, PathBuf)> = vec![];
     let sheet = game.roms.iter().find(|r| !r.is_data()).map_or_else(|| format!("{}.cue", game.name), |r| r.name.clone());
-    moves.push((cue.to_path_buf(), dir.join(&sheet)));
+    let Some(sheet) = plain_name(&sheet) else {
+        return Plan::Left(format!("Redump's name for {} isn't a plain file name, so it's left as it is", game.name));
+    };
+    moves.push((cue.to_path_buf(), dir.join(sheet)));
     for (t, r) in tracks.iter().zip(roms) {
         let Some(theirs) = game.roms.iter().find(|g| g.is_data() && g.sha1.eq_ignore_ascii_case(&r.sha1)) else {
             return Plan::Left(format!("{} isn't one of {}'s tracks", r.name, game.name));
         };
-        moves.push((t.clone(), dir.join(&theirs.name)));
+        let Some(name) = plain_name(&theirs.name) else {
+            return Plan::Left(format!("Redump's name for {} isn't a plain file name, so it's left as it is", r.name));
+        };
+        moves.push((t.clone(), dir.join(name)));
     }
     // Its log and LibCrypt file, named as the sheet is.
-    let (old_stem, new_stem) = (cue.file_stem().unwrap_or_default().to_string_lossy().into_owned(), Path::new(&sheet).file_stem().unwrap_or_default().to_string_lossy().into_owned());
+    let (old_stem, new_stem) = (cue.file_stem().unwrap_or_default().to_string_lossy().into_owned(), Path::new(sheet).file_stem().unwrap_or_default().to_string_lossy().into_owned());
     for ext in ["log", "sbi"] {
         let f = dir.join(format!("{old_stem}.{ext}"));
         if f.is_file() {
@@ -154,6 +170,22 @@ pub fn named_in(cue: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_from_redump_that_leaves_the_folder_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let cue = d.path().join("ours.cue");
+        std::fs::write(&cue, "FILE \"ours.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n").unwrap();
+        std::fs::write(d.path().join("ours.bin"), "x").unwrap();
+        let roms = [super::super::redump::Rom { name: "ours.bin".into(), size: 1, crc: "0".into(), md5: "0".into(), sha1: "aa".into() }];
+        for bad in ["../outside.bin", "/home/u/.profile", "a/b.bin", "x\"\nFILE \"y.bin", ".hidden.bin"] {
+            let g = game("Evil (Europe)", &[(bad, "aa")]);
+            assert!(matches!(plan(&cue, &roms, Some(&g)), Plan::Left(_)), "{bad:?} was taken");
+        }
+        let mut g = game("Evil (Europe)", &[("fine.bin", "aa")]);
+        g.roms[0].name = "../../evil.cue".into();
+        assert!(matches!(plan(&cue, &roms, Some(&g)), Plan::Left(_)), "a sheet name outside the folder was taken");
+    }
     use crate::real::redump::Rom;
 
     fn game(name: &str, tracks: &[(&str, &str)]) -> Game {

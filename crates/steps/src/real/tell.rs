@@ -431,7 +431,7 @@ pub fn command(route: Route, id: &str, title: &str, body: &str) -> (&'static str
                 s("-1"),
             ],
         ),
-        Route::NotifySend => ("notify-send", vec![s("--app-name"), s(APP), s("--icon"), s("media-optical"), s(title), s(body)]),
+        Route::NotifySend => ("notify-send", vec![s("--app-name"), s(APP), s("--icon"), s("media-optical"), s("--"), s(title), s(body)]),
     }
 }
 

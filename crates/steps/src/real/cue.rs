@@ -62,7 +62,10 @@ pub fn cue_sheet(c: &Context, files: &[(u32, String)]) -> String {
     for (rem, key) in [("GENRE", "genre"), ("DATE", "year"), ("LABEL", "label"), ("CATALOGNUMBER", "catalognumber")] {
         let v = get(key);
         if !v.is_empty() {
-            line(format!("REM {rem} {}", if v.contains(' ') { quoted(&v) } else { v }));
+            // A line break in the text (GnuDB turns `\n` into one) would
+            // start a cue command of its own.
+            let v: String = v.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().trim().to_owned();
+            line(format!("REM {rem} {}", if v.contains([' ', '"']) { quoted(&v) } else { v }));
         }
     }
     if let Some(toc) = c.get(Subject::Disc, "toc").and_then(super::gnudb::parse_toc) {
@@ -214,6 +217,15 @@ impl Step for CueSheet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_break_in_a_genre_doesnt_start_a_cue_command() {
+        let mut c = Context::default();
+        c.add(Subject::Disc, "genre", "Rock\nFILE\t\"/etc/passwd\"\tWAVE", "GnuDB");
+        let sheet = cue_sheet(&c, &[(1, "01.flac".into())]);
+        assert_eq!(sheet.lines().filter(|l| l.trim_start().starts_with("FILE")).count(), 1, "{sheet}");
+        assert!(sheet.lines().any(|l| l.starts_with("REM GENRE \"Rock FILE")), "{sheet}");
+    }
 
     fn disc() -> Context {
         let mut c = Context::default();
