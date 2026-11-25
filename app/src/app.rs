@@ -34,6 +34,7 @@ pub enum Tray {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     MakeMkv,
+    WorkingFiles,
 }
 
 /// The sidebar's least width, and its most: about a third of the window
@@ -165,6 +166,8 @@ pub struct App {
     pub canvas: Rect,
     /// Where the sidebar was drawn last frame.
     pub(crate) side_rect: Rect,
+    /// A kept working folder whose Delete waits to be confirmed.
+    pub confirm_work_delete: Option<std::path::PathBuf>,
     /// Notify's last *Send a test*, filled in off the UI thread.
     pub(crate) test_send: std::sync::Arc<std::sync::Mutex<Option<crate::tray::TestSend>>>,
 }
@@ -278,6 +281,7 @@ impl App {
             canvas: Rect::NOTHING,
             side_rect: Rect::NOTHING,
             test_send: Default::default(),
+            confirm_work_delete: None,
         }
     }
 
@@ -887,6 +891,15 @@ impl App {
             });
             ui.add_space(6.0);
             // The app's own settings, one line each, above it.
+            let w = &self.m.work;
+            let (value, col) = match w.kept.len() {
+                0 if w.total == 0 => ("None".to_owned(), p.subtle),
+                0 => (drt_steps::real::media::size(w.total), p.subtle),
+                n => (format!("{n} never filed"), p.warn),
+            };
+            if self.setting_row(ui, p, "Working files", &value, col, Page::WorkingFiles) {
+                self.open_page(Page::WorkingFiles);
+            }
             let mk = &self.m.makemkv;
             if mk.hooks.required {
                 let (summary, tone) = (mk.summary(), if mk.readiness() == crate::makemkv::Readiness::Ready { p.subtle } else { p.warn });
@@ -899,9 +912,11 @@ impl App {
 
     /// Opens one of the app's own settings in the sidebar.
     pub fn open_page(&mut self, page: Page) {
-        if page == Page::MakeMkv {
-            self.m.look_for_makemkv();
+        match page {
+            Page::MakeMkv => self.m.look_for_makemkv(),
+            Page::WorkingFiles => self.m.rescan_work(),
         }
+        self.confirm_work_delete = None;
         self.open(Tray::App(page));
     }
 

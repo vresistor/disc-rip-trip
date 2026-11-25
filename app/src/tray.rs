@@ -120,6 +120,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
             (Tray::Question { step }, Body::Answers) => answers(app, ui, p, snap, step),
             (Tray::Question { step }, Body::Pictures) => pictures(app, ui, p, snap, step),
             (Tray::App(Page::MakeMkv), _) => makemkv_page(app, ui, p, true),
+            (Tray::App(Page::WorkingFiles), _) => working_files(app, ui, p),
             (Tray::Step { id, focus }, body) => {
                 // A step that runs MakeMKV, while it isn't set up: that first.
                 if snap.steps.get(id).is_some_and(|v| crate::makemkv::runs_makemkv(&v.step)) && app.m.makemkv_blocks(app.sel).is_some() && !app.m.ripping(app.sel) {
@@ -422,6 +423,22 @@ fn room(ui: &Ui) -> f32 {
 fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
     let i = app.sel;
     match tray {
+        Tray::App(Page::WorkingFiles) => {
+            let p = Pal::get(app.dark);
+            let w = &app.m.work;
+            Some(Plan {
+                icon: "folder".into(),
+                colour: p.kind("folder"),
+                name: "Working files".into(),
+                pill: Some((drt_steps::real::media::size(w.total), if w.kept.is_empty() { Tone::Plain } else { Tone::Warn }, None)),
+                say: "Where each disc's rip and encodes wait until they're filed. They're deleted once everything is filed; a folder holding files that never were is kept, since it may be the only copy.".into(),
+                acts: vec![],
+                body: Body::App,
+                rename: None,
+                remove: false,
+                corner: None,
+            })
+        }
         Tray::App(Page::MakeMkv) => {
             let p = Pal::get(app.dark);
             let r = app.m.makemkv.readiness();
@@ -696,6 +713,47 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
             }
             Some(confirming(app, plan, id, &v))
         }
+    }
+}
+
+// ---- Working files ----------------------------------------------------------------------------
+
+/// The working folders kept because they hold files never filed: each
+/// with Open folder and Delete, which asks first.
+fn working_files(app: &mut App, ui: &mut Ui, p: &Pal) {
+    let kept = app.m.work.kept.clone();
+    if kept.is_empty() {
+        empty(ui, p, "Nothing waiting to be filed.");
+        return;
+    }
+    heading(ui, p, "Never filed");
+    for k in kept {
+        let size = drt_steps::real::media::size(k.bytes);
+        ui.add(egui::Label::new(RichText::new(&k.line).font(font(13.5, 500)).color(p.ink)).wrap());
+        ui.label(RichText::new(format!("{size} · {}", drt_steps::real::reach::shown(&k.path))).font(font(12.0, 400)).color(p.muted));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if app.confirm_work_delete.as_ref() == Some(&k.path) {
+                ui.label(RichText::new(format!("Delete {size} for good?")).font(font(13.0, 500)).color(p.bad));
+                if danger(ui, p, "Delete") {
+                    app.m.delete_work(&k.path);
+                    app.confirm_work_delete = None;
+                }
+                if Btn::new("", "Keep").look(Look::Quiet).font(font(13.0, 500)).show(ui, p).clicked() {
+                    app.confirm_work_delete = None;
+                }
+            } else {
+                let open = format!("Open folder: {}", k.line);
+                if Btn::new("folder-link", "Open folder").look(Look::Plain).font(font(13.0, 500)).name(&open).show(ui, p).clicked() {
+                    app.m.open(&k.path);
+                }
+                let del = format!("Delete: {}", k.line);
+                if Btn::new("trash", "Delete").look(Look::Quiet).fg(p.bad).font(font(13.0, 500)).name(&del).show(ui, p).clicked() {
+                    app.confirm_work_delete = Some(k.path.clone());
+                }
+            }
+        });
+        ui.add_space(14.0);
     }
 }
 

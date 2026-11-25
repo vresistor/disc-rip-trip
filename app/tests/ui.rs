@@ -6133,3 +6133,96 @@ fn in_the_flatpak_a_host_makemkv_needs_a_permission_and_the_command_is_shown() {
     h.run_steps(2);
     assert!(ran.lock().unwrap().is_empty());
 }
+
+// ---- Working files ----------------------------------------------------------------------------
+
+/// A working folder under the test's `work/`, with these files, marked as
+/// a settled run would mark it (`None`: as a run cut off would leave it).
+fn work_folder(e: &Env, name: &str, files: &[&str], mark: Option<drt_app::workfiles::Mark>) -> PathBuf {
+    let d = e.dir.path().join("work").join(name);
+    for f in files {
+        let p = d.join(f);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, vec![0u8; 1000]).unwrap();
+    }
+    if let Some(m) = mark {
+        drt_app::workfiles::write_mark(&d, &m);
+    }
+    d
+}
+
+fn backdate(p: &Path, by: Duration) {
+    if p.is_dir() {
+        for e in std::fs::read_dir(p).unwrap().flatten() {
+            backdate(&e.path(), by);
+        }
+    }
+    std::fs::File::open(p).unwrap().set_modified(std::time::SystemTime::now() - by).unwrap();
+}
+
+#[test]
+fn working_files_never_filed_are_kept_listed_and_deleted_only_when_you_say() {
+    use drt_app::workfiles::{Class, Mark};
+    let e = env();
+    let unfiled = work_folder(&e, "cds-1", &["flac/01.flac", "flac/02.flac", "flac/03.flac", "rip/01.wav"], Some(Mark { class: Class::Unfiled, title: "Tortoise – TNT".into() }));
+    // Cut off mid-run long ago, with encodes in it: kept all the same.
+    let cut_off = work_folder(&e, "cds-4", &["mp3/01.mp3", "rip/01.wav"], None);
+    backdate(&cut_off, Duration::from_secs(40 * 24 * 3600));
+    let filed = work_folder(&e, "cds-2", &["flac/01.flac"], Some(Mark { class: Class::Filed, title: String::new() }));
+    let raw = work_folder(&e, "cds-3", &["rip/01.wav"], None);
+    backdate(&raw, Duration::from_secs(25 * 3600));
+    let fresh_raw = work_folder(&e, "cds-5", &["rip/01.wav"], None);
+    let mut h = window(&e, None, true, 0.0);
+    until(&mut h, "the start-up sweep", |a| a.m.work.kept.len() == 2);
+    assert!(!filed.exists() && !raw.exists(), "filed, and raw a day old: gone");
+    assert!(unfiled.join("flac/01.flac").exists() && cut_off.join("mp3/01.mp3").exists() && fresh_raw.exists());
+    h.get_by_label("Working files, 2 never filed");
+    app_mut(&mut h).open_page(drt_app::Page::WorkingFiles);
+    h.run_steps(3);
+    h.get_by_label("Tortoise – TNT: 3 tracks, never filed");
+    assert!(app(&h).m.work.kept.iter().any(|k| k.line.starts_with("A disc from ") && k.line.ends_with(": 1 track, never filed")), "{:?}", app(&h).m.work.kept);
+    shot(&mut h, "working-files");
+    h.get_by_label("Open folder: Tortoise – TNT: 3 tracks, never filed").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(e.opened.lock().unwrap().last(), Some(&unfiled));
+    // Delete asks first; Keep leaves it.
+    h.get_by_label("Delete: Tortoise – TNT: 3 tracks, never filed").click_accesskit();
+    h.run_steps(2);
+    h.get_by_label_contains("for good?");
+    h.get_by_label("Keep").click_accesskit();
+    h.run_steps(2);
+    assert!(unfiled.exists());
+    h.get_by_label("Delete: Tortoise – TNT: 3 tracks, never filed").click_accesskit();
+    h.run_steps(2);
+    h.get_by_label("Delete").click_accesskit();
+    h.run_steps(2);
+    until(&mut h, "it's deleted", |a| a.m.work.kept.len() == 1);
+    assert!(!unfiled.exists());
+}
+
+#[test]
+fn a_held_runs_working_folder_is_never_swept() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    click(&mut h, "Start");
+    until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
+    click(&mut h, "Use this one");
+    until(&mut h, "the hold", |a| a.m.snapshot(0).steps["hold"].detail == "All here");
+    // Its folder holds only what was read, and looks a day old: what a
+    // sweep deletes, but not while a run uses it.
+    let mine = app(&h).m.newest(0).unwrap().run.work().to_owned();
+    std::fs::create_dir_all(mine.join("rip")).unwrap();
+    std::fs::write(mine.join("rip/01.wav"), b"x").unwrap();
+    backdate(&mine, Duration::from_secs(30 * 3600));
+    let other = work_folder(&e, "cds-old", &["rip/01.wav"], None);
+    backdate(&other, Duration::from_secs(30 * 3600));
+    app(&h).m.sweep_work();
+    let start = Instant::now();
+    while other.exists() {
+        assert!(start.elapsed() < Duration::from_secs(10), "the sweep didn't run");
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(mine.join("rip/01.wav").exists(), "a held run's folder stays");
+    assert!(app(&h).m.ripping(0));
+}

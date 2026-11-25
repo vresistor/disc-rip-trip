@@ -181,6 +181,11 @@ pub struct Model {
     pub missing_tools: Vec<&'static str>,
     /// Where MakeMKV may be run from, and what's known of it.
     pub makemkv: crate::makemkv::MakeMkv,
+    /// The working folders, as last looked at: their size, and the ones
+    /// kept because they hold files never filed.
+    pub work: crate::workfiles::Scan,
+    work_jobs: std::sync::mpsc::Sender<crate::workfiles::Job>,
+    work_rx: std::sync::mpsc::Receiver<crate::workfiles::Scan>,
     auto_left: HashMap<usize, Option<usize>>,
     /// The disc before, as it ended: shown until the next disc goes in, so
     /// the graph doesn't empty the moment the tray opens.
@@ -323,6 +328,9 @@ impl Model {
             drt_steps::real::video::makemkv::set_key_updates(key_updates);
             crate::makemkv::MakeMkv::new(d.makemkv, saved, key_updates)
         };
+        let (work_jobs, work_rx) = crate::workfiles::worker(d.engine.work_root.clone(), wake.clone());
+        // Nothing runs yet, so no folder is in use.
+        let _ = work_jobs.send(crate::workfiles::Job::Sweep { in_use: Default::default() });
         let mut m = Model {
             engine: Arc::new(d.engine),
             store: d.store,
@@ -334,6 +342,9 @@ impl Model {
             repeat_limit: None,
             missing_tools: Vec::new(),
             makemkv,
+            work: Default::default(),
+            work_jobs,
+            work_rx,
             auto_left: HashMap::new(),
             before_disc: HashMap::new(),
             stopping: HashMap::new(),
@@ -514,6 +525,7 @@ impl Model {
             changed = true;
         }
         let mut ended = Vec::new();
+        let mut settled = Vec::new();
         for (&i, v) in self.runs.iter_mut() {
             for r in v.iter_mut() {
                 if r.rx.has_changed().unwrap_or(false) {
@@ -526,9 +538,17 @@ impl Model {
                 // Ended: kept, replacing the recipe's last.
                 if r.snap.finished && !r.kept {
                     r.kept = true;
+                    settled.push((r.run.work().to_owned(), Box::new(r.snap.clone()), r.run.keeps_work(), r.album()));
                     ended.push((i, crate::store::Kept { snap: r.snap.clone(), context: r.run.context(), raw: r.run.raw_all().into_iter().collect() }));
                 }
             }
+        }
+        // A run's working folder, once it has ended: marked for what it
+        // holds, and gone if all of it was filed and nothing's on offer to
+        // do again.
+        for (dir, snap, keep, title) in settled {
+            let job = crate::workfiles::Job::Settled { snap, keep, title, in_use: self.work_in_use_but(&dir), dir };
+            let _ = self.work_jobs.send(job);
         }
         for (i, k) in ended {
             // Kept until the app closes, not on disk.
@@ -567,19 +587,33 @@ impl Model {
             }
             changed = true;
         }
-        // Earlier discs leave once they're done.
+        // Earlier discs leave once they're done; their working folders
+        // with them, unless they hold files never filed.
+        let mut replaced = Vec::new();
         for (i, v) in self.runs.iter_mut() {
             let n = v.len();
             let mut k = 0;
             v.retain(|r| {
                 k += 1;
-                k == n || !r.snap.finished
+                let stays = k == n || !r.snap.finished;
+                if !stays {
+                    replaced.push(r.run.work().to_owned());
+                }
+                stays
             });
             if let Some(id) = self.shown.get(i) {
                 if !v.iter().any(|r| r.id == *id) || v.last().is_some_and(|r| r.id == *id) {
                     self.shown.remove(i);
                 }
             }
+        }
+        for dir in replaced {
+            let job = crate::workfiles::Job::Replaced { in_use: self.work_in_use_but(&dir), dir };
+            let _ = self.work_jobs.send(job);
+        }
+        while let Ok(scan) = self.work_rx.try_recv() {
+            changed |= scan != self.work;
+            self.work = scan;
         }
         if changed {
             let now = self.engine.settings.lock().unwrap().clone();
@@ -589,6 +623,30 @@ impl Model {
             }
         }
         changed
+    }
+
+    /// The working folders the window's runs use, but `dir`: none of them
+    /// is ever deleted.
+    fn work_in_use_but(&self, dir: &Path) -> std::collections::HashSet<PathBuf> {
+        self.runs.values().flatten().map(|r| r.run.work().to_owned()).filter(|w| w != dir).collect()
+    }
+
+    /// The start-up sweep again: filed folders and day-old raw ones go;
+    /// never one a run uses.
+    pub fn sweep_work(&self) {
+        let in_use = self.work_in_use_but(Path::new(""));
+        let _ = self.work_jobs.send(crate::workfiles::Job::Sweep { in_use });
+    }
+
+    /// Looks at the working folders again, off the window's thread.
+    pub fn rescan_work(&self) {
+        let _ = self.work_jobs.send(crate::workfiles::Job::Scan);
+    }
+
+    /// Deletes a kept working folder, as you asked; never one a run uses.
+    pub fn delete_work(&self, dir: &Path) {
+        let in_use = self.work_in_use_but(Path::new(""));
+        let _ = self.work_jobs.send(crate::workfiles::Job::Delete { dir: dir.to_owned(), in_use });
     }
 
     /// Whether the recipe's newest run is still going.

@@ -19,6 +19,7 @@ pub mod store;
 pub mod theme;
 pub mod tray;
 pub mod widgets;
+pub mod workfiles;
 
 pub use app::{App, Appearance, Page, Tray};
 pub use model::{Deps, Model};

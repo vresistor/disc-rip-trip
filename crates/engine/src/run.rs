@@ -448,6 +448,12 @@ impl Run {
         &self.shared.work
     }
 
+    /// Whether a step asked for the working folder to be kept: it holds
+    /// something left unfiled on purpose.
+    pub fn keeps_work(&self) -> bool {
+        self.shared.keep_work.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// The log, for when you want it.
     pub fn log(&self) -> Vec<String> {
         self.shared.log.lock().unwrap().clone()

@@ -278,7 +278,7 @@ uses it, and every recipe shares it.
 | What | Where |
 |---|---|
 | Recipes and settings | `~/.config/disc-rip-trip/` (`recipes.json`, `settings.json`). `--simulate` uses a `simulate/` folder inside it. |
-| A run's working files | `~/.cache/disc-rip-trip/runs/`. Deleted when a run finishes cleanly; kept if it was stopped or something failed. |
+| A run's working files | `~/.cache/disc-rip-trip/runs/`. Once everything a run made is filed, its folder is deleted (when the next disc replaces it, if the run still offers a retry). One stopped before anything was encoded goes once replaced, or at start-up after a day. One holding encoded files that were never filed (say the network share was down) is never deleted by itself: **Working files**, at the foot of the recipe list, lists it to open or delete. The small `runs/*.json` records stay. |
 | Downloaded lists (drive offsets, Redump) | `~/.cache/disc-rip-trip/cache/` |
 
 These follow `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` if you set them.
