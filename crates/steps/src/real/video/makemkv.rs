@@ -691,11 +691,12 @@ pub async fn version(launcher: &Launcher, dir: &Path) -> Result<String> {
     if let Some(v) = version_in(&text) {
         return Ok(v);
     }
+    // It started and ended. Whether `--version` is something it knows
+    // isn't certain, so only a sign it couldn't run at all fails it.
+    let broken = ["error while loading shared libraries", "not found", "No such file", "cannot execute", "Permission denied"];
     match tool::last_meaningful_line(&text) {
-        Some(l) if out.status.success() => Ok(l.chars().take(80).collect()),
-        Some(l) => bail!("it didn't run: {}", l.chars().take(160).collect::<String>()),
-        None if out.status.success() => Ok("version not given".into()),
-        None => bail!("it didn't run ({})", out.status),
+        Some(l) if broken.iter().any(|b| l.contains(b)) => bail!("it didn't run: {}", l.chars().take(160).collect::<String>()),
+        _ => Ok("Version not given".into()),
     }
 }
 

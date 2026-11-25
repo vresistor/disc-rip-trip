@@ -22,7 +22,7 @@ pub fn override_command() -> String {
 pub const GET_URL: &str = "https://www.makemkv.com/download/";
 
 /// What the sidebar says first, when it isn't set up.
-pub const WHY: &str = "Video discs are read by MakeMKV, which can't come with this app because it isn't free software. Disc Rip Trip only runs it if you say so.";
+pub const WHY: &str = "Video discs are read by MakeMKV, which doesn't come with this app: it isn't free software, and it gets round copy protection. Disc Rip Trip only runs it if you say so.";
 
 /// What the permission lets the app do, said plainly.
 pub const GRANTS: &str = "This lets Disc Rip Trip start any program on your computer as you, not just MakeMKV.";

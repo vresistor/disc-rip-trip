@@ -92,10 +92,43 @@ fn is_place(kind: &str) -> bool {
     matches!(kind, "folder" | "library")
 }
 
-/// Every Folder finished and nothing waiting.
+/// Steps whose items are what was read from the disc, or what was looked
+/// up or decided: none of them a finished file. An item anywhere else (an
+/// encode, a checked image, something held) is.
+fn reads_or_looks(kind: &str) -> bool {
+    matches!(
+        kind,
+        "drive"
+            | "next-disc"
+            | "audio-cd"
+            | "data-disc"
+            | "game-disc"
+            | "video-disc"
+            | "rip"
+            | "image"
+            | "rip-video"
+            | "musicbrainz"
+            | "cd-text"
+            | "discogs"
+            | "gnudb"
+            | "tmdb"
+            | "redump"
+            | "cover-art"
+            | "lyrics"
+            | "choose"
+            | "choose-video"
+            | "game-choose"
+            | "tell"
+            | "replaygain"
+    )
+}
+
+/// Every Folder finished, nothing waiting or under way, and not stopped.
 pub fn all_filed(snap: &Snapshot) -> bool {
     let places: Vec<_> = snap.steps.values().filter(|v| is_place(&v.step)).collect();
     snap.finished
+        && !snap.stopped
+        && snap.steps.values().all(|v| v.state != StepState::Busy && v.items.iter().all(|i| !matches!(i.state, ItemState::Waiting | ItemState::Busy)))
         && !places.is_empty()
         && places.iter().all(|v| v.state == StepState::Ok && v.count(ItemState::Skipped) == 0 && v.count(ItemState::Bad) == 0)
         && snap.steps.values().all(|v| v.count(ItemState::Waiting) == 0 && v.state != StepState::Hold)
@@ -119,8 +152,8 @@ pub fn classify(snap: &Snapshot, keep: bool, dir: &Path) -> Class {
     }
     // Something reached a Folder and wasn't filed: finished, whatever
     // the folder looks like.
-    let waited = snap.steps.values().any(|v| is_place(&v.step) && v.items.iter().any(|i| i.state != ItemState::Ok));
-    if waited || has_finished(dir) {
+    let made = snap.steps.values().any(|v| !reads_or_looks(&v.step) && !v.items.is_empty());
+    if made || has_finished(dir) {
         Class::Unfiled
     } else {
         Class::Raw
@@ -365,6 +398,17 @@ mod tests {
         // A Folder that waited (its share was down) and was stopped: unfiled.
         let waited = snap(vec![("lib", step("folder", StepState::Hold, &[ItemState::Waiting]))]);
         assert_eq!(classify(&waited, false, t.path()), Class::Unfiled);
+        // Stopped with the Folder fine so far and an encode under way: not filed.
+        let mid = Snapshot { stopped: true, ..snap(vec![("flac", step("flac", StepState::Busy, &[ItemState::Ok, ItemState::Busy])), ("lib", step("folder", StepState::Ok, &[ItemState::Ok]))]) };
+        assert_eq!(classify(&mid, false, t.path()), Class::Unfiled);
+        // A checked image held, then stopped: finished, so not raw, though
+        // it's in image/.
+        put(t.path(), "image/game.bin", 10);
+        let held = Snapshot {
+            stopped: true,
+            ..snap(vec![("image", step("image", StepState::Ok, &[ItemState::Ok])), ("check", step("check", StepState::Ok, &[ItemState::Ok])), ("lib", step("folder", StepState::Idle, &[]))])
+        };
+        assert_eq!(classify(&held, false, t.path()), Class::Unfiled);
     }
 
     #[test]

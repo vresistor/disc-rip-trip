@@ -66,6 +66,8 @@ fn main() -> eframe::Result<()> {
         connected: if simulate { Arc::new(|| vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()]) } else { Arc::new(|| drt_steps::real::drives().into_iter().map(|(name, _)| name).collect()) },
     };
     let mut model = Model::new(deps);
+    // Working folders filed, or raw and a day old, from earlier sessions.
+    model.sweep_work();
     if !simulate {
         model.missing_tools = drt_steps::real::tool::missing(&drt_steps::real::tool::BUNDLED);
     }

@@ -6173,7 +6173,13 @@ fn working_files_never_filed_are_kept_listed_and_deleted_only_when_you_say() {
     backdate(&raw, Duration::from_secs(25 * 3600));
     let fresh_raw = work_folder(&e, "cds-5", &["rip/01.wav"], None);
     let mut h = window(&e, None, true, 0.0);
-    until(&mut h, "the start-up sweep", |a| a.m.work.kept.len() == 2);
+    app(&h).m.sweep_work();
+    until(&mut h, "the start-up sweep", |a| a.m.work.kept.len() == 2 && !a.m.work.kept.is_empty());
+    let start = Instant::now();
+    while filed.exists() || raw.exists() {
+        assert!(start.elapsed() < Duration::from_secs(10));
+        h.step();
+    }
     assert!(!filed.exists() && !raw.exists(), "filed, and raw a day old: gone");
     assert!(unfiled.join("flac/01.flac").exists() && cut_off.join("mp3/01.mp3").exists() && fresh_raw.exists());
     h.get_by_label("Working files, 2 never filed");
@@ -6225,4 +6231,72 @@ fn a_held_runs_working_folder_is_never_swept() {
     }
     assert!(mine.join("rip/01.wav").exists(), "a held run's folder stays");
     assert!(app(&h).m.ripping(0));
+}
+
+/// Puts a file in the newest run's working folder, as a step would.
+fn in_work(h: &Harness<Window>, rel: &str) -> PathBuf {
+    let w = app(h).m.newest(0).unwrap().run.work().to_owned();
+    let p = w.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"x").unwrap();
+    w
+}
+
+fn mark_of(dir: &Path, h: &mut Harness<Window>) -> drt_app::workfiles::Class {
+    let start = Instant::now();
+    loop {
+        if let Some(m) = drt_app::workfiles::read_mark(dir) {
+            return m.class;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "never marked");
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_run_stopped_before_anything_was_encoded_goes_when_the_next_disc_replaces_it() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.03);
+    click(&mut h, "Start");
+    until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
+    let first = in_work(&h, "rip/01.wav");
+    click(&mut h, "Stop");
+    until(&mut h, "the stop", |a| a.m.snapshot(0).finished);
+    assert_eq!(mark_of(&first, &mut h), drt_app::workfiles::Class::Raw);
+    assert!(first.exists(), "kept while it's shown");
+    // The next disc: it's replaced, and its folder goes.
+    std::thread::sleep(Duration::from_millis(1100));
+    click(&mut h, "Start");
+    until(&mut h, "the next disc", |a| a.m.runs[&0].len() == 1 && !a.m.snapshot(0).finished);
+    let start = Instant::now();
+    while first.exists() {
+        assert!(start.elapsed() < Duration::from_secs(10), "it wasn't deleted");
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_run_stopped_mid_encode_keeps_its_encodes_and_lists_them() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.03);
+    click(&mut h, "Start");
+    until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
+    click(&mut h, "Use this one");
+    until(&mut h, "an encode", |a| a.m.snapshot(0).steps.values().any(|v| drt_app::tray::is_encoder(&v.step) && v.count(ItemState::Ok) > 0));
+    let w = in_work(&h, "flac/01 - Track.flac");
+    click(&mut h, "Stop");
+    until(&mut h, "the stop", |a| a.m.snapshot(0).finished);
+    assert_eq!(mark_of(&w, &mut h), drt_app::workfiles::Class::Unfiled);
+    until(&mut h, "it's listed", |a| a.m.work.kept.iter().any(|k| k.path == w));
+    // Replaced, it stays: it may be the only copy.
+    std::thread::sleep(Duration::from_millis(1100));
+    click(&mut h, "Start");
+    until(&mut h, "the next disc", |a| a.m.runs[&0].len() == 1 && !a.m.snapshot(0).finished);
+    for _ in 0..50 {
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(w.join("flac/01 - Track.flac").exists());
 }

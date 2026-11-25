@@ -329,8 +329,7 @@ impl Model {
             crate::makemkv::MakeMkv::new(d.makemkv, saved, key_updates)
         };
         let (work_jobs, work_rx) = crate::workfiles::worker(d.engine.work_root.clone(), wake.clone());
-        // Nothing runs yet, so no folder is in use.
-        let _ = work_jobs.send(crate::workfiles::Job::Sweep { in_use: Default::default() });
+        let _ = work_jobs.send(crate::workfiles::Job::Scan);
         let mut m = Model {
             engine: Arc::new(d.engine),
             store: d.store,
@@ -538,7 +537,7 @@ impl Model {
                 // Ended: kept, replacing the recipe's last.
                 if r.snap.finished && !r.kept {
                     r.kept = true;
-                    settled.push((r.run.work().to_owned(), Box::new(r.snap.clone()), r.run.keeps_work(), r.album()));
+                    settled.push((r.id, r.run.work().to_owned(), Box::new(r.snap.clone()), r.run.keeps_work(), r.album()));
                     ended.push((i, crate::store::Kept { snap: r.snap.clone(), context: r.run.context(), raw: r.run.raw_all().into_iter().collect() }));
                 }
             }
@@ -546,8 +545,8 @@ impl Model {
         // A run's working folder, once it has ended: marked for what it
         // holds, and gone if all of it was filed and nothing's on offer to
         // do again.
-        for (dir, snap, keep, title) in settled {
-            let job = crate::workfiles::Job::Settled { snap, keep, title, in_use: self.work_in_use_but(&dir), dir };
+        for (id, dir, snap, keep, title) in settled {
+            let job = crate::workfiles::Job::Settled { snap, keep, title, in_use: self.work_in_use_but(Some(id)), dir };
             let _ = self.work_jobs.send(job);
         }
         for (i, k) in ended {
@@ -608,7 +607,8 @@ impl Model {
             }
         }
         for dir in replaced {
-            let job = crate::workfiles::Job::Replaced { in_use: self.work_in_use_but(&dir), dir };
+            // Every run left: one sharing its folder keeps it.
+            let job = crate::workfiles::Job::Replaced { in_use: self.work_in_use_but(None), dir };
             let _ = self.work_jobs.send(job);
         }
         while let Ok(scan) = self.work_rx.try_recv() {
@@ -625,16 +625,16 @@ impl Model {
         changed
     }
 
-    /// The working folders the window's runs use, but `dir`: none of them
-    /// is ever deleted.
-    fn work_in_use_but(&self, dir: &Path) -> std::collections::HashSet<PathBuf> {
-        self.runs.values().flatten().map(|r| r.run.work().to_owned()).filter(|w| w != dir).collect()
+    /// The working folders the window's runs use (but run `but`'s own):
+    /// none of them is ever deleted.
+    fn work_in_use_but(&self, but: Option<u64>) -> std::collections::HashSet<PathBuf> {
+        self.runs.values().flatten().filter(|r| Some(r.id) != but).map(|r| r.run.work().to_owned()).collect()
     }
 
     /// The start-up sweep again: filed folders and day-old raw ones go;
     /// never one a run uses.
     pub fn sweep_work(&self) {
-        let in_use = self.work_in_use_but(Path::new(""));
+        let in_use = self.work_in_use_but(None);
         let _ = self.work_jobs.send(crate::workfiles::Job::Sweep { in_use });
     }
 
@@ -645,7 +645,7 @@ impl Model {
 
     /// Deletes a kept working folder, as you asked; never one a run uses.
     pub fn delete_work(&self, dir: &Path) {
-        let in_use = self.work_in_use_but(Path::new(""));
+        let in_use = self.work_in_use_but(None);
         let _ = self.work_jobs.send(crate::workfiles::Job::Delete { dir: dir.to_owned(), in_use });
     }
 
