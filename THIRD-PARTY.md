@@ -10,7 +10,7 @@ is an obligation, not a courtesy, for the GPL components below.
 |---|---|---|
 | Disc Rip Trip itself | GPL-3.0-or-later | yes — this repository |
 | ffmpeg, ffprobe | GPL-3.0 as built | yes — in the flatpak's `/app/bin` |
-| cyanrip | LGPL-2.1-or-later | yes — in the flatpak's `/app/bin` |
+| cyanrip (as built, with libcdio) | GPL-3.0-or-later | yes — in the flatpak's `/app/bin` |
 | redumper | GPL-3.0 | yes — in the flatpak's `/app/bin` |
 | MAME's CHD core, via libchdman-rs | BSD-3-Clause | yes — linked |
 | lofty (audio tag reading and writing) | MIT / Apache-2.0 | yes — linked |
@@ -56,8 +56,11 @@ strings are an interface to something absent.
 
 ## cyanrip: corresponding source
 
-[cyanrip](https://github.com/cyanreg/cyanrip) is LGPL-2.1-or-later, shipped
-unmodified as a standalone executable and driven over its documented command
+[cyanrip](https://github.com/cyanreg/cyanrip)'s own code is LGPL-2.1-or-later,
+but the binary we ship statically links libcdio and libcdio-paranoia, which are
+GPL-3.0-or-later, **so the cyanrip binary as a whole is GPL-3.0-or-later** (LGPL
+code may be used under the GPL, and this project is GPL-3.0-or-later too). It is
+shipped as a standalone executable and driven over its documented command
 line. Shipping it obliges us to identify the source each binary came from.
 
 It is built by `scripts/build-cyanrip.sh` from versions pinned in that
@@ -73,17 +76,16 @@ own MusicBrainz lookups, with a cache and a rate limiter, and passes the result
 in as tags; a second client in the same process tree could get your address
 blocked. The script fails loudly if that change stops applying.
 
-That ffmpeg is deliberately built **without** `--enable-gpl`. cyanrip needs none
-of ffmpeg's GPL-only components, so the ffmpeg inside cyanrip is LGPL and
-cyanrip's own LGPL-2.1 terms are preserved rather than being pulled up to GPL by
-something it never uses. It is a different build, under different terms, from
-the GPL ffmpeg binaries above.
+That ffmpeg is built **without** `--enable-gpl`: cyanrip needs none of ffmpeg's
+GPL-only components, so that ffmpeg is LGPL. It is a different build from the
+GPL ffmpeg binaries above. It doesn't make the cyanrip binary LGPL, though:
+libcdio already makes it GPL-3.0-or-later.
 
 **Anyone receiving a build** may obtain the complete corresponding source for
-cyanrip and everything statically linked into it, and may relink it against a
-modified version, as LGPL-2.1 section 6 requires. The build scripts produce
-exactly the object it ships; open an issue and we will provide the intermediate
-objects for any binary we have published.
+cyanrip and everything statically linked into it, as GPL-3.0 requires: the
+pinned versions in the build script, and the script itself, which is the
+recipe for building it. Open an issue and we will provide it for any binary we
+have published.
 
 ## redumper: corresponding source
 
@@ -140,13 +142,17 @@ contains, embeds or redistributes it, and CI fails any build that does. The app
 runs it only from a place the user has approved in the app (or named in
 `DRT_MAKEMKVCON`); until then it only checks which files exist.
 
-Why: MakeMKV isn't free software, so it can't go where the rest of the bundle
-goes (Flathub builds from source, and the bundle's other tools are all GPL or
-LGPL with their source published). And its EULA's permission to redistribute
-it unmodified doesn't settle the harder point: MakeMKV decrypts CSS, and distributing circumvention software
-is a materially different act from distributing something that drives it —
-CDPA s.296ZB in the UK, DMCA §1201 in the US. It is the same line HandBrake draws
-with libdvdcss.
+Its EULA does allow redistributing it unmodified, so the licence isn't the
+reason. These are:
+
+- **It decrypts copy protection.** Distributing circumvention software is a
+  materially different act from distributing something that drives it — CDPA
+  s.296ZB in the UK, DMCA §1201 in the US. It is the same line HandBrake draws
+  with libdvdcss.
+- **Signing.** Code-signing services for open-source projects refuse
+  proprietary code in what they sign (SignPath Foundation's terms, section 6),
+  and software that circumvents security measures. Bundling `makemkvcon` would
+  rule that out.
 
 ## Metadata
 

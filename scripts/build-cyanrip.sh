@@ -126,9 +126,9 @@ tar -xJf "$WORK/ffmpeg.tar.xz" -C "$WORK"
   # whatever development headers happen to be installed on the build machine,
   # which is exactly how a distribution ffmpeg ends up needing OpenCL.
   #
-  # No --enable-gpl here, deliberately. Nothing GPL-only is used, so this
-  # ffmpeg is LGPL — which keeps cyanrip's own LGPL-2.1 terms intact rather
-  # than pulling the whole binary up to GPL.
+  # No --enable-gpl here: nothing GPL-only is used, so this ffmpeg is LGPL.
+  # The cyanrip binary is GPL-3.0-or-later all the same, since libcdio and
+  # libcdio-paranoia, linked in, are (THIRD-PARTY.md).
   ./configure \
     --prefix="$PREFIX" \
     --disable-autodetect \

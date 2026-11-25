@@ -135,7 +135,7 @@ jobs:
             exit 1
           fi
 
-      # The bundled tools are GPL and LGPL; PROVENANCE.txt says which source
+      # The bundled tools are GPL; PROVENANCE.txt says which source
       # each came from, so it goes beside the bundle.
       - name: Put the provenance beside the bundle
         run: cp target/flatpak/tools/PROVENANCE.txt dist/tools-provenance.txt
@@ -180,7 +180,7 @@ jobs:
           **MakeMKV is a separate install** and is not bundled; the app tells
           you where to get it.
 
-          Licensing, and the source of the bundled GPL and LGPL tools, are in
+          Licensing, and the source of the bundled GPL tools, are in
           [THIRD-PARTY.md](https://github.com/vresistor/disc-rip-trip/blob/main/THIRD-PARTY.md)
           and `tools-provenance.txt`.
           EOF

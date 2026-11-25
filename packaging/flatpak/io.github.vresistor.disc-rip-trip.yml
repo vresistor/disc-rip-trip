@@ -21,7 +21,7 @@
 #                           to a recipe saved before
 #
 # Not granted: --talk-name=org.freedesktop.Flatpak. MakeMKV isn't bundled
-# (it isn't free software), and it's run through `flatpak-spawn --host`,
+# (it decrypts copy protection; see THIRD-PARTY.md), and it's run through `flatpak-spawn --host`,
 # on the host or from its own flatpak. That permission lets the app run
 # anything on the host as you, so it's left to you: the app shows the
 # `flatpak override` command once you've chosen a MakeMKV to use.

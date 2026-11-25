@@ -18,7 +18,7 @@
 # used. Changing a version means changing its hash with it.
 #
 # Writes <dest-dir>/PROVENANCE.txt, which says which source each binary came
-# from. They are GPL and LGPL, so a release has to say so (THIRD-PARTY.md).
+# from. They are GPL, so a release has to say so (THIRD-PARTY.md).
 set -euo pipefail
 
 DEST="${1:?usage: $0 <dest-dir>}"

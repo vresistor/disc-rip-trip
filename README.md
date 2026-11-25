@@ -47,8 +47,8 @@ flatpak install --user ./disc-rip-trip-*.flatpak
 
 It brings cyanrip, redumper, ffmpeg and ffprobe with it.
 
-DVDs and Blu-rays also need [MakeMKV](https://www.makemkv.com). It
-isn't free software, so it's never bundled. Get the Flathub flatpak
+DVDs and Blu-rays also need [MakeMKV](https://www.makemkv.com). It's
+never bundled, since it decrypts copy protection (see THIRD-PARTY.md). Get the Flathub flatpak
 `com.makemkv.MakeMKV`, or get it from makemkv.com. Disc Rip Trip never
 runs it until you say where it is: a recipe that reads video discs
 waits at its Video disc and Rip steps, which list the MakeMKVs found on

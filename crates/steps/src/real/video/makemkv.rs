@@ -4,7 +4,9 @@
 //! it now reads the audio and subtitle tracks too, and runs through the pty
 //! like every other tool, so progress arrives as it happens.
 //!
-//! MakeMKV isn't bundled: it isn't free software. It's run only from where
+//! MakeMKV isn't bundled. Its EULA allows that, but it decrypts copy
+//! protection, and signing services refuse proprietary code
+//! (THIRD-PARTY.md). It's run only from where
 //! you said it may be ([`approve`]), or as `DRT_MAKEMKVCON` if you set
 //! that. The usual places are looked at for you to choose from, by
 //! checking that files exist; nothing is run until you've said yes. From

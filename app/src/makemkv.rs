@@ -1,5 +1,6 @@
-//! MakeMKV, which video discs are read with. It can't come with the app
-//! (it isn't free software), so it's run only from where you said it may
+//! MakeMKV, which video discs are read with. It doesn't come with the app
+//! (it decrypts copy protection and is proprietary: THIRD-PARTY.md), so
+//! it's run only from where you said it may
 //! be: a setting of the app's, like its appearance. Until you've said,
 //! the usual places are looked at (do the files exist?) but nothing is
 //! run. Approving runs it once, for its version.
