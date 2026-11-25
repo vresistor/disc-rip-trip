@@ -18,7 +18,7 @@ use reqwest::{Client, ClientBuilder, Response};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
-pub const AGENT: &str = concat!("DiscRipTrip/", env!("CARGO_PKG_VERSION"), " ( https://github.com/vresistor/disc-rip-trip )");
+pub const AGENT: &str = concat!("disc-rip-trip/", env!("CARGO_PKG_VERSION"), " ( https://github.com/vresistor/disc-rip-trip )");
 
 /// Caps on what's read: a JSON answer, a page or a text reply.
 pub const MB: usize = 1024 * 1024;
@@ -174,7 +174,7 @@ pub mod tests {
             "https://musicbrainz.org/ws/2/release/76df3287-6cda-33eb-8e9a-044b5e15ffdd?fmt=json",
             "https://coverartarchive.org/release/76df3287-6cda-33eb-8e9a-044b5e15ffdd/front-250",
             "https://lrclib.net/api/get?artist_name=x&track_name=y&album_name=z&duration=1",
-            "https://gnudb.gnudb.org/~cddb/cddb.cgi?cmd=stat&hello=a+example.org+DiscRipTrip+test&proto=6",
+            "https://gnudb.gnudb.org/~cddb/cddb.cgi?cmd=stat&hello=a+example.org+disc-rip-trip+test&proto=6",
             "https://www.accuraterip.com/driveoffsets.htm",
             "https://api.discogs.com/",
             "https://api.themoviedb.org/3/configuration",

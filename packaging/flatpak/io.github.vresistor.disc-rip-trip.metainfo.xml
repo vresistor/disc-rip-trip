@@ -4,7 +4,7 @@
      nothing in `flatpak list`. scripts/build-flatpak.sh fills in @VERSION@
      (from app/Cargo.toml) and the date, so this file stays static. -->
 <component type="desktop-application">
-  <id>io.github.vresistor.DiscRipTrip</id>
+  <id>io.github.vresistor.disc-rip-trip</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Disc Rip Trip</name>
@@ -22,10 +22,12 @@
       against Redump and converted to CHD.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.vresistor.DiscRipTrip.desktop</launchable>
+  <launchable type="desktop-id">io.github.vresistor.disc-rip-trip.desktop</launchable>
   <url type="homepage">https://github.com/vresistor/disc-rip-trip</url>
   <url type="bugtracker">https://github.com/vresistor/disc-rip-trip/issues</url>
-  <developer_name>vresistor</developer_name>
+  <developer id="io.github.vresistor">
+    <name>vresistor</name>
+  </developer>
   <content_rating type="oars-1.1" />
   <releases>
     <release version="@VERSION@" date="@DATE@">

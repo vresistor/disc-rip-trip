@@ -35,7 +35,7 @@ ffmpeg version N-125881-g946272b79a-20260801
 ```
 
 `scripts/fetch-tools.sh` records that string in `PROVENANCE.txt`, which
-the flatpak installs in `/app/share/doc/io.github.vresistor.DiscRipTrip/` and CI
+the flatpak installs in `/app/share/doc/io.github.vresistor.disc-rip-trip/` and CI
 attaches to the release as `tools-provenance.txt`, so every published build
 says exactly which source corresponds to it.
 

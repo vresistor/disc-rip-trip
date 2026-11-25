@@ -82,7 +82,7 @@ and it starts again, while the last one is still encoding.
 To try it without a disc, start it with `--simulate`:
 
 ```sh
-flatpak run io.github.vresistor.DiscRipTrip --simulate
+flatpak run io.github.vresistor.disc-rip-trip --simulate
 ```
 
 It makes up two drives and a disc of every kind. It doesn't touch your
@@ -264,7 +264,7 @@ uses it, and every recipe shares it.
 
 These follow `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` if you set them.
 
-The flatpak keeps them in `~/.var/app/io.github.vresistor.DiscRipTrip/`
+The flatpak keeps them in `~/.var/app/io.github.vresistor.disc-rip-trip/`
 (`config/disc-rip-trip/`, `cache/disc-rip-trip/`). The first time it
 starts, if it has no recipes yet, it copies `recipes.json` and
 `settings.json` from `~/.config/disc-rip-trip/`. So a build from source

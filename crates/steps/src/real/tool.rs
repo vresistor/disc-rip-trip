@@ -2,7 +2,7 @@
 //!
 //! A tool is found as `DRT_<NAME>` if that's set (a whole command line, so
 //! development on the host can say `flatpak run --command=cyanrip
-//! io.github.vresistor.DiscRipTrip`), and otherwise by name on the PATH, which in the
+//! io.github.vresistor.disc-rip-trip`), and otherwise by name on the PATH, which in the
 //! flatpak is where the bundled ones are.
 //!
 //! Output is read through a pseudo-terminal. cyanrip writes through stdio,

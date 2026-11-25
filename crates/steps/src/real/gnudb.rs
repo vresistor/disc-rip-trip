@@ -24,7 +24,7 @@ use std::time::Duration;
 
 const URL: &str = "https://gnudb.gnudb.org/~cddb/cddb.cgi";
 /// The application, as GnuDB's policy asks: a descriptive name, and its version.
-const APP: &str = "DiscRipTrip";
+const APP: &str = "disc-rip-trip";
 const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 /// The `hello` GnuDB asks for, `user host app version`, from the contact
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn hello_is_the_contact_and_the_app() {
-        assert_eq!(hello("someone@example.org"), format!("someone example.org DiscRipTrip v{}", env!("CARGO_PKG_VERSION")));
+        assert_eq!(hello("someone@example.org"), format!("someone example.org disc-rip-trip v{}", env!("CARGO_PKG_VERSION")));
     }
 
     #[test]
@@ -346,7 +346,7 @@ mod tests {
     fn an_unregistered_caller_is_refused_and_says_so() {
         // GnuDB's reply on 2026-11-19 to a hello with no contact email.
         let reply =
-            "210 Found exact matches, list follows (until terminating `.')\ndata da0a4217 500 Unknown application / developer email for DiscRipTrip 0.1 see https://gnudb.org/howtognudb.php\n.\n";
+            "210 Found exact matches, list follows (until terminating `.')\ndata da0a4217 500 Unknown application / developer email for disc-rip-trip 0.1 see https://gnudb.org/howtognudb.php\n.\n";
         let e = parse_query(reply).unwrap_err().to_string();
         assert!(e.starts_with("GnuDB refused: Unknown application"), "{e}");
     }

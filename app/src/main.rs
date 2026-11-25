@@ -83,7 +83,7 @@ fn main() -> eframe::Result<()> {
             .with_decorations(false)
             .with_transparent(true)
             .with_title("Disc Rip Trip")
-            .with_app_id("io.github.vresistor.DiscRipTrip"),
+            .with_app_id("io.github.vresistor.disc-rip-trip"),
         ..Default::default()
     };
     eframe::run_native(

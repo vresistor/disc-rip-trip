@@ -155,7 +155,7 @@ pub fn cached_lists() -> Vec<PathBuf> {
         dirs.push(c.join("cache/redump"));
     }
     if let Some(h) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(h).join(".var/app/io.github.vresistor.DiscRipTrip/cache/disc-rip-trip/cache/redump"));
+        dirs.push(PathBuf::from(h).join(".var/app/io.github.vresistor.disc-rip-trip/cache/disc-rip-trip/cache/redump"));
     }
     let mut out: Vec<PathBuf> = dirs.iter().filter_map(|d| std::fs::read_dir(d).ok()).flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "dat")).collect();
     out.sort();

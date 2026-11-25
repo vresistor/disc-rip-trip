@@ -94,6 +94,15 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.flatpak.Builder
 
+      # Flathub's own checks of the manifest, the metainfo and the desktop
+      # file, before spending time on the build.
+      - name: Lint the manifest and metainfo
+        run: |
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest packaging/flatpak/io.github.vresistor.disc-rip-trip.yml
+          sed 's/@VERSION@/0.0.0/; s/@DATE@/2026-01-01/' packaging/flatpak/io.github.vresistor.disc-rip-trip.metainfo.xml >"$RUNNER_TEMP/io.github.vresistor.disc-rip-trip.metainfo.xml"
+          flatpak run --filesystem="$RUNNER_TEMP" --command=appstreamcli org.flatpak.Builder validate --no-net "$RUNNER_TEMP/io.github.vresistor.disc-rip-trip.metainfo.xml"
+          flatpak run --command=desktop-file-validate org.flatpak.Builder packaging/flatpak/io.github.vresistor.disc-rip-trip.desktop
+
       # cyanrip is built from source, so the tools are kept until the scripts
       # that make them change.
       - name: Cache the tools

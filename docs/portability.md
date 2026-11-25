@@ -64,23 +64,23 @@ these.
 | `scripts/build-flatpak.sh` | Runs everything inside `org.gnome.Sdk//50` with `org.freedesktop.Sdk.Extension.rust-stable//25.08`, so glibc matches the runtime: `fetch-tools.sh` once into `target/flatpak/tools`, then `cargo build --release --locked -p drt-app -p drt` with `LIBCHDMAN_CPU=portable` into `target/flatpak`, then `flatpak-builder` and `flatpak build-bundle` to `dist/disc-rip-trip-<version>-x86_64.flatpak`. `--install` installs it. |
 | `scripts/fetch-tools.sh` | ffmpeg and ffprobe from BtbN (static, GPL, checked for x264, x265, LAME, Opus, Vorbis and SVT-AV1), redumper b744 (static), cyanrip from `build-cyanrip.sh`. Writes `PROVENANCE.txt`. Linux x86_64 only. |
 | `scripts/build-cyanrip.sh` | cyanrip 0.9.3 against an audio-only LGPL ffmpeg, lame and libcdio, static except glibc, libcurl and libxml2 (*(ran)*: needs GLIBC_2.38). |
-| `packaging/flatpak/io.github.vresistor.DiscRipTrip.yml` | Packages the payload: `disc-rip-trip`, `drt` and the four tools into `/app/bin`, `PROVENANCE.txt` into `/app/share/doc`, the desktop file, metainfo and icons. GNOME 50 runtime. `--device=all` (`/dev/sr*` and the GPU), `--filesystem=host` (libraries anywhere, `xdg-music` included), `--share=network`, Wayland with X11 fallback, `--talk-name=org.freedesktop.Flatpak` (MakeMKV through `flatpak-spawn --host`). Notifications and the folder picker go through portals, which need no permission. |
+| `packaging/flatpak/io.github.vresistor.disc-rip-trip.yml` | Packages the payload: `disc-rip-trip`, `drt` and the four tools into `/app/bin`, `PROVENANCE.txt` into `/app/share/doc`, the desktop file, metainfo and icons. GNOME 50 runtime. `--device=all` (`/dev/sr*` and the GPU), `--filesystem=host` (libraries anywhere, `xdg-music` included), `--share=network`, Wayland with X11 fallback, `--talk-name=org.freedesktop.Flatpak` (MakeMKV through `flatpak-spawn --host`). Notifications and the folder picker go through portals, which need no permission. |
 | `.github/workflows/build.yml` | `check`: tests, clippy and rustfmt on ubuntu-24.04 with lavapipe. `flatpak`: builds the bundle, fails if anything MakeMKV- or libdvdcss-like is in it, uploads it as an artifact; on a `v*` tag, makes a draft release with the bundle and `tools-provenance.txt`. |
 
 **Where the flatpak keeps things.** `$XDG_CONFIG_HOME` is
-`~/.var/app/io.github.vresistor.DiscRipTrip/config`, so recipes and settings are in
+`~/.var/app/io.github.vresistor.disc-rip-trip/config`, so recipes and settings are in
 `config/disc-rip-trip/`. The first app kept its `config.json` in the same
 folder; this one only reads the drive offsets it recorded (`offset::from_old_app`). The first time the flatpak starts with no
 `recipes.json` there, it copies `recipes.json` and `settings.json` from
 `~/.config/disc-rip-trip/` (a build from source's), and leaves those where
 they are (`Store::adopt`). Working files and downloaded lists go in
-`~/.var/app/io.github.vresistor.DiscRipTrip/cache/disc-rip-trip/`.
+`~/.var/app/io.github.vresistor.disc-rip-trip/cache/disc-rip-trip/`.
 
-**Upgrading the first app's flatpak.** Same id (`io.github.vresistor.DiscRipTrip`) and
-branch (`master`), so installing the new bundle replaces it in place. Its
-runtime moves from GNOME 49 to 50. What the first app left in
-`~/.var/app/io.github.vresistor.DiscRipTrip/` stays: `config.json` (still read for
-drive offsets) and WebKit's data (unused).
+**The app id** is `io.github.vresistor.disc-rip-trip`, so it maps to the
+repository (`github.com/vresistor/disc-rip-trip`) the way Flathub expects.
+Builds before the rename used `io.github.vresistor.DiscRipTrip`; flatpak
+treats that as a different app, and nothing moves its folder in
+`~/.var/app/` across. Move it by hand if you had one.
 
 ### What a user on a fresh machine would install
 

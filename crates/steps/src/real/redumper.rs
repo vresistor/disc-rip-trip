@@ -1820,9 +1820,9 @@ mod tests {
     #[ignore]
     fn a_real_state_file_shows_a_spot_once_per_turn() {
         use crate::map::Mark;
-        let path = std::env::var("DRT_STATE_FIXTURE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap()).join(".var/app/io.github.vresistor.DiscRipTrip/cache/disc-rip-trip/runs/playstation-1795362157/image/KOUDELKA_4.state"));
+        let path = std::env::var("DRT_STATE_FIXTURE").map(PathBuf::from).unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("HOME").unwrap()).join(".var/app/io.github.vresistor.disc-rip-trip/cache/disc-rip-trip/runs/playstation-1795362157/image/KOUDELKA_4.state")
+        });
         let t = Target { dir: path.parent().unwrap().to_owned(), name: path.file_stem().unwrap().to_string_lossy().into_owned() };
         let began = std::time::Instant::now();
         let mut s = StateScan::new(&t, 269_159, 103, true);
@@ -2218,7 +2218,7 @@ media errors:
 
     /// Runs the real redumper (`DRT_REDUMPER`) through `run`, as Image does,
     /// on a file made here, and checks its `hash` against ours.
-    /// `DRT_REDUMPER="flatpak run --die-with-parent --command=redumper io.github.vresistor.DiscRipTrip" cargo test -p drt-steps real_redumper -- --ignored`
+    /// `DRT_REDUMPER="flatpak run --die-with-parent --command=redumper io.github.vresistor.disc-rip-trip" cargo test -p drt-steps real_redumper -- --ignored`
     #[tokio::test]
     #[ignore]
     async fn real_redumper() {

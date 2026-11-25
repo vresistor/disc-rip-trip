@@ -13,7 +13,7 @@
 #   1. scripts/fetch-tools.sh: ffmpeg, ffprobe, redumper, cyanrip, into
 #      target/flatpak/tools (once; delete that folder to fetch them again).
 #   2. cargo build --release of disc-rip-trip and drt, into target/flatpak.
-#   3. flatpak-builder packages the lot (packaging/flatpak/io.github.vresistor.DiscRipTrip.yml).
+#   3. flatpak-builder packages the lot (packaging/flatpak/io.github.vresistor.disc-rip-trip.yml).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -22,7 +22,7 @@ ROOT="$PWD"
 INSTALL=no
 [ "${1:-}" = "--install" ] && INSTALL=yes
 
-APP_ID=io.github.vresistor.DiscRipTrip
+APP_ID=io.github.vresistor.disc-rip-trip
 RUNTIME_VERSION=50
 # The freedesktop base that GNOME $RUNTIME_VERSION is built on, for the Rust extension.
 BASE_VERSION=25.08

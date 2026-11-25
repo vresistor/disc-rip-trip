@@ -25,7 +25,7 @@
 #                           This lets the app run anything on the host as you,
 #                           so the sandbox is no boundary while it's granted.
 # Notifications and the folder picker go through portals, which need nothing.
-id: io.github.vresistor.DiscRipTrip
+id: io.github.vresistor.disc-rip-trip
 runtime: org.gnome.Platform
 runtime-version: "50"
 sdk: org.gnome.Sdk
@@ -45,10 +45,10 @@ modules:
     buildsystem: simple
     build-commands:
       - install -Dm755 -t /app/bin disc-rip-trip drt ffmpeg ffprobe cyanrip redumper
-      - install -Dm644 -t /app/share/doc/io.github.vresistor.DiscRipTrip PROVENANCE.txt
-      - install -Dm644 -t /app/share/applications io.github.vresistor.DiscRipTrip.desktop
-      - install -Dm644 -t /app/share/metainfo io.github.vresistor.DiscRipTrip.metainfo.xml
-      - for s in 512 128 64 32; do install -Dm644 ${s}x${s}.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.vresistor.DiscRipTrip.png; done
+      - install -Dm644 -t /app/share/doc/io.github.vresistor.disc-rip-trip PROVENANCE.txt
+      - install -Dm644 -t /app/share/applications io.github.vresistor.disc-rip-trip.desktop
+      - install -Dm644 -t /app/share/metainfo io.github.vresistor.disc-rip-trip.metainfo.xml
+      - for s in 512 128 64 32; do install -Dm644 ${s}x${s}.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.vresistor.disc-rip-trip.png; done
     sources:
       - type: dir
         path: payload
