@@ -1,4 +1,4 @@
-# Disc Rip Trip
+# Trip
 
 Turning physical discs into files in a library, by running each disc
 through a recipe of steps.

@@ -1,15 +1,15 @@
 //! Rip when redumper is killed from outside part way through a stage: it
 //! holds with what happened, for you to try again or skip, and never sits
-//! there. A stand-in redumper (`DRT_REDUMPER`, set once for this test
+//! there. A stand-in redumper (`TRIP_REDUMPER`, set once for this test
 //! binary) kills itself at the stage the test asks for; the "drive" is a
 //! plain file, so no drive is touched.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, StepState, Subject};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use trip_engine::recipe::chain;
+use trip_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, StepState, Subject};
 
 /// Gives a data disc in a "drive" that is a plain file.
 struct Disc {
@@ -85,7 +85,7 @@ esac
 "#;
 
 fn base() -> PathBuf {
-    let b = std::env::current_dir().unwrap().join("../../target/drt-test/redumper-dies");
+    let b = std::env::current_dir().unwrap().join("../../target/trip-test/redumper-dies");
     let _ = std::fs::remove_dir_all(&b);
     std::fs::create_dir_all(&b).unwrap();
     b
@@ -93,7 +93,7 @@ fn base() -> PathBuf {
 
 fn start(b: &Path, mode: &str) -> Run {
     std::fs::write(b.join("mode"), mode).unwrap();
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Disc { device: b.join("drive") });
     let mut e = Engine::new(reg);
     e.work_root = b.join(format!("runs-{mode}"));
@@ -136,7 +136,7 @@ async fn a_redumper_killed_mid_stage_holds_rip_with_what_happened() {
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     // SAFETY: set before any thread of this binary runs a tool, and this
     // binary's only test.
-    unsafe { std::env::set_var("DRT_REDUMPER", &script) };
+    unsafe { std::env::set_var("TRIP_REDUMPER", &script) };
 
     // Killed in the read: held, and skipping it ends the run.
     let run = start(&b, "dump");
@@ -162,7 +162,7 @@ async fn a_redumper_killed_mid_stage_holds_rip_with_what_happened() {
     // A re-read where none of fifty sectors comes back: stopped by Rip
     // itself, and held saying so, with how many it couldn't read.
     let run = start(&b, "nothing");
-    let s = until(&run, "Rip to give up", |s| s.steps["rip"].state == StepState::Bad && s.steps["rip"].detail == drt_steps::real::redumper::given_up_line()).await;
+    let s = until(&run, "Rip to give up", |s| s.steps["rip"].state == StepState::Bad && s.steps["rip"].detail == trip_steps::real::redumper::given_up_line()).await;
     assert_eq!(s.steps["rip"].items[0].note, "774 unreadable sectors");
     assert!(s.steps["rip"].record.log.iter().any(|l| l.line.starts_with("re-read stopped: none of the last 50")), "{:?}", s.steps["rip"].record.log);
     retry(&run, "leave_out").await;

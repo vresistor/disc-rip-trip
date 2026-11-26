@@ -1,19 +1,19 @@
-//! `drt`: runs a recipe without a window.
+//! `tripr`: runs a recipe without a window.
 //!
 //! Prints the run's tiles as they change and asks its questions on the
 //! terminal. Press Enter for the preselected answer. `--auto` answers
 //! everything with the default, approves holds and keeps bad tracks.
 
 use anyhow::{bail, Result};
-use drt_engine::snapshot::QuestionShape;
-use drt_engine::{Answer, Command, Engine, ItemState, Node, Recipe, Setting, Snapshot, StepState, StepView};
-use drt_steps::{recipes, simulated};
 use serde_json::Value;
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
 use tokio::sync::mpsc;
+use trip_engine::snapshot::QuestionShape;
+use trip_engine::{Answer, Command, Engine, ItemState, Node, Recipe, Setting, Snapshot, StepState, StepView};
+use trip_steps::{recipes, simulated};
 
-const HELP: &str = "drt [--simulate] [--recipe cd|archive] [--out DIR] [--tracks 3,5] [--offset N]
+const HELP: &str = "tripr [--simulate] [--recipe cd|archive] [--out DIR] [--tracks 3,5] [--offset N]
     [--bad TRACK] [--speed N] [--auto] [--no-offset] [--log] [--drive NAME]
     [--next-disc]
 
@@ -32,7 +32,7 @@ const HELP: &str = "drt [--simulate] [--recipe cd|archive] [--out DIR] [--tracks
   --next-disc  open the tray when done and wait for the next disc; without
                it the disc stays in
 
-drt fix-tags FOLDER [--apply]
+tripr fix-tags FOLDER [--apply]
 
   Mends files filed before the audio audit of 20 November 2026: removes a
   comment that is exactly cyanrip's name and version, and, in those files,
@@ -40,7 +40,7 @@ drt fix-tags FOLDER [--apply]
   file is checked (audio and every other tag the same) before it replaces
   the original. Without --apply it only lists what it would change.
 
-drt rename-full-copies FOLDER [--dat FILE]... [--apply]
+tripr rename-full-copies FOLDER [--dat FILE]... [--apply]
 
   Renames plain images (a cue sheet and its tracks, with their log) to
   Redump's names, when every track's SHA-1 is a track of one entry in a
@@ -112,7 +112,7 @@ fn args() -> Result<Args> {
     if !a.simulate {
         // The built-in recipes name a drive by kind; read from the one asked
         // for, else the recipe's if it's here, else the first connected.
-        let here: Vec<String> = drt_steps::real::drives().into_iter().map(|(name, _)| name).collect();
+        let here: Vec<String> = trip_steps::real::drives().into_iter().map(|(name, _)| name).collect();
         let named = Engine::drive_of(&a.recipe);
         let pick = a.drive.clone().or_else(|| (!here.contains(&named)).then(|| here.first().cloned()).flatten());
         if let Some(name) = pick {
@@ -168,10 +168,10 @@ fn set_param(n: &mut Node, kind: &str, key: &str, value: &str) {
     }
 }
 
-/// `drt fix-tags FOLDER [--apply]`. Gives how many files it changed or
+/// `tripr fix-tags FOLDER [--apply]`. Gives how many files it changed or
 /// would change, and how many it couldn't.
 async fn fix_tags(folder: &std::path::Path, apply: bool, out: &mut impl Write) -> Result<(usize, usize)> {
-    use drt_steps::real::fixtags;
+    use trip_steps::real::fixtags;
     let (mut changed, mut failed) = (0, 0);
     for f in fixtags::files(folder)? {
         let shown = f.strip_prefix(folder).unwrap_or(&f).display().to_string();
@@ -214,15 +214,15 @@ async fn fix_tags(folder: &std::path::Path, apply: bool, out: &mut impl Write) -
     Ok((changed, failed))
 }
 
-/// `drt rename-full-copies FOLDER [--dat FILE]... [--apply]`. Gives how
+/// `tripr rename-full-copies FOLDER [--dat FILE]... [--apply]`. Gives how
 /// many sets it renamed or would rename, and how many it left because
 /// something was in the way.
 fn rename_full_copies(folder: &std::path::Path, dats: &[std::path::PathBuf], apply: bool, out: &mut impl Write) -> Result<(usize, usize)> {
-    use drt_steps::real::renames::{self, Plan};
+    use trip_steps::real::renames::{self, Plan};
     let mut lists = vec![];
     for d in dats {
         let bytes = std::fs::read(d).map_err(|e| anyhow::anyhow!("{}: {e}", d.display()))?;
-        lists.push(drt_steps::real::redump::parse(&bytes).map_err(|e| anyhow::anyhow!("{}: {e}", d.display()))?);
+        lists.push(trip_steps::real::redump::parse(&bytes).map_err(|e| anyhow::anyhow!("{}: {e}", d.display()))?);
     }
     if lists.is_empty() {
         bail!("no Redump list to match against: rip a game first, or pass --dat FILE");
@@ -297,9 +297,9 @@ async fn main() -> Result<()> {
                 s => folders.push(s.to_owned()),
             }
         }
-        let [folder] = folders.as_slice() else { bail!("drt rename-full-copies FOLDER [--dat FILE]... [--apply]") };
+        let [folder] = folders.as_slice() else { bail!("tripr rename-full-copies FOLDER [--dat FILE]... [--apply]") };
         if dats.is_empty() {
-            dats = drt_steps::real::renames::cached_lists();
+            dats = trip_steps::real::renames::cached_lists();
         }
         let (_, left) = rename_full_copies(std::path::Path::new(folder), &dats, apply, &mut std::io::stdout())?;
         if left > 0 {
@@ -311,7 +311,7 @@ async fn main() -> Result<()> {
         let rest: Vec<String> = argv.collect();
         let apply = rest.iter().any(|a| a == "--apply");
         let folders: Vec<&String> = rest.iter().filter(|a| !a.starts_with("--")).collect();
-        let (Some(folder), 1) = (folders.first(), folders.len()) else { bail!("drt fix-tags FOLDER [--apply]") };
+        let (Some(folder), 1) = (folders.first(), folders.len()) else { bail!("tripr fix-tags FOLDER [--apply]") };
         if let Some(bad) = rest.iter().find(|a| a.starts_with("--") && *a != "--apply") {
             bail!("unknown argument {bad}\n\n{HELP}");
         }
@@ -322,7 +322,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let a = args()?;
-    let mut engine = if a.simulate { Engine::new(simulated(a.bad)) } else { Engine::new(drt_steps::real()) };
+    let mut engine = if a.simulate { Engine::new(simulated(a.bad)) } else { Engine::new(trip_steps::real()) };
     engine.time_scale = if a.simulate { 1.0 / a.speed.max(0.01) } else { 1.0 };
     if let Some(o) = a.offset {
         engine.settings.lock().unwrap().set_drive(&Engine::drive_of(&a.recipe), "offset", Setting::chosen(Value::from(o)));
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn full_copies_are_listed_then_renamed_to_their_redump_names() {
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/rename-full-copies");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test/rename-full-copies");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("PlayStation/Koudelka")).unwrap();
         let set = dir.join("PlayStation/Koudelka");
@@ -544,7 +544,7 @@ mod tests {
         // One nobody lists.
         std::fs::write(dir.join("other.cue"), "FILE \"other.bin\" BINARY\n").unwrap();
         std::fs::write(dir.join("other.bin"), "unknown").unwrap();
-        let sha1 = drt_steps::real::hash::hash_files(&[&set.join("KOUDELKA_1.bin")], |_| {}, || false).unwrap().remove(0).sha1;
+        let sha1 = trip_steps::real::hash::hash_files(&[&set.join("KOUDELKA_1.bin")], |_| {}, || false).unwrap().remove(0).sha1;
         let dat = dir.join("psx.dat");
         std::fs::write(
             &dat,
@@ -603,7 +603,7 @@ mod tests {
     }
 
     fn snapshot(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
-        let mut v: Vec<(String, Vec<u8>)> = drt_steps::real::fixtags::files(dir).unwrap().into_iter().map(|f| (f.display().to_string(), std::fs::read(&f).unwrap())).collect();
+        let mut v: Vec<(String, Vec<u8>)> = trip_steps::real::fixtags::files(dir).unwrap().into_iter().map(|f| (f.display().to_string(), std::fs::read(&f).unwrap())).collect();
         v.sort();
         v
     }
@@ -620,7 +620,7 @@ mod tests {
 
     #[tokio::test]
     async fn fix_tags_lists_by_default_and_changes_only_the_two_things_with_apply() {
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/fix-tags");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test/fix-tags");
         if !library(&dir) {
             eprintln!("no ffmpeg: skipped");
             return;
@@ -638,19 +638,19 @@ mod tests {
         assert!(text.ends_with("7 files to change. Run again with --apply to change them.\n"), "{text}");
         assert_eq!(snapshot(&dir), before, "a dry run changes nothing");
 
-        let audio: Vec<String> = drt_steps::real::fixtags::files(&dir).unwrap().iter().map(|f| md5(f)).collect();
-        let tags: Vec<String> = drt_steps::real::fixtags::files(&dir).unwrap().iter().map(|f| probe(f)).collect();
+        let audio: Vec<String> = trip_steps::real::fixtags::files(&dir).unwrap().iter().map(|f| md5(f)).collect();
+        let tags: Vec<String> = trip_steps::real::fixtags::files(&dir).unwrap().iter().map(|f| probe(f)).collect();
         let mut out = Vec::new();
         // A relative folder, as typed: the tools run elsewhere.
-        let rel = std::path::Path::new("../../target/drt-test/fix-tags");
+        let rel = std::path::Path::new("../../target/trip-test/fix-tags");
         assert_eq!(fix_tags(rel, true, &mut out).await.unwrap(), (7, 0), "{}", String::from_utf8_lossy(&out));
-        let files = drt_steps::real::fixtags::files(&dir).unwrap();
+        let files = trip_steps::real::fixtags::files(&dir).unwrap();
         for (i, f) in files.iter().enumerate() {
             assert_eq!(md5(f), audio[i], "{f:?}: the audio never changes");
             let name = f.file_name().unwrap().to_string_lossy();
             let want = if name.starts_with("01.") { tags[i].replace("|tag:comment=cyanrip 0.9.3", "").replace("tag:comment=Other", "tag:comment=Cover (front)") } else { tags[i].clone() };
             assert_eq!(probe(f), want, "{f:?}: only the two changes");
-            assert!(drt_steps::real::fixtags::plan(f).unwrap().is_empty(), "{f:?}");
+            assert!(trip_steps::real::fixtags::plan(f).unwrap().is_empty(), "{f:?}");
         }
         let after = snapshot(&dir);
         for (b, a) in before.iter().zip(&after) {
@@ -666,8 +666,8 @@ mod tests {
         // A plan that no longer fits the file is refused, and the file kept.
         let f = dir.join("Artist/Album/theirs.flac");
         let bytes = std::fs::read(&f).unwrap();
-        let wrong = drt_steps::real::fixtags::Plan { signature: true, front_cover: true };
-        assert!(drt_steps::real::fixtags::apply(&f, &wrong).await.is_err());
+        let wrong = trip_steps::real::fixtags::Plan { signature: true, front_cover: true };
+        assert!(trip_steps::real::fixtags::apply(&f, &wrong).await.is_err());
         assert_eq!(std::fs::read(&f).unwrap(), bytes);
         std::fs::remove_dir_all(dir).unwrap();
     }

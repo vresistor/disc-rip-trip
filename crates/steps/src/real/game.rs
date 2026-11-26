@@ -17,10 +17,10 @@ use super::{data, media, redump};
 use crate::template;
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
-use drt_engine::snapshot::QuestionShape;
-use drt_engine::{Answer, Candidate, Choice, Context, Cx, Fact, Group, Inlet, ItemKind, ItemState, LaneKind, Outlet, Question, Registry, Step, StepInfo, StepState, Subject};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use trip_engine::snapshot::QuestionShape;
+use trip_engine::{Answer, Candidate, Choice, Context, Cx, Fact, Group, Inlet, ItemKind, ItemState, LaneKind, Outlet, Question, Registry, Step, StepInfo, StepState, Subject};
 
 pub fn register(r: &mut Registry) {
     r.add(GameDisc);
@@ -351,28 +351,28 @@ pub fn is_suspect(cat: &redump::Catalogue, serial: &str, roms: &[redump::Rom]) -
 pub trait Reread: Send + Sync {
     /// Re-reads what the drive reported bad, keeps the new hashes on the
     /// dump, and gives Redump's name for it if it now matches.
-    async fn refine(&self, cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>>;
+    async fn refine(&self, cx: &Cx, dump: &mut trip_engine::Item) -> Result<Option<String>>;
     /// Whether ripping again and combining, or fixing bad sectors, can
     /// help this dump: a CD image whose sectors have checks of their own.
-    fn can_combine(&self, dump: &drt_engine::Item) -> bool;
+    fn can_combine(&self, dump: &trip_engine::Item) -> bool;
     /// Reads the dump's sectors that fail their own check again from the
     /// disc, up to `tries` times each, and puts each copy that passes its
     /// checks in place in the dump's own files, keeping them as they were
     /// until [`Reread::settled`]. Gives what that came to and the files'
     /// checksums, hashed again from disk.
-    async fn fix(&self, cx: &Cx, dump: &drt_engine::Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)>;
+    async fn fix(&self, cx: &Cx, dump: &trip_engine::Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)>;
     /// The dump is verified: the copy of its files as they were before
     /// fixing can go.
-    async fn settled(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<()>;
+    async fn settled(&self, cx: &Cx, dump: &trip_engine::Item) -> Result<()>;
     /// Rips the disc once more and combines every rip so far, sector by
     /// sector. Gives what that came to and the combined copy's checksums,
     /// under the dump's own file names. The dump's files stay as they are.
-    async fn combine(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<(Combination, Vec<redump::Rom>)>;
+    async fn combine(&self, cx: &Cx, dump: &trip_engine::Item) -> Result<(Combination, Vec<redump::Rom>)>;
     /// Puts the last combination in the place of the dump's own files, so
     /// its cue sheet and everything made from it use it.
-    async fn adopt(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<()>;
+    async fn adopt(&self, cx: &Cx, dump: &trip_engine::Item) -> Result<()>;
     /// The dump's own files hashed again, from disk, as they are now.
-    async fn rehash(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<Vec<redump::Rom>>;
+    async fn rehash(&self, cx: &Cx, dump: &trip_engine::Item) -> Result<Vec<redump::Rom>>;
     /// Repairs the dump's sectors that still fail their own check by the
     /// disc's own error correction, as `which` says, in the dump's own
     /// files (the last combination put in their place first, if there's
@@ -380,7 +380,7 @@ pub trait Reread: Send + Sync {
     /// fixing found of each sector's re-reads (`fixed`) and every rip so
     /// far say which may be pressed so. Gives what that came to and the
     /// files' checksums, hashed again from disk.
-    async fn repair(&self, cx: &Cx, dump: &drt_engine::Item, fixed: Option<&Fixing>, which: Ecc) -> Result<(Repairing, Vec<redump::Rom>)>;
+    async fn repair(&self, cx: &Cx, dump: &trip_engine::Item, fixed: Option<&Fixing>, which: Ecc) -> Result<(Repairing, Vec<redump::Rom>)>;
 }
 
 /// Which sectors [`Reread::repair`] puts right by their error correction.
@@ -458,7 +458,7 @@ fn by_itself_words(id: &str) -> &'static str {
 }
 
 /// Puts the dump's files' checksums, as hashed from disk, on the dump.
-fn note_hashes(dump: &mut drt_engine::Item, roms: &[redump::Rom]) {
+fn note_hashes(dump: &mut trip_engine::Item, roms: &[redump::Rom]) {
     for r in roms {
         dump.context_mut().replace(Subject::Disc, &format!("sha1 {}", r.name), r.sha1.clone(), "Check");
     }
@@ -485,7 +485,7 @@ fn matched<'a>(cx: &Cx, cat: Option<&'a redump::Catalogue>, roms: &[redump::Rom]
 async fn repair_all<'a>(
     cx: &Cx,
     reread: &dyn Reread,
-    dump: &mut drt_engine::Item,
+    dump: &mut trip_engine::Item,
     fixed: Option<&Fixing>,
     cat: Option<&'a redump::Catalogue>,
     listed: bool,
@@ -533,13 +533,13 @@ async fn repair_all<'a>(
 /// dump to send on, if any.
 pub async fn hold(
     cx: &Cx,
-    mut dump: drt_engine::Item,
+    mut dump: trip_engine::Item,
     serial: &str,
     reread: &dyn Reread,
     cat: Option<&redump::Catalogue>,
     policy: Policy,
-    explain: impl Fn(&drt_engine::Item) -> Option<Mismatch>,
-) -> Result<Option<drt_engine::Item>> {
+    explain: impl Fn(&trip_engine::Item) -> Option<Mismatch>,
+) -> Result<Option<trip_engine::Item>> {
     let listed = cat.is_some_and(|c| !c.by_serial(serial).is_empty());
     let bad = if listed { format!("Doesn't match Redump's dumps of {serial}") } else { "Not in Redump, and some sectors fail their own check".to_owned() };
     cx.log(&bad);
@@ -814,7 +814,7 @@ fn compare(cx: &Cx, entry: &redump::Game, roms: &[redump::Rom]) -> std::result::
 /// every list reached and none having it, when its own sectors say it was
 /// read wrong. Gives the dump to send on, if any. A catalogue that can't
 /// be had isn't a reason to hold anything.
-pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Rom], reached_all: bool, reread: &dyn Reread) -> Result<Option<drt_engine::Item>> {
+pub async fn hold_if_suspect(cx: &Cx, dump: trip_engine::Item, roms: &[redump::Rom], reached_all: bool, reread: &dyn Reread) -> Result<Option<trip_engine::Item>> {
     let (system, serial, _) = known(dump.context());
     let Some(main) = dump.path.clone() else { return Ok(Some(dump)) };
     let log = |main: &Path| std::fs::read_to_string(main.with_extension("log")).ok();
@@ -828,7 +828,7 @@ pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Ro
             // Redump's copies beside the dump's files as they are now (a
             // re-read or a combination changes them), and what redumper's
             // log says about the first read.
-            let explain = |d: &drt_engine::Item| {
+            let explain = |d: &trip_engine::Item| {
                 let main = d.path.as_deref()?;
                 mismatch::explain(serial, &cat.by_serial(serial), &hashed(d.context(), main), log(main).as_deref())
             };
@@ -844,7 +844,7 @@ pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Ro
     if !unreadable && !(reached_all && wrong && reread.can_combine(&dump)) {
         return Ok(Some(dump));
     }
-    let explain = |d: &drt_engine::Item| {
+    let explain = |d: &trip_engine::Item| {
         let main = d.path.as_deref()?;
         Some(mismatch::unlisted(&serial_s, &hashed(d.context(), main), &log(main)?))
     };
@@ -853,7 +853,7 @@ pub async fn hold_if_suspect(cx: &Cx, dump: drt_engine::Item, roms: &[redump::Ro
 
 /// A rip of the whole disc into a folder, giving its cue sheet: redumper's
 /// in the app ([`data::rip_again`]), a stand-in in a test.
-pub type RipFn = std::sync::Arc<dyn Fn(Cx, drt_engine::Item, PathBuf) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PathBuf>> + Send>> + Send + Sync>;
+pub type RipFn = std::sync::Arc<dyn Fn(Cx, trip_engine::Item, PathBuf) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PathBuf>> + Send>> + Send + Sync>;
 
 /// redumper's rip, as Rip reads.
 pub fn redumper_rip() -> RipFn {
@@ -873,11 +873,11 @@ pub struct Disc {
 
 /// Where Fix bad sectors reads from, for a dump: the drive it was ripped
 /// on ([`drive_source`]), a stand-in in a test.
-pub type SourceFn = std::sync::Arc<dyn Fn(&drt_engine::Item) -> Result<Box<dyn super::fix::Source>> + Send + Sync>;
+pub type SourceFn = std::sync::Arc<dyn Fn(&trip_engine::Item) -> Result<Box<dyn super::fix::Source>> + Send + Sync>;
 
 /// The drive the dump was ripped on, with its disc in.
 pub fn drive_source() -> SourceFn {
-    std::sync::Arc::new(|dump: &drt_engine::Item| {
+    std::sync::Arc::new(|dump: &trip_engine::Item| {
         let dev = super::device(dump.context())?;
         if !media::disc_in(&dev) {
             bail!("there's no disc in the drive");
@@ -902,12 +902,12 @@ impl Disc {
     /// last read from the dump's own `.state` when it's there, with each
     /// that failed its checks over it, put right or not; else the checks
     /// alone.
-    async fn show_map(&self, cx: &Cx, dump: &drt_engine::Item, main: &Path) {
+    async fn show_map(&self, cx: &Cx, dump: &trip_engine::Item, main: &Path) {
         let map = self.map_now(dump, main).await;
         cx.map(serde_json::to_value(map).ok());
     }
 
-    async fn map_now(&self, dump: &drt_engine::Item, main: &Path) -> crate::map::SectorMap {
+    async fn map_now(&self, dump: &trip_engine::Item, main: &Path) -> crate::map::SectorMap {
         let found: Vec<(u64, crate::map::Mark)> = self.marks.lock().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect()).unwrap_or_default();
         let sectors = super::combine::layout(main).map(|ts| ts.iter().map(|t| (t.start.max(0) as u64) + t.size / super::combine::SECTOR as u64).max().unwrap_or(0)).unwrap_or(0);
         let sectors = sectors.max(found.iter().map(|f| f.0 + 1).max().unwrap_or(0));
@@ -942,7 +942,7 @@ impl Disc {
 /// same from the drive and in the simulation: the try it's on for the
 /// window ([`Cx::now`]), how far through for the ring, and a line for the
 /// card.
-pub fn say_rereading(cx: &Cx, dump: &drt_engine::Item, r: &super::fix::Rereading) {
+pub fn say_rereading(cx: &Cx, dump: &trip_engine::Item, r: &super::fix::Rereading) {
     cx.now(serde_json::to_value(r).ok());
     cx.progress(Some(r.fraction()));
     cx.item(dump, ItemState::Busy, r.note());
@@ -1005,15 +1005,15 @@ fn keep_copy(files: &[PathBuf], dir: &Path) -> Result<()> {
 
 #[async_trait]
 impl Reread for Disc {
-    async fn refine(&self, cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>> {
+    async fn refine(&self, cx: &Cx, dump: &mut trip_engine::Item) -> Result<Option<String>> {
         refine(cx, dump).await
     }
 
-    fn can_combine(&self, dump: &drt_engine::Item) -> bool {
+    fn can_combine(&self, dump: &trip_engine::Item) -> bool {
         data::combinable(dump)
     }
 
-    async fn fix(&self, cx: &Cx, dump: &drt_engine::Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)> {
+    async fn fix(&self, cx: &Cx, dump: &trip_engine::Item, tries: u32) -> Result<(Fixing, Vec<redump::Rom>)> {
         use super::fix;
         let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
         let keep = Self::folders(cx)?.join("before-fix");
@@ -1086,7 +1086,7 @@ impl Reread for Disc {
         Ok((Fixing::of(&fixed, tries), roms))
     }
 
-    async fn settled(&self, cx: &Cx, _dump: &drt_engine::Item) -> Result<()> {
+    async fn settled(&self, cx: &Cx, _dump: &trip_engine::Item) -> Result<()> {
         let keep = Self::folders(cx)?.join("before-fix");
         if keep.exists() {
             std::fs::remove_dir_all(&keep)?;
@@ -1096,7 +1096,7 @@ impl Reread for Disc {
         Ok(())
     }
 
-    async fn combine(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<(Combination, Vec<redump::Rom>)> {
+    async fn combine(&self, cx: &Cx, dump: &trip_engine::Item) -> Result<(Combination, Vec<redump::Rom>)> {
         use super::{combine, hash, redumper};
         let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
         let work = Self::folders(cx)?;
@@ -1139,7 +1139,7 @@ impl Reread for Disc {
         Ok((Combination::of(&done.0, false), done.1))
     }
 
-    async fn adopt(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<()> {
+    async fn adopt(&self, cx: &Cx, dump: &trip_engine::Item) -> Result<()> {
         let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
         let from = Self::folders(cx)?.join("combined");
         for f in data::image_files(&main) {
@@ -1157,7 +1157,7 @@ impl Reread for Disc {
         Ok(())
     }
 
-    async fn rehash(&self, cx: &Cx, dump: &drt_engine::Item) -> Result<Vec<redump::Rom>> {
+    async fn rehash(&self, cx: &Cx, dump: &trip_engine::Item) -> Result<Vec<redump::Rom>> {
         let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
         let files = data::data_files(&main);
         let cx2 = cx.clone();
@@ -1168,7 +1168,7 @@ impl Reread for Disc {
         .await?
     }
 
-    async fn repair(&self, cx: &Cx, dump: &drt_engine::Item, fixed: Option<&Fixing>, which: Ecc) -> Result<(Repairing, Vec<redump::Rom>)> {
+    async fn repair(&self, cx: &Cx, dump: &trip_engine::Item, fixed: Option<&Fixing>, which: Ecc) -> Result<(Repairing, Vec<redump::Rom>)> {
         use super::ecc;
         use crate::map::Mark;
         let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
@@ -1228,7 +1228,7 @@ impl Reread for Disc {
 
 /// redumper's refine on the dump, a fresh split and check of it, then its
 /// hashes again and Redump's name if they now match.
-async fn refine(cx: &Cx, dump: &mut drt_engine::Item) -> Result<Option<String>> {
+async fn refine(cx: &Cx, dump: &mut trip_engine::Item) -> Result<Option<String>> {
     use super::{hash, redumper};
     let main = dump.path.clone().ok_or_else(|| anyhow!("{} has no file", dump.label))?;
     let dir = main.parent().ok_or_else(|| anyhow!("{} has no folder", main.display()))?.to_path_buf();
@@ -1419,7 +1419,7 @@ pub fn known(c: &Context) -> (Option<String>, Option<String>, Option<u64>) {
 }
 
 /// Shows a lookup on the tile and offers its candidates on the dump.
-pub fn offer(cx: &Cx, dump: &mut drt_engine::Item, l: Lookup) {
+pub fn offer(cx: &Cx, dump: &mut trip_engine::Item, l: Lookup) {
     cx.log(format!("{}: {}", l.status, l.detail));
     for c in &l.candidates {
         cx.log(format!("  {} ({})", c.title, c.detail));
@@ -1955,7 +1955,7 @@ mod tests {
     }
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+        let d = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1994,25 +1994,25 @@ mod tests {
     }
 
     /// Reads a real datfile fetched with its serials:
-    /// `DRT_DAT=…/psx.dat cargo test -p drt-steps real_serials -- --ignored --nocapture`.
+    /// `TRIP_DAT=…/psx.dat cargo test -p trip-steps real_serials -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn real_serials() {
-        let xml = std::fs::read(std::env::var("DRT_DAT").unwrap()).unwrap();
+        let xml = std::fs::read(std::env::var("TRIP_DAT").unwrap()).unwrap();
         let cat = redump::parse(&xml).unwrap();
         let with = cat.games.iter().filter(|g| !g.serials.is_empty()).count();
         println!("{} entries, {with} with serials", cat.games.len());
-        for s in std::env::var("DRT_SERIALS").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+        for s in std::env::var("TRIP_SERIALS").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
             println!("{s}: {:?}", cat.by_serial(s).iter().map(|g| &g.name).collect::<Vec<_>>());
         }
     }
 
     /// Reads whatever is in the drive, read-only. With an audio CD in, it's
-    /// no game: `cargo test -p drt-steps real_game_disc -- --ignored --nocapture`.
+    /// no game: `cargo test -p trip-steps real_game_disc -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn real_game_disc() {
-        let dev = std::env::var("DRT_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
+        let dev = std::env::var("TRIP_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
         println!("{:?}", media::toc_starts(&dev));
         println!("{:?}", identify_device(&dev));
     }

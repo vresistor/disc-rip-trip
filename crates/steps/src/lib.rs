@@ -14,7 +14,7 @@ pub mod recipes;
 pub mod sim;
 pub mod template;
 
-use drt_engine::Registry;
+use trip_engine::Registry;
 
 /// Every step, simulated. `bad_track` is a track Rip fails to verify on
 /// the first read, to exercise retries.

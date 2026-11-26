@@ -1,7 +1,7 @@
-# Flatpak manifest for Disc Rip Trip.
+# Flatpak manifest for Trip.
 #
 # It packages binaries scripts/build-flatpak.sh has already built inside the
-# GNOME SDK and put in payload/: disc-rip-trip, drt, and the tools they run
+# GNOME SDK and put in payload/: trip, tripr, and the tools they run
 # (ffmpeg, ffprobe, cyanrip, redumper). /app/bin is on PATH, which is where
 # the app finds them.
 #
@@ -29,11 +29,11 @@
 #                           the MakeMKV you chose in it, and nothing before you
 #                           have chosen one. Choosing it is all it takes.
 # Notifications and the folder picker go through portals, which need nothing.
-id: io.github.vresistor.disc-rip-trip
+id: io.github.vresistor.trip
 runtime: org.gnome.Platform
 runtime-version: "50"
 sdk: org.gnome.Sdk
-command: disc-rip-trip
+command: trip
 
 finish-args:
   - --share=ipc
@@ -45,14 +45,14 @@ finish-args:
   - --talk-name=org.freedesktop.Flatpak
 
 modules:
-  - name: disc-rip-trip
+  - name: trip
     buildsystem: simple
     build-commands:
-      - install -Dm755 -t /app/bin disc-rip-trip drt ffmpeg ffprobe cyanrip redumper
-      - install -Dm644 -t /app/share/doc/io.github.vresistor.disc-rip-trip PROVENANCE.txt
-      - install -Dm644 -t /app/share/applications io.github.vresistor.disc-rip-trip.desktop
-      - install -Dm644 -t /app/share/metainfo io.github.vresistor.disc-rip-trip.metainfo.xml
-      - for s in 512 128 64 32; do install -Dm644 ${s}x${s}.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.vresistor.disc-rip-trip.png; done
+      - install -Dm755 -t /app/bin trip tripr ffmpeg ffprobe cyanrip redumper
+      - install -Dm644 -t /app/share/doc/io.github.vresistor.trip PROVENANCE.txt
+      - install -Dm644 -t /app/share/applications io.github.vresistor.trip.desktop
+      - install -Dm644 -t /app/share/metainfo io.github.vresistor.trip.metainfo.xml
+      - for s in 512 128 64 32; do install -Dm644 ${s}x${s}.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.vresistor.trip.png; done
     sources:
       - type: dir
         path: payload

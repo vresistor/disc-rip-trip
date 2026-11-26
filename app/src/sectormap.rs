@@ -7,8 +7,8 @@
 //! and fix's).
 
 use crate::theme::{font, mix, tnum, Pal};
-use drt_steps::map::{cm, place_line, Mark, SectorMap, KINDS};
 use egui::{pos2, vec2, Color32, Rect, RichText, Sense, Stroke, Ui};
+use trip_steps::map::{cm, place_line, Mark, SectorMap, KINDS};
 
 /// Blocks to a row, at most and at least.
 const COLS: usize = 36;
@@ -103,7 +103,7 @@ fn word(m: Mark, whose: Whose) -> &'static str {
 const ORDER: [Mark; KINDS] = [Mark::Good, Mark::Recovered, Mark::Repaired, Mark::C2, Mark::Wrong, Mark::Unreadable, Mark::NotRead];
 
 fn thousands(n: u64) -> String {
-    drt_steps::real::redumper::thousands(n)
+    trip_steps::real::redumper::thousands(n)
 }
 
 /// The counts in words: *268,850 good · 140 unreadable · 11 with C2
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(counts_line(&c, Whose::Rip), "268,850 good · 11 read with errors · 140 unreadable");
         c[Mark::Recovered as usize] = 3;
         assert_eq!(counts_line(&c, Whose::Check), "268,850 as Rip made them · 3 put right · 11 read with errors · 140 unreadable");
-        let mut s = drt_steps::map::Sectors::new(300_000);
+        let mut s = trip_steps::map::Sectors::new(300_000);
         for k in 0..300_000 {
             s.set(k, Mark::Good);
         }

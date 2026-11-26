@@ -128,7 +128,7 @@ Motion says what changed; nothing moves while the window is idle.
   not at all when nothing does.
 
 GNOME's *Reduce animations* (read once at start) or
-`DRT_REDUCED_MOTION=1` turns every slide, glide and cue into an instant
+`TRIP_REDUCED_MOTION=1` turns every slide, glide and cue into an instant
 change. Colours still change.
 
 ### The most complex recipe
@@ -610,15 +610,15 @@ crates/engine       the domain: Setting<T>, the recipe tree, the Step
 crates/steps        one module per step, real and simulated, the tool
                     wrappers they use, and the built-in recipes
 crates/layout       where tiles, groups and wires go on the canvas
-crates/cli          `drt`: runs a recipe in the terminal
+crates/cli          `tripr`: runs a recipe in the terminal
 app/                the window, in egui
 packaging/flatpak   the flatpak manifest; scripts/build-flatpak.sh builds it
 ```
 
-To watch the engine run a simulated CD: `cargo run -p drt -- --simulate`
+To watch the engine run a simulated CD: `cargo run -p tripr -- --simulate`
 (`--recipe archive` for the most complex one, `--bad 9` for a track that
 needs a retry, `--no-offset` for setup). The window does the same with
-`cargo run -p drt-app -- --simulate`.
+`cargo run -p trip-app -- --simulate`.
 
 **The engine talks to the UI in two directions only:** a snapshot of a
 run (each step's state, status, detail, progress and items; the open
@@ -661,9 +661,9 @@ build, not just `cargo run`.
 
 | | What | Done when |
 |---|---|---|
-| 1 | The engine, with simulated steps | `drt --simulate` plays every mockup state (ripping, asking, a retry, a hold, setup, the most complex recipe); the tree, type check, lanes, questions and holds have tests |
+| 1 | The engine, with simulated steps | `tripr --simulate` plays every mockup state (ripping, asking, a retry, a hold, setup, the most complex recipe); the tree, type check, lanes, questions and holds have tests |
 | 2 | The toolkit spike | the most complex recipe and the *Which release?* drawer drawn natively from a simulated snapshot at 1280 × 720 |
-| 3 | A real CD, without a window | `drt` rips a real CD with the CD recipe: Drive, Audio CD, MusicBrainz, CD-Text, Choose, Cover art, Rip with verdicts and retries, FLAC and MP3, Review and Library with its hold; the three accuracy fixes pass |
+| 3 | A real CD, without a window | `tripr` rips a real CD with the CD recipe: Drive, Audio CD, MusicBrainz, CD-Text, Choose, Cover art, Rip with verdicts and retries, FLAC and MP3, Review and Library with its hold; the three accuracy fixes pass |
 | 4 | The window | the list of recipes, the canvas, live tiles, the sidebar (questions, inside a step, setup), the + picker, editing, new recipes |
 | 5 | Parity and the swap | the flatpak ships the new app; `src-tauri` and the web frontend deleted (done); the first app's settings (`config.json`) are not imported |
 | 6 | Data discs | an image, checked against Redump, CHD, filed ("Other kinds of disc", 1) |

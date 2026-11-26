@@ -3,14 +3,14 @@
 
 use crate::store::Store;
 use anyhow::{anyhow, bail, Result};
-use drt_engine::{check, flows_in, Command, Engine, Flow, ItemState, Node, ParamKind, ParamSpec, Recipe, Run, Scope, Setting, Settings, Snapshot, Spot, StepInfo, StepState};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
+use trip_engine::{check, flows_in, Command, Engine, Flow, ItemState, Node, ParamKind, ParamSpec, Recipe, Run, Scope, Setting, Settings, Snapshot, Spot, StepInfo, StepState};
 
-pub use drt_steps::real::redumper::CRAWLING_CARD;
+pub use trip_steps::real::redumper::CRAWLING_CARD;
 
 /// A Rip's pace is kept by recipe, run and step.
 type PaceKey = (usize, u64, String);
@@ -20,7 +20,7 @@ pub type OpenFolder = Arc<dyn Fn(&Path) -> std::result::Result<(), String> + Sen
 /// Asks for a folder, starting at the one given if any.
 pub type PickFolder = Arc<dyn Fn(Option<PathBuf>) -> Option<PathBuf> + Send + Sync>;
 /// Sends Notify's test: to this computer or not, the ntfy server, the
-/// topic. Gives where it went, as [`drt_steps::real::tell::send_test`].
+/// topic. Gives where it went, as [`trip_steps::real::tell::send_test`].
 pub type SendTest = Arc<dyn Fn(bool, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<&'static str>>> + Send>> + Send + Sync>;
 /// Opens a drive's tray, by the drive's name; says why if it can't.
 /// Blocks: called off the window's thread.
@@ -28,11 +28,11 @@ pub type OpenTray = Arc<dyn Fn(&str) -> std::result::Result<(), String> + Send +
 /// The optical drives connected just now, by name (cheap: sysfs).
 pub type ListDrives = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 /// Whether a folder can take this many bytes now, as
-/// [`drt_steps::real::reach::look`]. Blocks, and may hang on a dead
+/// [`trip_steps::real::reach::look`]. Blocks, and may hang on a dead
 /// network folder: called on a thread of its own, and given up on.
 pub type Reach = Arc<dyn Fn(&Path, u64) -> std::result::Result<(), Unreachable> + Send + Sync>;
 
-pub use drt_steps::real::reach::Unreachable;
+pub use trip_steps::real::reach::Unreachable;
 
 /// How often the folders recipes file into are looked at while idle.
 pub const LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
@@ -84,7 +84,7 @@ impl Looker {
             looking.lock().unwrap().remove(&(p, need));
         });
         rt.spawn(async move {
-            let r = match tokio::time::timeout(drt_steps::real::reach::TIMEOUT, orx).await {
+            let r = match tokio::time::timeout(trip_steps::real::reach::TIMEOUT, orx).await {
                 Ok(Ok(r)) => r,
                 _ => Err(Unreachable::NotAnswering { path: path.clone() }),
             };
@@ -121,9 +121,9 @@ pub struct Deps {
     /// Which drives are connected; asked every couple of seconds.
     pub connected: ListDrives,
     pub send_test: SendTest,
-    /// Opens a drive's tray: [`drt_steps::real::open_tray`], or a stand-in.
+    /// Opens a drive's tray: [`trip_steps::real::open_tray`], or a stand-in.
     pub open_tray: OpenTray,
-    /// Looks at a folder: [`drt_steps::real::reach::look`], or a stand-in.
+    /// Looks at a folder: [`trip_steps::real::reach::look`], or a stand-in.
     pub reach: Reach,
     /// Finds and runs MakeMKV, only where you said: the real ones, or a
     /// test's.
@@ -155,7 +155,7 @@ impl Running {
             .values()
             .find(|v| v.step == "choose" && v.state == StepState::Ok)
             .map(|v| v.status.clone())
-            .or_else(|| self.run.context().get(drt_engine::Subject::Disc, "album").map(str::to_owned))
+            .or_else(|| self.run.context().get(trip_engine::Subject::Disc, "album").map(str::to_owned))
             .unwrap_or_else(|| "A disc".into())
     }
 }
@@ -236,7 +236,7 @@ pub struct Model {
     pub ctx: Option<egui::Context>,
     /// The settings as last saved, so ones a run finds (a drive's offset)
     /// are saved as soon as they appear.
-    saved: drt_engine::Settings,
+    saved: trip_engine::Settings,
     /// Each Rip's pace as it reads (by recipe, run and step), and what it
     /// last came to: for its card and its sidebar.
     pace: std::sync::Mutex<HashMap<PaceKey, (crate::pace::Pace, Option<crate::pace::Reading>)>>,
@@ -251,7 +251,7 @@ impl Model {
         // Seed only the built-in recipes these steps can run. An existing
         // file is left as it is.
         let reg = &d.engine.registry;
-        let mut recipes = d.store.load_recipes(|| drt_steps::recipes::all().into_iter().filter(|r| check(&r.root, reg).is_ok()).collect());
+        let mut recipes = d.store.load_recipes(|| trip_steps::recipes::all().into_iter().filter(|r| check(&r.root, reg).is_ok()).collect());
         // Brought up to date, and saved once if anything changed: Library
         // is Folder now (old nodes keep what they were called), and a step
         // that held is a Hold step in front of it.
@@ -278,7 +278,7 @@ impl Model {
         // Drives under the names recipes and settings already use.
         let mut known: Vec<String> = recipes.iter().map(Engine::drive_of).collect();
         known.extend(d.engine.settings.lock().unwrap().drives.keys().cloned());
-        known.extend([drt_steps::recipes::BLU_RAY.to_owned(), drt_steps::recipes::DVD.to_owned()]);
+        known.extend([trip_steps::recipes::BLU_RAY.to_owned(), trip_steps::recipes::DVD.to_owned()]);
         let drives = d.drives.iter().map(|n| known_name(n, &known)).collect();
         let (found_tx, found_rx) = std::sync::mpsc::channel();
         let (looked_tx, looked_rx) = std::sync::mpsc::channel();
@@ -324,8 +324,8 @@ impl Model {
             let saved = d.store.load_makemkv();
             let key_updates = d.store.load_makemkv_key_updates();
             // The steps run it only from here.
-            drt_steps::real::video::makemkv::approve(saved.as_ref().map(|s| s.location.clone()));
-            drt_steps::real::video::makemkv::set_key_updates(key_updates);
+            trip_steps::real::video::makemkv::approve(saved.as_ref().map(|s| s.location.clone()));
+            trip_steps::real::video::makemkv::set_key_updates(key_updates);
             crate::makemkv::MakeMkv::new(d.makemkv, saved, key_updates)
         };
         let (work_jobs, work_rx) = crate::workfiles::worker(d.engine.work_root.clone(), wake.clone());
@@ -422,7 +422,7 @@ impl Model {
     }
 
     /// What the shown run (or, after a restart, the last) found.
-    pub fn shown_context(&self, i: usize) -> Option<drt_engine::Context> {
+    pub fn shown_context(&self, i: usize) -> Option<trip_engine::Context> {
         match self.shown_run(i) {
             Some(r) => Some(r.run.context()),
             None => self.last.get(&self.recipes[i].name).map(|k| k.context.clone()),
@@ -450,7 +450,7 @@ impl Model {
 
     /// Settings the recipe is missing that its steps can look up: a
     /// drive's offset, once it has a drive.
-    pub fn findable_missing(&self, i: usize) -> Vec<drt_engine::run::Missing> {
+    pub fn findable_missing(&self, i: usize) -> Vec<trip_engine::run::Missing> {
         if self.drive(i).is_empty() {
             return vec![];
         }
@@ -854,8 +854,8 @@ impl Model {
             return;
         }
         let c = run.run.context();
-        let media = c.get(drt_engine::Subject::Disc, "media").unwrap_or("").to_owned();
-        let part = |n: u32, key: &str| c.get(drt_engine::Subject::Part(n), key).and_then(|l| l.parse::<f32>().ok());
+        let media = c.get(trip_engine::Subject::Disc, "media").unwrap_or("").to_owned();
+        let part = |n: u32, key: &str| c.get(trip_engine::Subject::Part(n), key).and_then(|l| l.parse::<f32>().ok());
         let mut paces = self.pace.lock().unwrap();
         for id in rips {
             let Some(v) = snap.steps.get_mut(&id) else { continue };
@@ -880,7 +880,7 @@ impl Model {
             // What redumper is on just now: a re-read says where and how
             // it's going itself (its pace isn't the disc's); a read, its
             // speed now, from its own lines.
-            let live = v.now.clone().and_then(|n| serde_json::from_value::<drt_steps::real::redumper::Live>(n).ok()).filter(|_| dump && busy.is_some());
+            let live = v.now.clone().and_then(|n| serde_json::from_value::<trip_steps::real::redumper::Live>(n).ok()).filter(|_| dump && busy.is_some());
             if let Some(l) = live.as_ref().filter(|l| l.rereading) {
                 paces.remove(&key);
                 v.detail = l.card();
@@ -1006,7 +1006,7 @@ impl Model {
     /// about how much room one disc takes there, and the working folder,
     /// with room for the rip and what's made from it.
     pub fn needed(&self, i: usize) -> Vec<Needed> {
-        use drt_steps::real::reach;
+        use trip_steps::real::reach;
         let recipe = {
             let mut r = self.recipes[i].clone();
             r.upgrade();
@@ -1027,8 +1027,8 @@ impl Model {
                 let Some(v) = info.resolve_in(spec.key, params, &settings, &drive, flow) else { continue };
                 let Some(text) = v.as_str().filter(|t| !t.trim().is_empty()) else { continue };
                 let seen: Vec<&str> = flow.map(|f| f.seen.iter().copied().collect()).unwrap_or_default();
-                let need = reach::need_for(flow.map_or(drt_engine::ItemKind::AnyFile, |f| f.kind), &seen, None);
-                out.push(Needed { step: Some(id.clone()), path: drt_steps::real::expand(text), need });
+                let need = reach::need_for(flow.map_or(trip_engine::ItemKind::AnyFile, |f| f.kind), &seen, None);
+                out.push(Needed { step: Some(id.clone()), path: trip_steps::real::expand(text), need });
             }
         }
         if !out.is_empty() {
@@ -1189,7 +1189,7 @@ impl Model {
 
     /// The first tile that doesn't fit after what comes before it.
     pub fn misfit(&self, i: usize) -> Option<String> {
-        drt_engine::first_misfit(&self.recipes[i].root, &self.engine.registry)
+        trip_engine::first_misfit(&self.recipes[i].root, &self.engine.registry)
     }
 
     /// A tile's name: its label, or its step's.
@@ -1586,7 +1586,7 @@ impl Model {
 
     /// The built-in recipe this one was seeded from, by name, if any.
     pub fn builtin(&self, i: usize) -> Option<Recipe> {
-        drt_steps::recipes::all().into_iter().find(|r| r.name == self.recipes[i].name && check(&r.root, &self.engine.registry).is_ok())
+        trip_steps::recipes::all().into_iter().find(|r| r.name == self.recipes[i].name && check(&r.root, &self.engine.registry).is_ok())
     }
 
     /// Whether the recipe differs from the one it was built in as (when
@@ -1669,19 +1669,19 @@ impl Model {
     /// Every step that can follow `after`, with whether it checks in line
     /// and as a new branch. A step that fits neither way isn't listed.
     pub fn placements_after(&self, i: usize, after: &str) -> Vec<(&StepInfo, bool, bool)> {
-        drt_engine::placements(&self.recipes[i].root, &Spot::After(after.to_owned()), &self.engine.registry)
+        trip_engine::placements(&self.recipes[i].root, &Spot::After(after.to_owned()), &self.engine.registry)
     }
 
     /// What the + at a spot offers, and how a click places each.
-    pub fn offers(&self, i: usize, at: &Spot) -> Vec<drt_engine::Offer<'_>> {
-        drt_engine::offers(&self.recipes[i].root, at, &self.engine.registry)
+    pub fn offers(&self, i: usize, at: &Spot) -> Vec<trip_engine::Offer<'_>> {
+        trip_engine::offers(&self.recipes[i].root, at, &self.engine.registry)
     }
 
     /// Every spot a + can be: after each step, and after each set of
     /// branches.
     pub fn spots(&self, i: usize) -> Vec<Spot> {
         let root = &self.recipes[i].root;
-        let sides = root.line_ids().into_iter().flat_map(|id| drt_engine::Side::BOTH.map(|s| Spot::On(id.to_owned(), s)));
+        let sides = root.line_ids().into_iter().flat_map(|id| trip_engine::Side::BOTH.map(|s| Spot::On(id.to_owned(), s)));
         root.ids().into_iter().map(|id| Spot::After(id.to_owned())).chain(root.joins().into_iter().map(Spot::Join)).chain(sides).collect()
     }
 
@@ -1966,7 +1966,7 @@ fn cap(s: &str) -> String {
 ///   unset; every one if none matches), and what filed its sheet goes.
 /// - Lyrics' old *.lrc files too*, when on, becomes a Lyrics file step
 ///   after each Library.
-pub fn migrate(root: &mut Node, reg: &drt_engine::Registry) -> bool {
+pub fn migrate(root: &mut Node, reg: &trip_engine::Registry) -> bool {
     let renamed = migrate_steps(root, reg);
     let cues = move_old_cues(root);
     let lrc = lrc_to_lyrics_file(root);
@@ -1977,7 +1977,7 @@ pub fn migrate(root: &mut Node, reg: &drt_engine::Registry) -> bool {
 /// for when it needs you says so at once now. A Notify set so says
 /// *After every disc*, as it also did.
 fn as_soon_is_after_every_disc(root: &mut Node) -> bool {
-    use drt_steps::real::tell;
+    use trip_steps::real::tell;
     let ids: Vec<String> = root
         .steps()
         .into_iter()
@@ -1996,7 +1996,7 @@ fn as_soon_is_after_every_disc(root: &mut Node) -> bool {
 }
 
 /// Every node, so no `any`: it would stop at the first that changed.
-fn migrate_all(nodes: &mut [Node], reg: &drt_engine::Registry) -> bool {
+fn migrate_all(nodes: &mut [Node], reg: &trip_engine::Registry) -> bool {
     let mut changed = false;
     for n in nodes {
         changed |= migrate_steps(n, reg);
@@ -2004,7 +2004,7 @@ fn migrate_all(nodes: &mut [Node], reg: &drt_engine::Registry) -> bool {
     changed
 }
 
-fn migrate_steps(node: &mut Node, reg: &drt_engine::Registry) -> bool {
+fn migrate_steps(node: &mut Node, reg: &trip_engine::Registry) -> bool {
     match node {
         Node::Step { step, label, .. } => {
             let now = reg.canonical(step).to_owned();
@@ -2051,7 +2051,7 @@ fn libraries(node: &Node) -> Vec<(String, String)> {
             Node::Chain { nodes } => {
                 for (k, n) in nodes.iter().enumerate() {
                     if let Node::Step { step, .. } = n {
-                        if drt_steps::real::encode::ALL.iter().any(|c| c.kind() == step) {
+                        if trip_steps::real::encode::ALL.iter().any(|c| c.kind() == step) {
                             let mut last = None;
                             line(&nodes[k + 1..], &mut last);
                             out.extend(last.map(|l| (step.clone(), l)));
@@ -2190,7 +2190,7 @@ fn move_old_cues(root: &mut Node) -> bool {
         // So what follows each Library is beside it.
         flatten_chains(root);
         let libs = libraries(root);
-        let ext_of = |kind: &str| drt_steps::real::encode::ALL.iter().find(|c| c.kind() == kind).map(|c| c.ext());
+        let ext_of = |kind: &str| trip_steps::real::encode::ALL.iter().find(|c| c.kind() == kind).map(|c| c.ext());
         let matching: Vec<&(String, String)> = libs.iter().filter(|(k, _)| ext_of(k) == Some(ext.as_str())).collect();
         let targets: Vec<&(String, String)> = if matching.is_empty() { libs.iter().collect() } else { matching };
         let targets: Vec<String> = targets.into_iter().map(|(_, l)| l.clone()).collect();
@@ -2216,7 +2216,7 @@ fn move_old_cues(root: &mut Node) -> bool {
 /// step follows each Library instead.
 /// Gives every Notify the ntfy topic and server that were set for the
 /// whole app, unless it has its own, and forgets the app-wide ones.
-pub fn ntfy_to_each_notify(recipes: &mut [Recipe], s: &mut drt_engine::Settings) -> bool {
+pub fn ntfy_to_each_notify(recipes: &mut [Recipe], s: &mut trip_engine::Settings) -> bool {
     let keys = ["ntfy_topic", "ntfy_server"];
     let old: Vec<(&str, Setting<serde_json::Value>)> = keys.iter().filter_map(|k| s.app.remove(&format!("tell.{k}")).map(|v| (*k, v))).collect();
     if old.is_empty() {
@@ -2264,7 +2264,7 @@ fn lrc_to_lyrics_file(root: &mut Node) -> bool {
 /// Lookups that were chained one after another (Choose, then Lyrics, then
 /// Cover art) each go straight after what they look up, so they become
 /// branches from it: Choose, then Lyrics beside Cover art.
-fn branch_chained_lookups(nodes: &mut Vec<Node>, reg: &drt_engine::Registry) -> bool {
+fn branch_chained_lookups(nodes: &mut Vec<Node>, reg: &trip_engine::Registry) -> bool {
     let kind = |n: &Node| match n {
         Node::Step { step, .. } => Some(step.clone()),
         _ => None,
@@ -2319,10 +2319,10 @@ pub fn text_value(kind: &ParamKind, text: &str) -> Option<Value> {
 }
 
 /// How long a read took and its average speed: *Read in 24:51 at 8.1×*.
-pub fn read_in(v: &drt_engine::StepView, length: impl Fn(u32) -> Option<f32>) -> Option<String> {
+pub fn read_in(v: &trip_engine::StepView, length: impl Fn(u32) -> Option<f32>) -> Option<String> {
     let (a, b) = (v.record.started?, v.record.finished?);
     let took = b.checked_sub(a).filter(|t| *t > 0)?;
-    let mmss = drt_steps::real::mmss(took);
+    let mmss = trip_steps::real::mmss(took);
     Some(match crate::pace::average(&v.items, length, took) {
         Some(x) => format!("Read in {mmss} at {}", crate::pace::speed_text(x)),
         None => format!("Read in {mmss}"),
@@ -2331,8 +2331,8 @@ pub fn read_in(v: &drt_engine::StepView, length: impl Fn(u32) -> Option<f32>) ->
 
 /// Why an edit doesn't fit, in the window's words: the step by its name,
 /// and what it needs as everyday things, not ids and types.
-pub fn plain_misfit(reg: &drt_engine::Registry, root: &Node, e: &drt_engine::CheckError) -> String {
-    use drt_engine::{CheckError as E, ItemKind as K};
+pub fn plain_misfit(reg: &trip_engine::Registry, root: &Node, e: &trip_engine::CheckError) -> String {
+    use trip_engine::{CheckError as E, ItemKind as K};
     let mut root = root.clone();
     let mut name = |id: &str| match root.find_mut(id) {
         Some(Node::Step { label: Some(l), .. }) => l.clone(),
@@ -2396,8 +2396,8 @@ mod tests {
         s.set_app("tell", "ntfy_topic", Setting::Chosen { value: "rip-old-topic-1234".into(), at: 1 });
         let mine = Node::step("t2", "tell").with("ntfy_topic", "its-own");
         let mut recipes = vec![
-            Recipe { name: "A".into(), root: drt_engine::recipe::chain([Node::step("d", "drive"), Node::step("t1", "tell")]) },
-            Recipe { name: "B".into(), root: drt_engine::recipe::chain([Node::step("d", "drive"), mine]) },
+            Recipe { name: "A".into(), root: trip_engine::recipe::chain([Node::step("d", "drive"), Node::step("t1", "tell")]) },
+            Recipe { name: "B".into(), root: trip_engine::recipe::chain([Node::step("d", "drive"), mine]) },
         ];
         assert!(ntfy_to_each_notify(&mut recipes, &mut s));
         let topic = |r: &Recipe, id: &str| {
@@ -2414,8 +2414,8 @@ mod tests {
 
     #[test]
     fn notify_set_to_say_at_once_says_after_every_disc() {
-        let reg = drt_steps::simulated(None);
-        let mut root = drt_engine::recipe::chain([Node::step("d", "drive"), Node::step("t", "tell").with("when", drt_steps::real::tell::OLD_AS_SOON)]);
+        let reg = trip_steps::simulated(None);
+        let mut root = trip_engine::recipe::chain([Node::step("d", "drive"), Node::step("t", "tell").with("when", trip_steps::real::tell::OLD_AS_SOON)]);
         assert!(migrate(&mut root, &reg));
         let Some(Node::Step { params, .. }) = root.find_mut("t") else { panic!() };
         assert_eq!(params["when"].resolve(None), Some(Value::from("Always")));

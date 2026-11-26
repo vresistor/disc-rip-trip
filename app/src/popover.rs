@@ -4,8 +4,8 @@
 
 use crate::app::{App, Tray};
 use crate::theme::{font, kind_icon, mix, Pal};
-use drt_engine::{Group, Node, Snapshot, Spot, StepInfo};
 use egui::{pos2, vec2, Color32, Key, Rect, RichText, Sense, Stroke, Ui};
+use trip_engine::{Group, Node, Snapshot, Spot, StepInfo};
 
 pub const WIDTH: f32 = 320.0;
 pub const MAX_HEIGHT: f32 = 420.0;
@@ -102,7 +102,7 @@ fn describe(info: &StepInfo) -> String {
 }
 
 /// Draws the popover, if one is open, next to its + on `canvas`.
-pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout::Layout) {
+pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &trip_layout::Layout) {
     let Some(mut pop) = app.popover.clone() else { return };
     let i = app.sel;
     let ctx = ui.ctx().clone();
@@ -134,7 +134,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
     };
     // What a step put the other way would go beside, or in front of.
     let next = next_names(&root, &pop.at, &snap).unwrap_or_default();
-    let plus_r = drt_layout::PLUS_R * v.zoom;
+    let plus_r = trip_layout::PLUS_R * v.zoom;
     // A click anywhere else closes it (the + itself toggles it).
     let outside = ctx.input(|inp| inp.pointer.any_pressed() && inp.pointer.interact_pos().is_some_and(|at| !app.popover_rect.contains(at) && at.distance(plus) > plus_r + 2.0));
     if outside {
@@ -321,10 +321,10 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout:
 
 /// What a button for a step's own path says: *If Rip fails*, *If Choose
 /// needs you*.
-pub fn side_title(side: drt_engine::Side, name: &str) -> String {
+pub fn side_title(side: trip_engine::Side, name: &str) -> String {
     match side {
-        drt_engine::Side::Fails => format!("If {name} fails"),
-        drt_engine::Side::NeedsYou => format!("If {name} needs you"),
+        trip_engine::Side::Fails => format!("If {name} fails"),
+        trip_engine::Side::NeedsYou => format!("If {name} needs you"),
     }
 }
 

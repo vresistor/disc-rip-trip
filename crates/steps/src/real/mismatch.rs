@@ -1097,11 +1097,11 @@ CD-ROM [GAME_1.bin]:
         assert_eq!(and_repaired("2 sectors re-read".into(), Some(&Repairing::default())), "2 sectors re-read");
     }
 
-    /// Reads a real log. `DRT_LOG=… cargo test -p drt-steps real_log -- --ignored --nocapture`.
+    /// Reads a real log. `TRIP_LOG=… cargo test -p trip-steps real_log -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn real_log() {
-        let text = std::fs::read_to_string(std::env::var("DRT_LOG").unwrap()).unwrap();
+        let text = std::fs::read_to_string(std::env::var("TRIP_LOG").unwrap()).unwrap();
         let r = read_log(&text);
         println!("{r:#?}");
         for s in &r.sectors {

@@ -59,7 +59,7 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("drt-place-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("trip-place-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

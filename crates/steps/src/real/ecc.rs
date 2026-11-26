@@ -645,13 +645,13 @@ pub(crate) mod tests {
     /// Real misreads: each sector where a real rip differs from the same
     /// disc's Redump-verified image is handed to [`repair`]; what it puts
     /// right must be the verified sector, byte for byte.
-    /// `DRT_ECC_BIN=<verified .bin> DRT_ECC_RIPS=<rip .bin>:<rip .bin> cargo test --release -p drt-steps ecc::tests::real_misreads -- --ignored --exact --nocapture`
+    /// `TRIP_ECC_BIN=<verified .bin> TRIP_ECC_RIPS=<rip .bin>:<rip .bin> cargo test --release -p trip-steps ecc::tests::real_misreads -- --ignored --exact --nocapture`
     #[test]
     #[ignore]
     fn real_misreads() {
         use std::io::Read;
-        let good = std::env::var("DRT_ECC_BIN").expect("DRT_ECC_BIN");
-        for rip in std::env::var("DRT_ECC_RIPS").expect("DRT_ECC_RIPS").split(':') {
+        let good = std::env::var("TRIP_ECC_BIN").expect("TRIP_ECC_BIN");
+        for rip in std::env::var("TRIP_ECC_RIPS").expect("TRIP_ECC_RIPS").split(':') {
             let mut g = std::io::BufReader::new(std::fs::File::open(&good).unwrap());
             let mut r = std::io::BufReader::new(std::fs::File::open(rip).unwrap());
             let (mut a, mut b) = (vec![0u8; SECTOR], vec![0u8; SECTOR]);
@@ -677,12 +677,12 @@ pub(crate) mod tests {
     /// Every form 1 sector of a real, Redump-verified PlayStation image:
     /// its parity made again is its own, byte for byte, and wrong bytes
     /// put in it come out right or not at all.
-    /// `DRT_ECC_BIN=…bin cargo test -p drt-steps ecc::tests::real_sectors -- --ignored --exact --nocapture`
+    /// `TRIP_ECC_BIN=…bin cargo test -p trip-steps ecc::tests::real_sectors -- --ignored --exact --nocapture`
     #[test]
     #[ignore]
     fn real_sectors() {
         use std::io::Read;
-        let path = std::env::var("DRT_ECC_BIN").expect("DRT_ECC_BIN");
+        let path = std::env::var("TRIP_ECC_BIN").expect("TRIP_ECC_BIN");
         let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap());
         let mut s = vec![0u8; SECTOR];
         let (mut lba, mut form1s, mut form2s, mut tried, mut fixed) = (0i64, 0u64, 0u64, 0u64, 0u64);

@@ -21,8 +21,8 @@
 use crate::template;
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::{Context, Cx, Group, Inlet, Item, ItemKind, ItemState, Outlet, Step, StepInfo, Subject};
 use std::path::{Path, PathBuf};
+use trip_engine::{Context, Cx, Group, Inlet, Item, ItemKind, ItemState, Outlet, Step, StepInfo, Subject};
 
 pub fn info() -> StepInfo {
     StepInfo::new("cue", "Cue sheet", Group::Make, ItemKind::AudioFile, ItemKind::TextFile).needs(&["filed"]).from("track list and rip log, beside the files")
@@ -71,7 +71,7 @@ pub fn cue_sheet(c: &Context, files: &[(u32, String)]) -> String {
     if let Some(toc) = c.get(Subject::Disc, "toc").and_then(super::gnudb::parse_toc) {
         line(format!("REM DISCID {:08X}", toc.disc_id()));
     }
-    line(format!("REM COMMENT {}", quoted(concat!("Disc Rip Trip ", env!("CARGO_PKG_VERSION")))));
+    line(format!("REM COMMENT {}", quoted(concat!("Trip ", env!("CARGO_PKG_VERSION")))));
     if let Some(ean) = catalog(&get("barcode")) {
         line(format!("CATALOG {ean}"));
     }
@@ -125,7 +125,7 @@ pub fn cue_sheet(c: &Context, files: &[(u32, String)]) -> String {
 /// The rip log: the drive, the disc, and each track's reads and verdict.
 pub fn rip_log(c: &Context, tracks: &[u32], date: &str) -> String {
     let get = |k| c.get(Subject::Disc, k).unwrap_or("").to_owned();
-    let mut s = format!("Disc Rip Trip {} rip log, {date}\n\n", env!("CARGO_PKG_VERSION"));
+    let mut s = format!("Trip {} rip log, {date}\n\n", env!("CARGO_PKG_VERSION"));
     let mut kv = |k: &str, v: String| {
         if !v.is_empty() {
             s.push_str(&format!("{k:<20}{v}\n"));
@@ -264,7 +264,7 @@ mod tests {
         let files = [(1, dir.join("01 - Jimmy the Exploder.flac")), (2, dir.join("02 - Say _Stop_ Breaking Down.flac"))];
         let refs: Vec<(u32, String)> = files.iter().map(|(t, p)| (*t, file_ref(dir, p))).collect();
         let s = cue_sheet(&disc(), &refs);
-        let want = "REM DATE 1999\r\nREM LABEL \"Sympathy for the Record Industry\"\r\nREM CATALOGNUMBER \"SFTRI 577\"\r\nREM DISCID 09012302\r\nREM COMMENT \"Disc Rip Trip ";
+        let want = "REM DATE 1999\r\nREM LABEL \"Sympathy for the Record Industry\"\r\nREM CATALOGNUMBER \"SFTRI 577\"\r\nREM DISCID 09012302\r\nREM COMMENT \"Trip ";
         assert!(s.starts_with(want), "{s}");
         assert!(s.contains("CATALOG 0790276057729\r\nPERFORMER \"The White Stripes\"\r\nTITLE \"The White Stripes\"\r\n"), "{s}");
         assert!(s.contains("FILE \"01 - Jimmy the Exploder.flac\" WAVE\r\n  TRACK 01 AUDIO\r\n    TITLE \"Jimmy the Exploder\"\r\n    ISRC USSYM9900001\r\n    INDEX 01 00:00:00\r\n"), "{s}");

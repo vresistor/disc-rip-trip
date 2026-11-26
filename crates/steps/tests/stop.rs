@@ -1,16 +1,16 @@
 //! Stop while a game's Rip reads the disc (a data disc's is the same code): the run ends, Stopped, within
 //! a bounded time, with no redumper left running and nothing on the window
-//! still saying it's reading. A stand-in redumper (`DRT_REDUMPER`, set once
+//! still saying it's reading. A stand-in redumper (`TRIP_REDUMPER`, set once
 //! for this test binary) is slow at the stage the test asks for, and shrugs
 //! off SIGTERM, SIGINT and SIGHUP; the "drive" is a plain file, so no drive
 //! is touched.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, ParamKind, ParamSpec, Recipe, Run, Snapshot, Step, StepInfo, StepState, Subject};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use trip_engine::recipe::chain;
+use trip_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, ParamKind, ParamSpec, Recipe, Run, Snapshot, Step, StepInfo, StepState, Subject};
 
 const DRIVE: &str = "ACME XY123";
 
@@ -93,7 +93,7 @@ echo "end $$" >> "$here/calls"
 "#;
 
 fn base() -> PathBuf {
-    let b = std::env::current_dir().unwrap().join("../../target/drt-test/stop");
+    let b = std::env::current_dir().unwrap().join("../../target/trip-test/stop");
     let _ = std::fs::remove_dir_all(&b);
     std::fs::create_dir_all(&b).unwrap();
     b
@@ -102,7 +102,7 @@ fn base() -> PathBuf {
 fn start(b: &Path, mode: &str) -> Run {
     std::fs::write(b.join("mode"), mode).unwrap();
     let _ = std::fs::remove_file(b.join("calls"));
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Disc { device: b.join("drive") });
     let mut e = Engine::new(reg);
     e.work_root = b.join(format!("runs-{mode}"));
@@ -160,7 +160,7 @@ async fn stop_at(b: &Path, mode: &str, there: impl Fn(&Snapshot) -> bool) {
     assert_eq!((rip.state, rip.status.as_str()), (StepState::Idle, "Stopped"), "{mode}: {rip:#?}");
     assert_eq!(rip.progress, None, "{mode}");
     assert_eq!(rip.now, None, "{mode}");
-    assert!(rip.items.iter().all(|i| i.state == ItemState::Skipped && i.note == drt_engine::snapshot::STOPPED), "{mode}: an item not stopped: {:#?}", rip.items);
+    assert!(rip.items.iter().all(|i| i.state == ItemState::Skipped && i.note == trip_engine::snapshot::STOPPED), "{mode}: an item not stopped: {:#?}", rip.items);
     let busy: Vec<_> = s.steps.iter().filter(|(_, v)| v.state == StepState::Busy).map(|(k, v)| format!("{k}: {} {}", v.status, v.detail)).collect();
     assert!(busy.is_empty(), "{mode}: still busy: {busy:?}");
 }
@@ -178,7 +178,7 @@ async fn stop_ends_rip_at_every_stage_of_its_read() {
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     // SAFETY: set before any thread of this binary runs a tool, and this
     // binary's only test.
-    unsafe { std::env::set_var("DRT_REDUMPER", &script) };
+    unsafe { std::env::set_var("TRIP_REDUMPER", &script) };
 
     let slow = |s: &Snapshot| s.steps["rip"].progress.is_some();
     stop_at(&b, "probe", |_| std::fs::read_to_string(b.join("calls")).unwrap_or_default().contains(" dump yes")).await;

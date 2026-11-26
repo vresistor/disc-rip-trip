@@ -199,7 +199,7 @@ fn probe(dir: &Path) -> io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    let f = dir.join(format!(".disc-rip-trip-{}-{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let f = dir.join(format!(".trip-{}-{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&f)?;
     let wrote = file.write_all(b"x").and_then(|_| file.sync_all());
     drop(file);
@@ -262,8 +262,8 @@ pub fn rate_of(kind: &str) -> Option<u64> {
 
 /// About how much a Folder needs for one disc, from the kinds of step on
 /// the way to it and what reaches it, with the disc's length when known.
-pub fn need_for(kind: drt_engine::ItemKind, seen: &[&str], seconds: Option<u64>) -> u64 {
-    use drt_engine::ItemKind as K;
+pub fn need_for(kind: trip_engine::ItemKind, seen: &[&str], seconds: Option<u64>) -> u64 {
+    use trip_engine::ItemKind as K;
     let audio = || {
         let rate = seen.iter().filter_map(|k| rate_of(k)).max().unwrap_or(rate_of("flac").unwrap_or(WAV_RATE));
         seconds.unwrap_or(CD_SECONDS) * rate
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn a_disc_needs_room_for_what_reaches_the_folder() {
-        use drt_engine::ItemKind as K;
+        use trip_engine::ItemKind as K;
         assert_eq!(need_for(K::AudioFile, &["rip", "flac"], Some(2_400)), 2_400 * 110_000);
         assert_eq!(need_for(K::AudioFile, &["rip", "mp3"], None), CD_SECONDS * 40_000);
         assert_eq!(need_for(K::ImageFile, &["image", "chd"], None), CD_IMAGE);

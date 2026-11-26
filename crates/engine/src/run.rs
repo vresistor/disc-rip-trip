@@ -47,15 +47,15 @@ pub struct Missing {
 }
 
 /// Where the app keeps what it can fetch or make again:
-/// `$XDG_CACHE_HOME/disc-rip-trip`, or `~/.cache/disc-rip-trip`.
+/// `$XDG_CACHE_HOME/trip`, or `~/.cache/trip`.
 pub fn cache_dir() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))?;
-    Some(base.join("disc-rip-trip"))
+    Some(base.join("trip"))
 }
 
 impl Engine {
     pub fn new(registry: Registry) -> Self {
-        let work_root = cache_dir().unwrap_or_else(|| std::env::temp_dir().join("disc-rip-trip")).join("runs");
+        let work_root = cache_dir().unwrap_or_else(|| std::env::temp_dir().join("trip")).join("runs");
         Engine { registry, lanes: Arc::new(Lanes::default()), settings: Arc::default(), time_scale: 1.0, work_root }
     }
 

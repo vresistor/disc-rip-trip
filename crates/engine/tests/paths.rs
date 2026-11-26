@@ -4,9 +4,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::snapshot::{Choice, Question, QuestionShape};
-use drt_engine::{check, Answer, CheckError, Command, Cx, Engine, Group, Inlet, Item, ItemKind, Node, Outlet, Recipe, Registry, Side, Snapshot, Step, StepInfo, StepState, Subject};
+use trip_engine::recipe::chain;
+use trip_engine::snapshot::{Choice, Question, QuestionShape};
+use trip_engine::{check, Answer, CheckError, Command, Cx, Engine, Group, Inlet, Item, ItemKind, Node, Outlet, Recipe, Registry, Side, Snapshot, Step, StepInfo, StepState, Subject};
 
 struct Start;
 
@@ -77,11 +77,11 @@ impl Step for Holds {
 
     async fn run(&self, mut inlet: Inlet, _outlet: Outlet, cx: Cx) -> Result<()> {
         let Some(d) = inlet.recv().await else { return Ok(()) };
-        cx.item(&d, drt_engine::ItemState::Bad, "774 unreadable sectors");
+        cx.item(&d, trip_engine::ItemState::Bad, "774 unreadable sectors");
         cx.state(StepState::Bad);
         cx.status("", "Couldn't read 774 sectors");
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        cx.item(&d, drt_engine::ItemState::Skipped, "skipped");
+        cx.item(&d, trip_engine::ItemState::Skipped, "skipped");
         cx.status("Skipped", "");
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         cx.state(StepState::Hold);
@@ -122,7 +122,7 @@ fn engine() -> Engine {
     reg.add(Start).add(Breaks).add(Asks).add(Hears).add(Holds);
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
-    e.work_root = std::env::temp_dir().join(format!("drt-paths-{}", std::process::id()));
+    e.work_root = std::env::temp_dir().join(format!("trip-paths-{}", std::process::id()));
     e
 }
 
@@ -196,7 +196,7 @@ fn only_a_step_that_takes_a_message_goes_on_a_path() {
     let deep = chain([Node::step("s", "start"), Node::step("rip", "breaks").on(Side::Fails, nested)]);
     assert!(matches!(check(&deep, reg), Err(CheckError::PathOnPath { id }) if id == "t"));
     // The + on a path offers only what takes a message.
-    let offers = drt_engine::offers(&chain([Node::step("s", "start"), Node::step("rip", "breaks")]), &drt_engine::Spot::On("rip".into(), Side::NeedsYou), reg);
+    let offers = trip_engine::offers(&chain([Node::step("s", "start"), Node::step("rip", "breaks")]), &trip_engine::Spot::On("rip".into(), Side::NeedsYou), reg);
     assert_eq!(offers.iter().map(|o| o.info.kind).collect::<Vec<_>>(), ["hears"]);
     // Saved, a path is there only when there is one; removing the step
     // takes its paths, and removing what's on one leaves the step.

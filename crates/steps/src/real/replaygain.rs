@@ -16,9 +16,9 @@
 use super::tool;
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
-use drt_engine::setting::ParamKind;
-use drt_engine::{Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Step, StepInfo};
 use std::path::{Path, PathBuf};
+use trip_engine::setting::ParamKind;
+use trip_engine::{Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Step, StepInfo};
 
 pub const MODES: &[&str] = &["Track and album", "Track only"];
 
@@ -282,12 +282,12 @@ mod tests {
         assert!(container_args("flac", b"fLaC", b"").is_empty());
     }
 
-    /// Measures and tags real files with the real ffmpeg (`DRT_FFMPEG`),
-    /// then reads the tags back with ffprobe (`DRT_FFPROBE`).
+    /// Measures and tags real files with the real ffmpeg (`TRIP_FFMPEG`),
+    /// then reads the tags back with ffprobe (`TRIP_FFPROBE`).
     #[tokio::test]
     #[ignore]
     async fn real_ffmpeg() {
-        let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(".cache/disc-rip-trip/test-replaygain");
+        let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(".cache/trip/test-replaygain");
         std::fs::create_dir_all(dir.join("out")).unwrap();
         let mut made = vec![];
         for (i, ext, codec) in [(1, "mp3", "libmp3lame"), (2, "opus", "libopus"), (3, "flac", "flac")] {

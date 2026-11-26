@@ -1,4 +1,4 @@
-//! Disc Rip Trip's window, in egui: the list of recipes, each drawn live
+//! Trip's window, in egui: the list of recipes, each drawn live
 //! on a canvas from its run's snapshot, and the sidebar for what a step
 //! needs from you. See DESIGN-UX.md and docs/adr/0001.
 

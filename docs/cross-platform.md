@@ -1,8 +1,8 @@
-# Cross-platform: Disc Rip Trip on Windows, macOS and Linux
+# Cross-platform: Trip on Windows, macOS and Linux
 
 25 November 2026. Proposed; nothing here is built yet.
 
-The goal is that Disc Rip Trip is built for Windows, macOS and Linux and
+The goal is that Trip is built for Windows, macOS and Linux and
 published on all three, with each tool it needs packaged with it under the
 right licence notices. Where a tool can't be packaged (MakeMKV), the app
 asks the user before it uses one that's already on their computer, and lets
@@ -96,7 +96,7 @@ to say so plainly rather than fail with "access denied".
 - **Long paths.** Paths over 260 characters fail unless the app's manifest opts in to long paths. Deep library folders reach that.
 - **Stopping a tool.** `start_kill` is `TerminateProcess`. Unix signals (`ExitStatusExt::signal` in `redumper.rs`) go behind `cfg(unix)`.
 - **Free space.** `statvfs` becomes `GetDiskFreeSpaceExW`.
-- **Config and cache** come from the `dirs` crate: `%APPDATA%`, `%LOCALAPPDATA%` ([dirs 7.0](https://docs.rs/dirs)). Today, with no `HOME` set, config would land in `./disc-rip-trip`.
+- **Config and cache** come from the `dirs` crate: `%APPDATA%`, `%LOCALAPPDATA%` ([dirs 7.0](https://docs.rs/dirs)). Today, with no `HOME` set, config would land in `./trip`.
 - **Notifications:** Windows toasts. The ntfy path works as it is.
 
 ### 2.2 macOS
@@ -221,9 +221,9 @@ ffmpeg prints to stderr.
 daily builds for 14 days *(read: README)*. That's fine for pinning, but it
 isn't somewhere we can rely on for the source (4.3).
 
-**Finding the tools.** `tool::command` today looks at `DRT_<NAME>`, then
+**Finding the tools.** `tool::command` today looks at `TRIP_<NAME>`, then
 PATH. On Windows and macOS the tools sit beside the app (in its install
-folder, or in `Disc Rip Trip.app/Contents/MacOS/`), so it has to look next
+folder, or in `Trip.app/Contents/MacOS/`), so it has to look next
 to `current_exe()` first. `portability.md` already lists that change.
 
 ### 4.2 The licences, and a correction
@@ -285,13 +285,13 @@ The same in every package (`.zip`/installer, `.dmg`, `.flatpak`):
 
 | Item | Where it goes |
 |---|---|
-| Disc Rip Trip's `LICENSE` (GPL-3.0) | Windows: install folder. macOS: `Contents/Resources/`. Flatpak: `/app/share/licenses/<app id>/` (Flathub's place for it) |
+| Trip's `LICENSE` (GPL-3.0) | Windows: install folder. macOS: `Contents/Resources/`. Flatpak: `/app/share/licenses/<app id>/` (Flathub's place for it) |
 | `THIRD-PARTY.md` (corrected), listing each tool, its version, its licence and the URL of the source archive | Beside the licence |
 | `PROVENANCE.txt`: for each binary, where it came from, its sha256, its version string, and its configure line | Beside the licence (already done for the flatpak) |
 | A `licenses/` folder with the full text of each licence named in 4.2: GPL-3.0, GPL-2.0 (x264, x265), LGPL-2.1 (cyanrip, LAME), BSD-3-Clause-Clear and the AOM patent licence (SVT-AV1), the BSD notices (Opus, Vorbis, Ogg), OFL-1.1 (fonts), BSD-3-Clause (MAME's CHD core) | Beside the licence |
 | The Rust crates' licences, generated from `Cargo.lock` (`cargo about`, or `cargo deny`'s list) | `licenses/rust-crates.txt` (**to find out** which tool; `cargo deny` already checks them) |
 | A notice that cyanrip is modified, with the two patches and the date | In `THIRD-PARTY.md` and in the source archive |
-| **On the release page:** `disc-rip-trip-<ver>-sources-<os>.tar.xz` with every tool's corresponding source and build scripts, and a line saying where it is | GitHub Release assets |
+| **On the release page:** `trip-<ver>-sources-<os>.tar.xz` with every tool's corresponding source and build scripts, and a line saying where it is | GitHub Release assets |
 
 The "About" window should link to these. CI should fail a release whose
 package lacks any of them, just as it already fails one that contains
@@ -375,7 +375,7 @@ The app id work adds, on Linux:
    - If nothing is found: only the last two, and a line saying video discs need it.
 3. **Nothing runs until the user picks one.** That includes MakeMKV's version check and its drive list, and also the read of its key from MakeMKV's settings (`video/key.rs`). The approved path is saved in the app's settings, not per recipe.
 4. **If the approved file changes or goes away**, the app says so and asks again. It never falls back to another copy it found. **To find out:** whether to also store the file's size and date, so a replaced binary is noticed.
-5. **The `DRT_MAKEMKVCON` variable** stays as the developer's way round all this. It counts as approval, since only someone at the command line can set it.
+5. **The `TRIP_MAKEMKVCON` variable** stays as the developer's way round all this. It counts as approval, since only someone at the command line can set it.
 6. **macOS Gatekeeper.** If the user's MakeMKV has never been opened, running `makemkvcon` from inside it may be blocked by Gatekeeper with a message the app can't see (**to find out**). The safe advice in the app: *open MakeMKV once yourself before using it here*.
 
 ---
@@ -437,13 +437,13 @@ as a zip, both from one CI job.
 - Target Windows 10 1809 or later and Windows 11, x64 only.
 - Windows on Arm runs x64 programs through emulation. A native arm64 build can wait (redumper and BtbN have arm64 builds; cyanrip doesn't).
 
-**Layout:** `Disc Rip Trip\disc-rip-trip.exe`, `drt.exe`, `tools\` (ffmpeg,
+**Layout:** `Trip\trip.exe`, `tripr.exe`, `tools\` (ffmpeg,
 ffprobe, cyanrip, redumper), `licenses\`, `THIRD-PARTY.md`,
 `PROVENANCE.txt`.
 
 ### 6.3 macOS
 
-- A `Disc Rip Trip.app` in a `.dmg`, with the tools in `Contents/MacOS/` and redumper's own `lib/` beside it.
+- A `Trip.app` in a `.dmg`, with the tools in `Contents/MacOS/` and redumper's own `lib/` beside it.
 - **arm64 only.** Reasons:
   - Apple stopped selling Intel Macs in 2023.
   - The only current Intel ffmpeg build we found is stale (martin-riedl's dates from January 2026).
@@ -460,7 +460,7 @@ ffprobe, cyanrip, redumper), `licenses\`, `THIRD-PARTY.md`,
 ### 6.4 Linux
 
 As already planned:
-- **Flathub** under `io.github.vresistor.disc-rip-trip`, built from source;
+- **Flathub** under `io.github.vresistor.trip`, built from source;
 - the `.flatpak` bundle on GitHub Releases until then.
 
 The tarball/AppImage in `portability.md` (item 3) is optional and not

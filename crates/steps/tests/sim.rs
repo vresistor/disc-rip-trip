@@ -1,9 +1,9 @@
 //! The engine, run end to end on simulated steps.
 
-use drt_engine::recipe::{branches, chain};
-use drt_engine::{check, fits, Answer, Command, Engine, ItemKind, ItemState, Node, Recipe, Run, Setting, Snapshot, StepState};
-use drt_steps::{recipes, simulated};
 use serde_json::Value;
+use trip_engine::recipe::{branches, chain};
+use trip_engine::{check, fits, Answer, Command, Engine, ItemKind, ItemState, Node, Recipe, Run, Setting, Snapshot, StepState};
+use trip_steps::{recipes, simulated};
 
 fn engine(bad_track: Option<u32>) -> Engine {
     let mut e = Engine::new(simulated(bad_track));
@@ -74,7 +74,7 @@ fn the_built_in_recipes_type_check() {
 
 #[test]
 fn steps_follow_only_what_gives_them_their_input() {
-    use drt_engine::{fits_flow, flow_after};
+    use trip_engine::{fits_flow, flow_after};
     let reg = simulated(None);
     let r = recipes::cd().root;
     let names = |id: &str| fits_flow(&flow_after(&r, id, &reg).unwrap(), &reg).iter().map(|i| i.name).collect::<Vec<_>>();
@@ -107,7 +107,7 @@ fn flac_straight_after_the_kind_step_does_not_check() {
 
 #[test]
 fn the_kind_after_a_step_is_what_it_gives_in_place() {
-    use drt_engine::kind_after;
+    use trip_engine::kind_after;
     let reg = simulated(None);
     let r = recipes::cd().root;
     assert_eq!(kind_after(&r, "cd", &reg), Some(ItemKind::AudioDisc));
@@ -209,7 +209,7 @@ fn next_disc_is_the_step_that_leads_back_to_the_start() {
     let reg = simulated(None);
     let info = reg.info("next-disc").unwrap();
     assert!(info.loops_back);
-    assert_eq!(drt_engine::check(&recipes::cd().root, &reg).unwrap(), ItemKind::Any, "it ends the recipe");
+    assert_eq!(trip_engine::check(&recipes::cd().root, &reg).unwrap(), ItemKind::Any, "it ends the recipe");
 }
 
 #[test]
@@ -407,7 +407,7 @@ async fn the_most_complex_recipe_runs_and_joins_at_the_end() {
 
 #[test]
 fn every_step_the_archive_recipe_uses_is_real() {
-    let real = drt_steps::real();
+    let real = trip_steps::real();
     for r in recipes::all() {
         check(&r.root, &real).unwrap_or_else(|e| panic!("{} under the real steps: {e}", r.name));
     }
@@ -444,7 +444,7 @@ fn recipes_save_as_json_and_load_back() {
 
 #[test]
 fn the_data_disc_recipe_type_checks_and_its_steps_follow_from_one_another() {
-    use drt_engine::{fits_flow, flow_after};
+    use trip_engine::{fits_flow, flow_after};
     let reg = simulated(None);
     let r = recipes::data().root;
     assert_eq!(check(&r, &reg).unwrap(), ItemKind::Any);
@@ -470,10 +470,10 @@ fn the_data_disc_recipe_type_checks_and_its_steps_follow_from_one_another() {
 
 #[test]
 fn image_and_chd_share_their_settings_with_the_real_steps() {
-    let (sim, real) = (simulated(None), drt_steps::real());
+    let (sim, real) = (simulated(None), trip_steps::real());
     for kind in ["data-disc", "image", "check", "chd", "keep", "folder", "discogs", "gnudb", "lyrics", "lyrics-file", "artwork-files", "cue", "replaygain", "tell", "cover-art", "flac", "mp3"] {
         let (a, b) = (sim.info(kind).unwrap(), real.info(kind).unwrap());
-        let keys = |i: &drt_engine::StepInfo| i.params.iter().map(|p| p.key).collect::<Vec<_>>();
+        let keys = |i: &trip_engine::StepInfo| i.params.iter().map(|p| p.key).collect::<Vec<_>>();
         assert_eq!((a.input, a.output, keys(&a)), (b.input, b.output, keys(&b)), "{kind}");
         assert_eq!(a.retries, b.retries, "{kind}");
     }
@@ -523,7 +523,7 @@ async fn a_disc_left_out_is_not_filed() {
 }
 
 /// As `drive`, and what the run found and its tools printed.
-async fn drive_keeping(run: Run, policy: Policy) -> (Snapshot, drt_engine::Context, std::collections::BTreeMap<String, Vec<String>>) {
+async fn drive_keeping(run: Run, policy: Policy) -> (Snapshot, trip_engine::Context, std::collections::BTreeMap<String, Vec<String>>) {
     let mut rx = run.snapshot.clone();
     let (mut asked, mut approved) = (false, Vec::new());
     loop {
@@ -602,7 +602,7 @@ async fn choose_says_why_it_needed_no_question() {
 /// its settings are in (MP3's CBR shows its bitrate instead of its quality).
 #[test]
 fn no_card_shows_more_than_two_settings() {
-    for reg in [drt_steps::real(), simulated(None)] {
+    for reg in [trip_steps::real(), simulated(None)] {
         for info in reg.infos() {
             // Each value of every setting another's `when` depends on.
             let modes: Vec<(&str, Vec<String>)> = info
@@ -613,7 +613,7 @@ fn no_card_shows_more_than_two_settings() {
                     (
                         p.key,
                         match &p.kind {
-                            drt_engine::ParamKind::Choice(o) => o.iter().map(|s| s.to_string()).collect(),
+                            trip_engine::ParamKind::Choice(o) => o.iter().map(|s| s.to_string()).collect(),
                             _ => vec![],
                         },
                     )

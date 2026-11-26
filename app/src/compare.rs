@@ -4,9 +4,9 @@
 //! still wrong and why in a line each, and Redump's copy beside this one.
 
 use crate::theme::{font, state_icon, tnum, Pal};
-use drt_engine::{StepState, StepView};
-use drt_steps::real::mismatch::Mismatch;
 use egui::{pos2, vec2, Align2, RichText, Sense, Stroke, Ui};
+use trip_engine::{StepState, StepView};
+use trip_steps::real::mismatch::Mismatch;
 
 /// The comparison Check keeps in its record, if it held this dump.
 pub fn mismatch(v: &StepView) -> Option<Mismatch> {
@@ -36,7 +36,7 @@ pub fn redump_say(v: &StepView) -> String {
     }
     let n = v.status.strip_prefix("Found ").and_then(|s| s.split(' ').next()?.parse::<usize>().ok());
     match (v.status.as_str(), v.detail.as_str(), n) {
-        ("Not needed", drt_steps::real::game::CHECK_FOUND, _) => "Check and fix found the game by its checksums, so there was nothing to look up. Its match goes on to Choose.".into(),
+        ("Not needed", trip_steps::real::game::CHECK_FOUND, _) => "Check and fix found the game by its checksums, so there was nothing to look up. Its match goes on to Choose.".into(),
         ("Not needed", _, _) => "Nothing came from Check and fix, so there was nothing to look up.".into(),
         (s, d, Some(1)) => format!("{s} {d}. It doesn't have this copy's checksums, so Choose asks you whether it's the one."),
         (s, d, Some(_)) => format!("{s} {d}. None has this copy's checksums, so Choose asks you which it is."),
@@ -217,11 +217,11 @@ pub fn proof(ui: &mut Ui, p: &Pal, m: &Mismatch) {
             String::new()
         };
         heads(ui, p, &first);
-        let size = |x: &Option<drt_steps::real::mismatch::File>| match x {
+        let size = |x: &Option<trip_steps::real::mismatch::File>| match x {
             Some(f) => f.sectors().map(|n| format!("{} sectors", thousands(n))).unwrap_or_else(|| format!("{} bytes", thousands(f.size))),
             None => "none".to_owned(),
         };
-        let sum = |x: &Option<drt_steps::real::mismatch::File>| x.as_ref().map(|f| short(&f.sha1)).unwrap_or_else(|| "none".into());
+        let sum = |x: &Option<trip_steps::real::mismatch::File>| x.as_ref().map(|f| short(&f.sha1)).unwrap_or_else(|| "none".into());
         row(ui, p, "Size", &size(&f.expected), &size(&f.got), Some(f.size_ok()));
         row(ui, p, "SHA-1", &sum(&f.expected), &sum(&f.got), Some(f.sha1_ok()));
         ui.add_space(8.0);

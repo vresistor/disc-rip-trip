@@ -493,11 +493,11 @@ pub(crate) mod tests {
     }
 
     /// Reads whatever is in the drive. Run by hand with a disc in:
-    /// `cargo test -p drt-steps real_drive -- --ignored --nocapture`.
+    /// `cargo test -p trip-steps real_drive -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn real_drive() {
-        let dev = std::env::var("DRT_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
+        let dev = std::env::var("TRIP_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
         println!("{:?} (profile {:?})", read(&dev), current_profile(&dev));
     }
 }
@@ -545,7 +545,7 @@ mod picture_tests {
     /// Cut short or lying about their lengths: no size, and no panic.
     #[test]
     fn a_truncated_or_hostile_picture_is_no_panic() {
-        let dir = std::env::temp_dir().join(format!("drt-pic-bad-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-pic-bad-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("x");
         for b in [&b"\x89PNG"[..], b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0", b"\xFF\xD8", b"\xFF\xD8\xFF\xC0\0", b"\xFF\xD8\xFF\xE0\xFF\xFF\0\0\0\0\0\0", b"\xFF\xD8\xFF\xE0\0\0\0\0\0\0\0\0\0\0"] {
@@ -563,7 +563,7 @@ mod picture_tests {
 
     #[test]
     fn a_pngs_size_from_its_header() {
-        let dir = std::env::temp_dir().join(format!("drt-pic-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-pic-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("a.png");
         let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();

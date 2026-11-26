@@ -4,10 +4,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::snapshot::QuestionShape;
-use drt_engine::{Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Snapshot, Step, StepInfo, Subject};
 use std::path::{Path, PathBuf};
+use trip_engine::recipe::chain;
+use trip_engine::snapshot::QuestionShape;
+use trip_engine::{Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Snapshot, Step, StepInfo, Subject};
 
 /// Two encoded tracks, as an encoder would send them, with what the disc
 /// knew. `bytes[i]` is track i+1's content.
@@ -44,14 +44,14 @@ impl Step for Encoded {
 /// Runs Encoded → Folder → Cue sheet, answering any question with `pick`.
 /// Gives the run and the questions it asked.
 async fn run(base: &Path, bytes: [&'static str; 2], pick: usize) -> (Snapshot, Vec<String>) {
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Encoded { dir: base.join(format!("src-{}", bytes.join("-"))), bytes });
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
     e.work_root = base.join("runs");
     let lib = base.join("Music").display().to_string();
     let recipe = Recipe { name: "Folder".into(), root: chain([Node::step("src", "encoded"), Node::step("lib", "folder").with("folder", lib.as_str()), Node::step("cue", "cue")]) };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     let run = e.start(&recipe).unwrap();
     let mut rx = run.snapshot.clone();
     let mut asked = vec![];
@@ -89,7 +89,7 @@ fn names(base: &Path) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_folder_asks_once_and_the_cue_sheet_gets_the_names_it_chose() {
-    let base = std::env::current_dir().unwrap().join("../../target/drt-test/folder-names");
+    let base = std::env::current_dir().unwrap().join("../../target/trip-test/folder-names");
     let _ = std::fs::remove_dir_all(&base);
 
     // First time: nothing there, nothing asked.
@@ -111,7 +111,7 @@ async fn a_folder_asks_once_and_the_cue_sheet_gets_the_names_it_chose() {
     assert_eq!(std::fs::read_to_string(album(&base).join("02 - Violence.flac")).unwrap(), "a2", "the old file is untouched");
     let c = cue(&base);
     assert!(c.contains("FILE \"01 - Total Football (2).flac\" WAVE") && c.contains("FILE \"02 - Violence (2).flac\" WAVE"), "{c}");
-    assert!(s.steps["cue"].state == drt_engine::StepState::Ok, "{:?}", s.steps["cue"]);
+    assert!(s.steps["cue"].state == trip_engine::StepState::Ok, "{:?}", s.steps["cue"]);
 
     // Keep both again with the same new files: " (2)" holds them already,
     // so nothing more is made.
@@ -140,7 +140,7 @@ async fn a_folder_asks_once_and_the_cue_sheet_gets_the_names_it_chose() {
 #[tokio::test(flavor = "multi_thread")]
 async fn each_answer_does_what_it_says() {
     for (pick, what) in [(0, "replace"), (1, "keep-both"), (2, "skip")] {
-        let base = std::env::current_dir().unwrap().join(format!("../../target/drt-test/folder-answer-{what}"));
+        let base = std::env::current_dir().unwrap().join(format!("../../target/trip-test/folder-answer-{what}"));
         let _ = std::fs::remove_dir_all(&base);
         run(&base, ["a1", "a2"], pick).await;
         let before = cue(&base);

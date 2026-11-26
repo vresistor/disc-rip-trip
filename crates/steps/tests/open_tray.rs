@@ -1,4 +1,4 @@
-//! *Open tray* while Rip reads, with a stand-in for cyanrip (`DRT_CYANRIP`)
+//! *Open tray* while Rip reads, with a stand-in for cyanrip (`TRIP_CYANRIP`)
 //! and for the drive's "is there a disc?", so no drive is touched: the read
 //! is stopped by killing its cyanrip, the track waits for you saying why,
 //! nothing of the partial read goes on, and no read starts on an empty
@@ -6,13 +6,13 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, StepState, Subject};
-use drt_steps::real::{NO_DISC, TRAY_OPENED};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use trip_engine::recipe::chain;
+use trip_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, StepState, Subject};
+use trip_steps::real::{NO_DISC, TRAY_OPENED};
 
 const TOC: &str = "1 2 10000 150 1150";
 
@@ -93,28 +93,28 @@ struct Setup {
 }
 
 fn start(name: &str, slow: &str, disc_in: bool) -> (Setup, Run) {
-    let base = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+    let base = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
     let _ = std::fs::remove_dir_all(&base);
     let tools = base.join("tools");
     std::fs::create_dir_all(&tools).unwrap();
     let script = tools.join("cyanrip.py");
     std::fs::write(&script, FAKE).unwrap();
     let (log, pid) = (base.join("calls.log"), base.join("cyanrip.pid"));
-    std::env::set_var("DRT_CYANRIP", format!("python3 -I {}", script.display()));
+    std::env::set_var("TRIP_CYANRIP", format!("python3 -I {}", script.display()));
     std::env::set_var("FAKE_LOG", &log);
     std::env::set_var("FAKE_PID", &pid);
     std::env::set_var("SLOW", slow);
     let s = Setup { base, log, pid, disc_in: Arc::new(AtomicBool::new(disc_in)), sunk: Sink::default() };
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Disc);
     reg.add(s.sunk.clone());
     let has = s.disc_in.clone();
-    reg.add(drt_steps::real::Rip::with_flush(Arc::new(|_, _, _| Ok(()))).with_disc_check(Arc::new(move |_| has.load(Ordering::SeqCst))));
+    reg.add(trip_steps::real::Rip::with_flush(Arc::new(|_, _, _| Ok(()))).with_disc_check(Arc::new(move |_| has.load(Ordering::SeqCst))));
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
     e.work_root = s.base.join("runs");
     let recipe = Recipe { name: "Tray".into(), root: chain([Node::step("cd", "audio-cd"), Node::step("rip", "rip"), Node::step("sink", "test-sink")]) };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     let run = e.start(&recipe).unwrap();
     (s, run)
 }

@@ -11,10 +11,10 @@
 use super::{media, musicbrainz, place, Taken, There};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use drt_engine::{Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, Step, StepInfo, StepState, Subject};
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use trip_engine::{Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, Step, StepInfo, StepState, Subject};
 
 pub const SOURCE: &str = "Cover Art Archive";
 const CAA: &str = "https://coverartarchive.org";
@@ -189,7 +189,7 @@ pub struct Online {
 
 impl Online {
     pub fn new(cx: &Cx) -> Online {
-        Online { cx: Some(cx.clone()), cache: drt_engine::cache_dir().map(|d| d.join("cache").join("cover-art")) }
+        Online { cx: Some(cx.clone()), cache: trip_engine::cache_dir().map(|d| d.join("cache").join("cover-art")) }
     }
 
     /// Room in the archive's lane, when there's a run to have one.
@@ -402,13 +402,13 @@ pub fn best_front(fronts: &[Front], want: Option<u32>, bigger: bool, biggest: bo
 
 /// The question Cover art asks when you pick the cover: each front as a
 /// picture (`thumbs`, beside them), with where it's from and its size.
-pub fn cover_question(fronts: &[Front], thumbs: &[Option<PathBuf>], preselected: usize) -> drt_engine::Question {
+pub fn cover_question(fronts: &[Front], thumbs: &[Option<PathBuf>], preselected: usize) -> trip_engine::Question {
     let options = fronts
         .iter()
         .zip(thumbs)
-        .map(|(f, t)| drt_engine::Choice { label: f.words.clone(), detail: format!("{} × {}", f.size.0, f.size.1), destructive: false, picture: t.as_ref().map(|p| p.display().to_string()) })
+        .map(|(f, t)| trip_engine::Choice { label: f.words.clone(), detail: format!("{} × {}", f.size.0, f.size.1), destructive: false, picture: t.as_ref().map(|p| p.display().to_string()) })
         .collect();
-    drt_engine::Question { prompt: "Which cover?".into(), shape: drt_engine::QuestionShape::PickOne { options, preselected, details: None, skip: false } }
+    trip_engine::Question { prompt: "Which cover?".into(), shape: trip_engine::QuestionShape::PickOne { options, preselected, details: None, skip: false } }
 }
 
 /// A country as a person would say it, from MusicBrainz's code.
@@ -752,7 +752,7 @@ fn mb(bytes: u64) -> String {
 /// the edition Cover art took its front from (or the same search, without
 /// it). Gives them, the release they're of, and, for another edition, the
 /// words that tell it apart.
-pub async fn find_images(a: &dyn Archive, c: &drt_engine::Context, release: &str) -> Result<(Vec<Image>, String, Option<String>)> {
+pub async fn find_images(a: &dyn Archive, c: &trip_engine::Context, release: &str) -> Result<(Vec<Image>, String, Option<String>)> {
     let own = a.images(release).await?;
     if !own.is_empty() {
         return Ok((own, release.to_owned(), None));
@@ -902,7 +902,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn the_scans_of_the_release_or_failing_that_the_edition_cover_art_used() {
-        let mut c = drt_engine::Context::default();
+        let mut c = trip_engine::Context::default();
         c.add(Subject::Disc, "musicbrainz_releasegroupid", GROUP, "MusicBrainz");
         // Its own, even just a front.
         let (imgs, of, from) = find_images(&recorded(), &c, CHOSEN).await.unwrap();
@@ -914,7 +914,7 @@ pub mod tests {
         let (imgs, of, from) = find_images(&recorded(), &c, none).await.unwrap();
         assert_eq!((imgs.len(), of.as_str(), from.as_deref()), (2, "e51f6e37-2876-43a1-90b4-784e9dbd1d55", Some("A&M Records 31452 3787 2, US 1995")));
         // Without Cover art: the same search it would make.
-        let mut bare = drt_engine::Context::default();
+        let mut bare = trip_engine::Context::default();
         bare.add(Subject::Disc, "musicbrainz_releasegroupid", GROUP, "MusicBrainz");
         let (imgs, of, from) = find_images(&recorded(), &bare, none).await.unwrap();
         assert_eq!((imgs.len(), of.as_str()), (28, BIGGEST));
@@ -924,7 +924,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn a_kept_answer_is_used_and_a_failed_ask_falls_back_to_it() {
-        let dir = std::env::temp_dir().join(format!("drt-caa-cache-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-caa-cache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let v: Vec<u32> = cached(Some(&dir), "x.json", async { Ok(vec![1, 2]) }).await.unwrap();
         assert_eq!(v, [1, 2]);
@@ -971,7 +971,7 @@ pub mod tests {
         let thumbs: Vec<Option<PathBuf>> = (0..f.len()).map(|k| Some(PathBuf::from(format!("/w/{k}.jpg")))).collect();
         let q = cover_question(&f, &thumbs, 1);
         assert_eq!(q.prompt, "Which cover?");
-        let drt_engine::QuestionShape::PickOne { options, preselected, .. } = q.shape else { panic!() };
+        let trip_engine::QuestionShape::PickOne { options, preselected, .. } = q.shape else { panic!() };
         assert_eq!(preselected, 1);
         assert_eq!((options[1].label.as_str(), options[1].detail.as_str(), options[1].picture.as_deref()), ("Polydor, Europe 1995", "2813 × 2805", Some("/w/1.jpg")));
         assert!(f[1].elsewhere(4).is_some() && f[0].elsewhere(4).is_none());
@@ -988,11 +988,11 @@ pub mod tests {
     }
 
     /// The real archive and MusicBrainz for the same album. Needs the
-    /// network: `cargo test -p drt-steps ocean_drive -- --ignored`.
+    /// network: `cargo test -p trip-steps ocean_drive -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn ocean_drive_for_real() {
-        let cache = std::env::temp_dir().join(format!("drt-caa-real-{}", std::process::id()));
+        let cache = std::env::temp_dir().join(format!("trip-caa-real-{}", std::process::id()));
         let a = Online { cx: None, cache: Some(cache) };
         let e = bigger_front(&a, CHOSEN, GROUP, 500).await.unwrap().unwrap();
         assert_eq!((e.edition.id.as_str(), e.size), (BIGGEST, (2813, 2805)));
@@ -1000,7 +1000,7 @@ pub mod tests {
         let own = a.images(CHOSEN).await.unwrap();
         assert_eq!(own.len(), 1);
         // Its original, downloaded as Artwork files would.
-        let dest = std::env::temp_dir().join(format!("drt-caa-real-{}", std::process::id())).join("Front.jpg");
+        let dest = std::env::temp_dir().join(format!("trip-caa-real-{}", std::process::id())).join("Front.jpg");
         let mut said = 0;
         let n = download(&own[0].url(CHOSEN), &dest, |_, _| said += 1).await.unwrap();
         assert!(n > 0 && said > 0);

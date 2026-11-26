@@ -2,11 +2,12 @@
 
 <img src="docs/icon.png" width="112" alt="">
 
-# Disc Rip Trip
+# Trip
 
-**Put a disc in, get properly named, checked files in your library.**
+**A disc ripper for CDs, games and video.** Put a disc in, get properly
+named, checked files in your library.
 
-[![Build](https://github.com/vresistor/disc-rip-trip/actions/workflows/build.yml/badge.svg)](https://github.com/vresistor/disc-rip-trip/actions/workflows/build.yml)
+[![Build](https://github.com/vresistor/trip/actions/workflows/build.yml/badge.svg)](https://github.com/vresistor/trip/actions/workflows/build.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 <a href="docs/screenshots/rip-running-light.png"><picture>
@@ -16,7 +17,7 @@
 
 </div>
 
-Disc Rip Trip rips audio CDs, data discs, PlayStation games, DVDs and
+Trip rips audio CDs, data discs, PlayStation games, DVDs and
 Blu-rays on Linux. It finds out what the disc is. It checks that what
 it read is right. Then it files the results under the right names.
 
@@ -37,19 +38,19 @@ watch the steps while they run, and change them.
 
 Linux, x86_64.
 
-**The flatpak** is the easy way. Download `disc-rip-trip-*.flatpak`
-from [Releases](https://github.com/vresistor/disc-rip-trip/releases),
+**The flatpak** is the easy way. Download `trip-*.flatpak`
+from [Releases](https://github.com/vresistor/trip/releases),
 then:
 
 ```sh
-flatpak install --user ./disc-rip-trip-*.flatpak
+flatpak install --user ./trip-*.flatpak
 ```
 
 It brings cyanrip, redumper, ffmpeg and ffprobe with it.
 
 DVDs and Blu-rays also need [MakeMKV](https://www.makemkv.com). It's
 never bundled, since it decrypts copy protection (see THIRD-PARTY.md). Get the Flathub flatpak
-`com.makemkv.MakeMKV`, or get it from makemkv.com. Disc Rip Trip never
+`com.makemkv.MakeMKV`, or get it from makemkv.com. Trip never
 runs it until you say where it is: a recipe that reads video discs
 waits at its Video disc and Rip steps, which list the MakeMKVs found on
 your computer with **Use this**, or let you **Choose…** the program.
@@ -94,7 +95,7 @@ and it starts again, while the last one is still encoding.
 To try it without a disc, start it with `--simulate`:
 
 ```sh
-flatpak run io.github.vresistor.disc-rip-trip --simulate
+flatpak run io.github.vresistor.trip --simulate
 ```
 
 It makes up two drives and a disc of every kind. It doesn't touch your
@@ -210,19 +211,27 @@ You need:
 - a graphics driver with Vulkan or OpenGL. Mesa's is fine.
 
 ```sh
-git clone https://github.com/vresistor/disc-rip-trip
-cd disc-rip-trip
-cargo build --release -p drt-app -p drt   # target/release/disc-rip-trip and drt
-cargo run --release --bin disc-rip-trip -- --simulate  # made-up drives and discs, to try it out
+git clone https://github.com/vresistor/trip
+cd trip
+cargo build --release -p trip-app -p tripr   # target/release/trip and tripr
+cargo run --release --bin trip -- --simulate  # made-up drives and discs, to try it out
 ```
 
-There's also `drt`, which runs a recipe in the terminal:
+There's also `tripr`, for a terminal. It runs the built-in audio CD
+recipes (CDs, or the bigger archive one) without the window, against a
+real drive or a simulated disc for testing:
 
 ```sh
-cargo run --bin drt -- --simulate                           # the CDs recipe, simulated
-cargo run --bin drt -- --recipe archive --simulate --bad 9  # track 9 fails to verify
-cargo run --bin drt -- --help
+cargo run --bin tripr -- --simulate                           # the CDs recipe, simulated
+cargo run --bin tripr -- --recipe archive --simulate --bad 9  # track 9 fails to verify
+cargo run --bin tripr -- --help
 ```
+
+It also has two one-off repair commands for files an older version made:
+`tripr fix-tags FOLDER` mends two tagging mistakes in audio filed before
+20 November 2026, and `tripr rename-full-copies FOLDER` gives plain disc
+images Redump's names. Both only list what they would change until you
+add `--apply`.
 
 Tests: `cargo test --workspace`. The window tests save a picture of
 every state they reach to `app/shots/`.
@@ -234,8 +243,8 @@ The first time, it fetches the SDK and the tools.
 ## Tools to install
 
 A build from source runs these programs. It looks for each one on your
-`PATH`. You can also point at one with `DRT_<NAME>`, for example
-`DRT_CYANRIP=/opt/cyanrip/bin/cyanrip`. If one is missing, the window
+`PATH`. You can also point at one with `TRIP_<NAME>`, for example
+`TRIP_CYANRIP=/opt/cyanrip/bin/cyanrip`. If one is missing, the window
 says so at the top. The flatpak has all of them but MakeMKV.
 
 | Tool | Needed for | Getting it |
@@ -270,16 +279,16 @@ uses it, and every recipe shares it.
 
 | What | Where |
 |---|---|
-| Recipes and settings | `~/.config/disc-rip-trip/` (`recipes.json`, `settings.json`). `--simulate` uses a `simulate/` folder inside it. |
-| A run's working files | `~/.cache/disc-rip-trip/runs/`. Once everything a run made is filed, its folder is deleted (when the next disc replaces it, if the run still offers a retry). One stopped before anything was encoded goes once replaced, or at start-up after a day. One holding encoded files that were never filed (say the network share was down) is never deleted by itself: **Working files**, at the foot of the recipe list, lists it to open or delete. The small `runs/*.json` records stay. |
-| Downloaded lists (drive offsets, Redump) | `~/.cache/disc-rip-trip/cache/` |
+| Recipes and settings | `~/.config/trip/` (`recipes.json`, `settings.json`). `--simulate` uses a `simulate/` folder inside it. |
+| A run's working files | `~/.cache/trip/runs/`. Once everything a run made is filed, its folder is deleted (when the next disc replaces it, if the run still offers a retry). One stopped before anything was encoded goes once replaced, or at start-up after a day. One holding encoded files that were never filed (say the network share was down) is never deleted by itself: **Working files**, at the foot of the recipe list, lists it to open or delete. The small `runs/*.json` records stay. |
+| Downloaded lists (drive offsets, Redump) | `~/.cache/trip/cache/` |
 
 These follow `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` if you set them.
 
-The flatpak keeps them in `~/.var/app/io.github.vresistor.disc-rip-trip/`
-(`config/disc-rip-trip/`, `cache/disc-rip-trip/`). The first time it
+The flatpak keeps them in `~/.var/app/io.github.vresistor.trip/`
+(`config/trip/`, `cache/trip/`). The first time it
 starts, if it has no recipes yet, it copies `recipes.json` and
-`settings.json` from `~/.config/disc-rip-trip/`. So a build from source
+`settings.json` from `~/.config/trip/`. So a build from source
 and the flatpak start out the same.
 
 If `recipes.json` or `settings.json` can't be read, the app never

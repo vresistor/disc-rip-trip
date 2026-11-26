@@ -2,12 +2,12 @@
 //! real ffmpeg and ffprobe with a made-up MKV (no disc). Ignored by default:
 //! it needs ffmpeg with libx265, libsvtav1 and libopus on the PATH.
 //!
-//! cargo test -p drt-steps --test video_tools -- --ignored
+//! cargo test -p trip-steps --test video_tools -- --ignored
 
-use drt_steps::real::video::{makemkv, transcode};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
+use trip_steps::real::video::{makemkv, transcode};
 
 fn ffmpeg(dir: &Path, args: &[String]) {
     let out = Command::new("ffmpeg").current_dir(dir).args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y"]).args(args).output().unwrap();
@@ -28,7 +28,7 @@ fn s(v: &[&str]) -> Vec<String> {
 #[test]
 #[ignore]
 fn the_arguments_work_on_a_real_ffmpeg_and_a_whole_file_passes_the_check() {
-    let dir = std::env::temp_dir().join(format!("drt-video-tools-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("trip-video-tools-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     ffmpeg(
         &dir,

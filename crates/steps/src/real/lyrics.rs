@@ -12,9 +12,9 @@
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use drt_engine::{Cx, Group, Inlet, ItemKind, ItemState, LaneKind, Outlet, Step, StepInfo, Subject};
 use serde::Deserialize;
 use std::time::Duration;
+use trip_engine::{Cx, Group, Inlet, ItemKind, ItemState, LaneKind, Outlet, Step, StepInfo, Subject};
 
 const API: &str = "https://lrclib.net/api/get";
 const SOURCE: &str = "LRCLIB";
@@ -104,7 +104,7 @@ pub fn lrc(title: &str, artist: &str, album: &str, synced: &str) -> String {
 
 /// The `.lrc` for a track filed at `dest`, when Lyrics found synced
 /// lyrics for it: `01 - Title.flac` gets `01 - Title.lrc`.
-pub fn lrc_file(c: &drt_engine::Context, t: u32, dest: &std::path::Path) -> Option<(std::path::PathBuf, String)> {
+pub fn lrc_file(c: &trip_engine::Context, t: u32, dest: &std::path::Path) -> Option<(std::path::PathBuf, String)> {
     if c.get(Subject::Part(t), "lyrics.synced") != Some("yes") {
         return None;
     }
@@ -167,7 +167,7 @@ impl Step for Lyric {
             let (mut found, mut synced, mut failures, mut last_error) = (0, 0, 0, String::new());
             // Each track, as an item: synced, plain, or none (left out).
             let mut missing: Vec<u32> = vec![];
-            let track = |disc: &drt_engine::Item, t: u32| drt_engine::Item::track(t, disc.context().get(Subject::Part(t), "title").unwrap_or("").to_owned());
+            let track = |disc: &trip_engine::Item, t: u32| trip_engine::Item::track(t, disc.context().get(Subject::Part(t), "title").unwrap_or("").to_owned());
             for t in 1..=n {
                 // The release Choose settled, on the disc.
                 let (artist, title, album, seconds) = {
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn lyrics_travel_on_the_tracks_to_the_tags_and_the_lrc_files() {
-        let mut c = drt_engine::Context::default();
+        let mut c = trip_engine::Context::default();
         c.add(Subject::Disc, "parts", "2", "test");
         c.add(Subject::Part(1), "title", "Jimmy the Exploder", "test");
         c.add(Subject::Part(1), "lyrics", "[00:31.55]Now, Jimmy", SOURCE);

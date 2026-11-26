@@ -71,7 +71,7 @@ jobs:
       - name: Tests
         env:
           # Animations off, so the window tests are steady.
-          DRT_REDUCED_MOTION: "1"
+          TRIP_REDUCED_MOTION: "1"
         run: cargo test --workspace
 
   # Linux x86_64 only: the app doesn't build for Windows or macOS yet
@@ -98,10 +98,10 @@ jobs:
       # file, before spending time on the build.
       - name: Lint the manifest and metainfo
         run: |
-          flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest packaging/flatpak/io.github.vresistor.disc-rip-trip.yml
-          sed 's/@VERSION@/0.0.0/; s/@DATE@/2026-01-01/' packaging/flatpak/io.github.vresistor.disc-rip-trip.metainfo.xml >"$RUNNER_TEMP/io.github.vresistor.disc-rip-trip.metainfo.xml"
-          flatpak run --filesystem="$RUNNER_TEMP" --command=appstreamcli org.flatpak.Builder validate --no-net "$RUNNER_TEMP/io.github.vresistor.disc-rip-trip.metainfo.xml"
-          flatpak run --command=desktop-file-validate org.flatpak.Builder packaging/flatpak/io.github.vresistor.disc-rip-trip.desktop
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest packaging/flatpak/io.github.vresistor.trip.yml
+          sed 's/@VERSION@/0.0.0/; s/@DATE@/2026-01-01/' packaging/flatpak/io.github.vresistor.trip.metainfo.xml >"$RUNNER_TEMP/io.github.vresistor.trip.metainfo.xml"
+          flatpak run --filesystem="$RUNNER_TEMP" --command=appstreamcli org.flatpak.Builder validate --no-net "$RUNNER_TEMP/io.github.vresistor.trip.metainfo.xml"
+          flatpak run --command=desktop-file-validate org.flatpak.Builder packaging/flatpak/io.github.vresistor.trip.desktop
 
       # cyanrip is built from source, so the tools are kept until the scripts
       # that make them change.
@@ -143,7 +143,7 @@ jobs:
       - name: Upload the bundle
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: disc-rip-trip-flatpak
+          name: trip-flatpak
           retention-days: 14
           if-no-files-found: error
           path: |
@@ -161,7 +161,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: disc-rip-trip-flatpak
+          name: trip-flatpak
           path: dist
 
       - name: Make the draft release
@@ -171,16 +171,16 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           gh release create "$TAG" --repo "$REPO" --draft \
-            --title "Disc Rip Trip $TAG" \
+            --title "Trip $TAG" \
             --notes-file - dist/*.flatpak dist/tools-provenance.txt <<'EOF'
           **Installing.** Download the `.flatpak` and run
-          `flatpak install --user ./disc-rip-trip-*.flatpak`. It brings
+          `flatpak install --user ./trip-*.flatpak`. It brings
           cyanrip, redumper, ffmpeg and ffprobe with it.
 
           **MakeMKV is a separate install** and is not bundled; the app tells
           you where to get it.
 
           Licensing, and the source of the bundled GPL tools, are in
-          [THIRD-PARTY.md](https://github.com/vresistor/disc-rip-trip/blob/main/THIRD-PARTY.md)
+          [THIRD-PARTY.md](https://github.com/vresistor/trip/blob/main/THIRD-PARTY.md)
           and `tools-provenance.txt`.
           EOF

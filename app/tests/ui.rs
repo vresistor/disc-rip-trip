@@ -3,9 +3,6 @@
 //! its config in a temporary folder, and leaves screenshots of the states
 //! it passes through in `app/shots/`, light and dark.
 
-use drt_app::{App, Deps, Model, Store, Tray, Window};
-use drt_engine::{Engine, ItemState, Node, Recipe, Setting, Settings, StepState};
-use drt_steps::{recipes, simulated};
 use egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
@@ -13,6 +10,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use trip_app::{App, Deps, Model, Store, Tray, Window};
+use trip_engine::{Engine, ItemState, Node, Recipe, Setting, Settings, StepState};
+use trip_steps::{recipes, simulated};
 
 struct Env {
     _rt: tokio::runtime::Runtime,
@@ -29,7 +29,7 @@ struct Env {
     /// Folders are really looked at (else every one can take a disc).
     folders: bool,
     /// How MakeMKV is found and run: not needed, unless a test says.
-    makemkv: drt_app::makemkv::Hooks,
+    makemkv: trip_app::makemkv::Hooks,
 }
 
 fn env() -> Env {
@@ -42,7 +42,7 @@ fn env() -> Env {
         tests_sent: Arc::default(),
         trays: Arc::default(),
         folders: false,
-        makemkv: drt_app::makemkv::Hooks::not_needed(),
+        makemkv: trip_app::makemkv::Hooks::not_needed(),
     }
 }
 
@@ -56,7 +56,7 @@ fn window_at<'a>(e: &Env, bad: Option<u32>, offsets: bool, time_scale: f64, size
     window_on(e, simulated(bad), offsets, time_scale, size, ppp)
 }
 
-fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: f64, size: egui::Vec2, ppp: f32) -> Harness<'a, Window> {
+fn window_on<'a>(e: &Env, reg: trip_engine::Registry, offsets: bool, time_scale: f64, size: egui::Vec2, ppp: f32) -> Harness<'a, Window> {
     let mut engine = Engine::new(reg);
     engine.time_scale = time_scale;
     engine.work_root = e.dir.path().join("work");
@@ -73,7 +73,7 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
         // Only the test's own folders: never this computer's.
         reach: if e.folders {
             let mine = e.dir.path().to_owned();
-            Arc::new(move |p, need| if p.starts_with(&mine) { drt_steps::real::reach::look(p, need, drt_steps::real::reach::statvfs_free) } else { Ok(()) })
+            Arc::new(move |p, need| if p.starts_with(&mine) { trip_steps::real::reach::look(p, need, trip_steps::real::reach::statvfs_free) } else { Ok(()) })
         } else {
             Arc::new(|_, _| Ok(()))
         },
@@ -130,7 +130,7 @@ fn window_on<'a>(e: &Env, reg: drt_engine::Registry, offsets: bool, time_scale: 
         .with_size(size)
         .with_pixels_per_point(ppp)
         .with_render_cursor(false)
-        .with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts()))
+        .with_context_setup(|ctx| ctx.set_fonts(trip_app::theme::fonts()))
         .wgpu_setup(renderer())
         .build_eframe(|_| Window(app));
     h.run_steps(3);
@@ -171,7 +171,7 @@ fn until(h: &mut Harness<Window>, what: &str, cond: impl Fn(&App) -> bool) {
     h.run_steps(3);
 }
 
-fn snap(h: &Harness<Window>) -> drt_engine::Snapshot {
+fn snap(h: &Harness<Window>) -> trip_engine::Snapshot {
     let a = app(h);
     a.m.snapshot(a.sel)
 }
@@ -365,7 +365,7 @@ fn a_bad_track_is_retried_from_its_row() {
     until(&mut h, "FLAC done", |a| a.m.snapshot(0).steps["flac"].state == StepState::Ok);
     let all = cards(&mut h);
     let get = |id: &str| &all.iter().find(|(x, _)| x == id).unwrap().1;
-    use drt_app::card::Cell;
+    use trip_app::card::Cell;
     assert_eq!(get("rip").cells[8], Cell::Out);
     assert_eq!(get("flac").cells, vec![Cell::Done; 16]);
 }
@@ -496,18 +496,18 @@ fn an_unknown_offset_is_looked_up_at_once() {
 /// The sim Drive, with a lookup that takes a while, or that fails unless
 /// it may measure.
 struct TestDrive {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     /// The lookup waits until this is set.
     release: Arc<std::sync::atomic::AtomicBool>,
     only_by_measuring: bool,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestDrive {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestDrive {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         self.inner.run(inlet, outlet, cx).await
     }
     async fn find(&self, key: &str, drive: &str, measure: bool) -> Option<(Value, String)> {
@@ -521,7 +521,7 @@ impl drt_engine::Step for TestDrive {
     }
 }
 
-fn registry_with(drive: TestDrive) -> drt_engine::Registry {
+fn registry_with(drive: TestDrive) -> trip_engine::Registry {
     let mut reg = simulated(None);
     reg.add(drive);
     reg
@@ -583,16 +583,16 @@ fn next_disc_leads_back_to_the_drive_on_the_canvas() {
 /// The sim Hold, but it takes nothing in until `open` is set: so a test
 /// can have the next disc start before the first disc's Hold waits for you.
 struct LatchedHold {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     open: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for LatchedHold {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for LatchedHold {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         while !self.open.load(std::sync::atomic::Ordering::SeqCst) {
             cx.sleep(5).await?;
         }
@@ -603,17 +603,17 @@ impl drt_engine::Step for LatchedHold {
 /// The sim Folder, but the one filing into `folder` takes nothing in until
 /// `open` is set.
 struct LatchedFolder {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     folder: &'static str,
     open: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for LatchedFolder {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for LatchedFolder {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         while cx.text("folder") == self.folder && !self.open.load(std::sync::atomic::Ordering::SeqCst) {
             cx.sleep(5).await?;
         }
@@ -622,7 +622,7 @@ impl drt_engine::Step for LatchedFolder {
 }
 
 /// The sim steps with the Hold latched shut, and the latch.
-fn latched_hold(mut reg: drt_engine::Registry) -> (drt_engine::Registry, Arc<std::sync::atomic::AtomicBool>) {
+fn latched_hold(mut reg: trip_engine::Registry) -> (trip_engine::Registry, Arc<std::sync::atomic::AtomicBool>) {
     let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let inner = simulated(None).get("hold").unwrap().0;
     reg.add(LatchedHold { inner, open: open.clone() });
@@ -805,11 +805,11 @@ fn a_recipe_without_next_disc_does_one_disc() {
         assert!(start.elapsed() < Duration::from_secs(30), "the archive never finished");
         let s = app(&h).m.snapshot(1);
         if let Some((step, _)) = &s.question {
-            app(&h).m.send(1, drt_engine::Command::Answer { step: step.clone(), answer: drt_engine::Answer::Pick(0) });
+            app(&h).m.send(1, trip_engine::Command::Answer { step: step.clone(), answer: trip_engine::Answer::Pick(0) });
         }
         for (id, v) in &s.steps {
             if v.state == StepState::Hold && v.detail == "All here" {
-                app(&h).m.send(1, drt_engine::Command::Approve { step: id.clone() });
+                app(&h).m.send(1, trip_engine::Command::Approve { step: id.clone() });
             }
         }
         h.step();
@@ -1062,10 +1062,10 @@ fn a_scroll_over_the_sidebar_scrolls_it_not_the_canvas() {
 fn steps_that_arent_available_are_shown_muted_and_can_be_removed() {
     let e = env();
     let size = egui::vec2(1280.0, 720.0);
-    let h = window_on(&e, drt_steps::real(), true, 1.0, size, 1.0);
+    let h = window_on(&e, trip_steps::real(), true, 1.0, size, 1.0);
     let names: Vec<String> = saved_recipes(&e).into_iter().map(|r| r.name).collect();
-    let real = drt_steps::real();
-    let runnable: Vec<String> = recipes::all().into_iter().filter(|r| drt_engine::check(&r.root, &real).is_ok()).map(|r| r.name).collect();
+    let real = trip_steps::real();
+    let runnable: Vec<String> = recipes::all().into_iter().filter(|r| trip_engine::check(&r.root, &real).is_ok()).map(|r| r.name).collect();
     assert_eq!(names, runnable, "only the recipes these steps can run are seeded");
     drop(h);
     // A recipes.json with a step no build has (here GnuDB, renamed) is
@@ -1118,7 +1118,7 @@ fn a_step_added_with_a_plus_is_a_draft_until_saved() {
     assert_eq!(app(&h).selected.as_deref(), Some("discogs"));
     let draft = ids(&app(&h).m.recipes[0]);
     assert!(draft.contains(&"discogs".to_owned()));
-    drt_engine::check(&app(&h).m.recipes[0].root, &app(&h).m.engine.registry).unwrap();
+    trip_engine::check(&app(&h).m.recipes[0].root, &app(&h).m.engine.registry).unwrap();
     assert!(!ids(&saved_recipes(&e)[0]).contains(&"discogs".into()), "not saved yet");
     assert_eq!(app(&h).m.cant_start(0).as_deref(), Some("Save or cancel your edits first"));
     shot(&mut h, "edit-header");
@@ -1191,7 +1191,7 @@ fn removing_a_step_takes_what_depends_on_it_after_a_confirm() {
     click(&mut h, "Remove");
     let left = ids(&app(&h).m.recipes[0]);
     assert_eq!(left, ["drive", "cd", "mb", "cdtext", "choose", "art"]);
-    drt_engine::check(&app(&h).m.recipes[0].root, &app(&h).m.engine.registry).expect("never left invalid");
+    trip_engine::check(&app(&h).m.recipes[0].root, &app(&h).m.engine.registry).expect("never left invalid");
     click(&mut h, "Save");
     assert_eq!(ids(&saved_recipes(&e)[0]), left);
     // Only the last step is kept.
@@ -1221,7 +1221,7 @@ fn a_new_branch_from_the_plus() {
     h.get_by_label("Next disc").click_accesskit();
     h.run_steps(2);
     let r = app(&h).m.recipes[0].clone();
-    drt_engine::check(&r.root, &app(&h).m.engine.registry).unwrap();
+    trip_engine::check(&r.root, &app(&h).m.engine.registry).unwrap();
     let Node::Chain { nodes } = &r.root else { panic!() };
     let Node::Branches { branches } = nodes.last().unwrap() else { panic!("{:?}", nodes.last()) };
     assert_eq!(branches.len(), 3, "beside FLAC and MP3");
@@ -1234,7 +1234,7 @@ fn a_new_branch_from_the_plus() {
                 let mut t = r.root.clone();
                 let n = Node::step("t", info.kind);
                 assert!(if as_branch { t.add_branch_after("rip", n) } else { t.insert_after("rip", n) });
-                drt_engine::check(&t, &m.engine.registry).unwrap_or_else(|e| panic!("{} offered but {e}", info.name));
+                trip_engine::check(&t, &m.engine.registry).unwrap_or_else(|e| panic!("{} offered but {e}", info.name));
             }
         }
     }
@@ -1268,19 +1268,19 @@ fn a_busy_drive_shows_on_its_cards_and_tiles() {
 /// Cover art that finds a real image: a small PNG it writes, so the sidebar
 /// can show it.
 struct TestCover {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     png: PathBuf,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestCover {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestCover {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         while let Some(mut disc) = inlet.recv().await {
             let png = self.png.display().to_string();
-            disc.context_mut().add(drt_engine::Subject::Disc, "cover", png, "Cover Art Archive");
+            disc.context_mut().add(trip_engine::Subject::Disc, "cover", png, "Cover Art Archive");
             // Its own output, which its card shows.
             cx.made(&self.png);
             cx.status("240 × 240", "");
@@ -1350,19 +1350,19 @@ fn every_kind_of_step_sidebar() {
     shot(&mut h, "step-cd-text");
     app_mut(&mut h).close_tray();
     let step = snap(&h).question.unwrap().0;
-    app(&h).m.send(0, drt_engine::Command::Answer { step, answer: drt_engine::Answer::Pick(0) });
+    app(&h).m.send(0, trip_engine::Command::Answer { step, answer: trip_engine::Answer::Pick(0) });
     until(&mut h, "a damaged track", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Bad) == 1 && a.m.snapshot(0).steps["rip"].count(ItemState::Ok) == 16);
     open_tile(&mut h, "Rip,");
     shot(&mut h, "step-rip");
     open_tile(&mut h, "Choose,");
     shot(&mut h, "step-chosen");
     open_tile(&mut h, "Cover art,");
-    until(&mut h, "the cover", |a| a.covers.values().any(|c| matches!(c, drt_app::tray::Cover::Ready(..))));
+    until(&mut h, "the cover", |a| a.covers.values().any(|c| matches!(c, trip_app::tray::Cover::Ready(..))));
     shot(&mut h, "step-cover");
     open_tile(&mut h, "FLAC,");
     shot(&mut h, "step-encoder");
     // Keep the bad track, then the hold.
-    app(&h).m.send(0, drt_engine::Command::Retry { step: "rip".into(), item: "track-9".into(), option: "keep".into() });
+    app(&h).m.send(0, trip_engine::Command::Retry { step: "rip".into(), item: "track-9".into(), option: "keep".into() });
     until(&mut h, "the hold", |a| a.m.snapshot(0).steps["hold"].detail == "All here");
     open_tile(&mut h, "Hold,");
     shot(&mut h, "step-hold");
@@ -1373,17 +1373,17 @@ fn every_kind_of_step_sidebar() {
 /// Cover art whose front came from another edition of the album, as the
 /// real step says it.
 struct TestEditionCover {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     png: PathBuf,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestEditionCover {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestEditionCover {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_steps::real::artwork;
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_steps::real::artwork;
         while let Some(mut disc) = inlet.recv().await {
             let e = artwork::Elsewhere {
                 edition: artwork::Edition { id: "887fdba3-6599-4c00-80a5-ee30bcdde469".into(), ..Default::default() },
@@ -1392,11 +1392,11 @@ impl drt_engine::Step for TestEditionCover {
                 measured: 4,
             };
             let c = disc.context_mut();
-            c.add(drt_engine::Subject::Disc, "cover", self.png.display().to_string(), "Cover Art Archive");
-            c.add(drt_engine::Subject::Disc, artwork::COVER_RELEASE, e.edition.id.clone(), "Cover Art Archive");
-            c.add(drt_engine::Subject::Disc, artwork::COVER_FROM, e.words.clone(), "Cover Art Archive");
+            c.add(trip_engine::Subject::Disc, "cover", self.png.display().to_string(), "Cover Art Archive");
+            c.add(trip_engine::Subject::Disc, artwork::COVER_RELEASE, e.edition.id.clone(), "Cover Art Archive");
+            c.add(trip_engine::Subject::Disc, artwork::COVER_FROM, e.words.clone(), "Cover Art Archive");
             cx.made(&self.png);
-            let (status, detail) = drt_steps::real::cover_says(Some((1200, 1197)), Some(&e));
+            let (status, detail) = trip_steps::real::cover_says(Some((1200, 1197)), Some(&e));
             cx.status(status, detail);
             outlet.send(disc).await;
         }
@@ -1423,11 +1423,11 @@ fn a_cover_from_another_edition_and_every_scan() {
         assert!(start.elapsed() < Duration::from_secs(30), "the archive never finished");
         let s = app(&h).m.snapshot(1);
         if let Some((step, _)) = &s.question {
-            app(&h).m.send(1, drt_engine::Command::Answer { step: step.clone(), answer: drt_engine::Answer::Pick(0) });
+            app(&h).m.send(1, trip_engine::Command::Answer { step: step.clone(), answer: trip_engine::Answer::Pick(0) });
         }
         for (id, v) in &s.steps {
             if v.state == StepState::Hold && v.detail == "All here" {
-                app(&h).m.send(1, drt_engine::Command::Approve { step: id.clone() });
+                app(&h).m.send(1, trip_engine::Command::Approve { step: id.clone() });
             }
         }
         h.step();
@@ -1441,7 +1441,7 @@ fn a_cover_from_another_edition_and_every_scan() {
     let art = &all.iter().find(|(x, _)| x == "a_art").unwrap().1;
     assert_eq!(art.detail, "From another edition", "whole, not cut short");
     open_tile(&mut h, "Cover art,");
-    until(&mut h, "the cover", |a| a.covers.values().any(|c| matches!(c, drt_app::tray::Cover::Ready(..))));
+    until(&mut h, "the cover", |a| a.covers.values().any(|c| matches!(c, trip_app::tray::Cover::Ready(..))));
     shot(&mut h, "step-cover-edition");
     // It opens at full size, from its link or the picture itself.
     click(&mut h, "Open full size");
@@ -1475,27 +1475,27 @@ fn a_cover_from_another_edition_and_every_scan() {
 /// Cover art set to let you pick: three fronts to choose from, as the real
 /// step puts them.
 struct TestPickCover {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     pngs: Vec<PathBuf>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestPickCover {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestPickCover {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_steps::real::artwork::{cover_question, Edition, Front};
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_steps::real::artwork::{cover_question, Edition, Front};
         while let Some(mut disc) = inlet.recv().await {
             let front = |words: &str, size, own| Front { edition: Edition::default(), size, words: words.into(), own };
             let fronts = [front("This release", (491, 500), true), front("Polydor, Europe 1995", (2813, 2805), false), front("A&M Records 31452 3787 2, US 1995", (1902, 1858), false)];
             let thumbs: Vec<Option<PathBuf>> = self.pngs.iter().cloned().map(Some).collect();
             let answer = cx.ask(cover_question(&fronts, &thumbs, 1)).await?;
             let k = match answer {
-                drt_engine::Answer::Pick(k) => k,
+                trip_engine::Answer::Pick(k) => k,
                 _ => 1,
             };
-            disc.context_mut().add(drt_engine::Subject::Disc, "cover", self.pngs[k].display().to_string(), "Cover Art Archive");
+            disc.context_mut().add(trip_engine::Subject::Disc, "cover", self.pngs[k].display().to_string(), "Cover Art Archive");
             cx.made(&self.pngs[k]);
             cx.status(format!("picked {}", fronts[k].words), "");
             outlet.send(disc).await;
@@ -1525,12 +1525,12 @@ fn a_cover_is_picked_from_pictures() {
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     click(&mut h, "Start");
     until(&mut h, "Which album?", |a| a.m.snapshot(0).question.as_ref().is_some_and(|(s, _)| s == "choose"));
-    app(&h).m.send(0, drt_engine::Command::Answer { step: "choose".into(), answer: drt_engine::Answer::Pick(0) });
+    app(&h).m.send(0, trip_engine::Command::Answer { step: "choose".into(), answer: trip_engine::Answer::Pick(0) });
     until(&mut h, "Which cover?", |a| a.m.snapshot(0).question.as_ref().is_some_and(|(_, q)| q.prompt == "Which cover?"));
     let step = snap(&h).question.unwrap().0;
     app_mut(&mut h).open(Tray::Question { step: step.clone() });
     h.run_steps(3);
-    until(&mut h, "the fronts", |a| a.covers.values().filter(|c| matches!(c, drt_app::tray::Cover::Ready(..))).count() >= 3);
+    until(&mut h, "the fronts", |a| a.covers.values().filter(|c| matches!(c, trip_app::tray::Cover::Ready(..))).count() >= 3);
     shot(&mut h, "question-cover");
     // The biggest is picked to start with.
     assert!(h.get_by_label("Polydor, Europe 1995, 2813 × 2805").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True));
@@ -1551,7 +1551,7 @@ fn the_sidebar_keeps_inside_a_narrow_window() {
     let mut h = window_at(&e, Some(9), true, 0.0, egui::vec2(800.0, 600.0), 1.0);
     click(&mut h, "Start");
     until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
-    app(&h).m.send(0, drt_engine::Command::Answer { step: "choose".into(), answer: drt_engine::Answer::Pick(0) });
+    app(&h).m.send(0, trip_engine::Command::Answer { step: "choose".into(), answer: trip_engine::Answer::Pick(0) });
     until(&mut h, "a damaged track", |a| a.m.snapshot(0).steps["rip"].count(ItemState::Bad) == 1 && a.m.snapshot(0).steps["rip"].count(ItemState::Ok) == 16);
     let inside = |h: &Harness<Window>, what: &str| {
         let d = app(h).side_rect().unwrap();
@@ -1574,7 +1574,7 @@ fn the_sidebar_keeps_inside_a_narrow_window() {
     open_tile(&mut h, "Rip,");
     assert!(!app(&h).cut_titles.contains(&"Broken Bricks".to_owned()), "cut at 800: {:?}", app(&h).cut_titles);
     inside(&h, "Rip");
-    app(&h).m.send(0, drt_engine::Command::Retry { step: "rip".into(), item: "track-9".into(), option: "keep".into() });
+    app(&h).m.send(0, trip_engine::Command::Retry { step: "rip".into(), item: "track-9".into(), option: "keep".into() });
     until(&mut h, "the hold", |a| a.m.snapshot(0).steps["hold"].detail == "All here");
     open_tile(&mut h, "Hold,");
     inside(&h, "the held Library");
@@ -1583,16 +1583,16 @@ fn the_sidebar_keeps_inside_a_narrow_window() {
 /// FLAC that reports progress as the real encoder does, and holds two
 /// tracks part done until let go.
 struct TestEncoder {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     release: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestEncoder {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestEncoder {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         let mut items = vec![];
         while let Some(it) = inlet.recv().await {
             items.push(it);
@@ -1612,7 +1612,7 @@ impl drt_engine::Step for TestEncoder {
         }
         for it in items {
             cx.item(&it, ItemState::Ok, "");
-            outlet.send(it.becomes(drt_engine::ItemKind::AudioFile, None)).await;
+            outlet.send(it.becomes(trip_engine::ItemKind::AudioFile, None)).await;
         }
         Ok(())
     }
@@ -1717,7 +1717,7 @@ fn plus_at(h: &Harness<Window>, after: &str) -> (egui::Pos2, f32) {
     let lay = a.layout(a.sel);
     let (_, (x, y)) = lay.pluses.iter().find(|(id, _)| id == after).unwrap().clone();
     let v = a.views_of(a.sel);
-    (a.canvas_rect().min + v.pan + egui::vec2(x, y) * v.zoom, drt_layout::PLUS_R * v.zoom)
+    (a.canvas_rect().min + v.pan + egui::vec2(x, y) * v.zoom, trip_layout::PLUS_R * v.zoom)
 }
 
 #[test]
@@ -1732,7 +1732,7 @@ fn the_plus_opens_a_popover_beside_it_with_a_search() {
     let pr = app(&h).popover_rect;
     assert!((pr.left() - (plus.x + r + 10.0)).abs() < 1.0 || (pr.right() - (plus.x - r - 10.0)).abs() < 1.0, "{pr:?} by {plus:?}");
     assert!(app(&h).canvas_rect().contains_rect(pr));
-    assert!((pr.width() - drt_app::popover::WIDTH).abs() < 2.0 && pr.height() <= drt_app::popover::MAX_HEIGHT + 1.0, "{pr:?} {}x{}", pr.width(), pr.height());
+    assert!((pr.width() - trip_app::popover::WIDTH).abs() < 2.0 && pr.height() <= trip_app::popover::MAX_HEIGHT + 1.0, "{pr:?} {}x{}", pr.width(), pr.height());
     assert!(app(&h).tray.is_none(), "not the sidebar");
     // The search has the keys at once, and filters by name.
     h.event(egui::Event::Text("gnu".into()));
@@ -1866,7 +1866,7 @@ fn in_edit_mode_the_header_renames_duplicates_and_deletes() {
     // Delete asks in the header, then goes; the next one along is shown.
     // The title field holds the whole name.
     let field = h.get_by_label("Recipe name").rect();
-    let text = h.ctx.fonts_mut(|f| f.layout_no_wrap("Music copy".into(), drt_app::theme::font(17.0, 700), egui::Color32::WHITE).size().x);
+    let text = h.ctx.fonts_mut(|f| f.layout_no_wrap("Music copy".into(), trip_app::theme::font(17.0, 700), egui::Color32::WHITE).size().x);
     assert!(field.width() >= text + 16.0, "field {} for text {text}", field.width());
     click(&mut h, "Delete");
     h.get_by_label("Delete Music copy?");
@@ -2250,7 +2250,7 @@ fn the_window_draws_its_own_frame() {
     let e = env();
     let mut h = window(&e, None, true, 0.0);
     // No system title bar: the title names the recipe.
-    assert_eq!(app(&h).title, "Disc Rip Trip — CDs");
+    assert_eq!(app(&h).title, "Trip — CDs");
     // A double-click on an empty part of the header maximises.
     let at = egui::pos2(820.0, 25.0);
     let s = sent(&mut h, vec![vec![egui::Event::PointerMoved(at)], vec![press(at, true)], vec![press(at, false)], vec![press(at, true)], vec![press(at, false)]]);
@@ -2337,7 +2337,7 @@ fn a_step_goes_between_two_tiles_from_the_plus_on_their_seam() {
     // accessible name rather than where it is drawn.
     h.get_by_label("Add between FLAC and Review").click_accesskit();
     h.run_steps(2);
-    assert!(app(&h).popover.as_ref().is_some_and(|p| p.at == drt_engine::Spot::After("flac".into()) && !p.branch));
+    assert!(app(&h).popover.as_ref().is_some_and(|p| p.at == trip_engine::Spot::After("flac".into()) && !p.branch));
     // Offered: exactly what, put there in line, leaves the recipe checking.
     let i = app(&h).sel;
     let want: Vec<String> = app(&h).m.placements_after(i, "flac").into_iter().filter(|(_, inline, _)| *inline).map(|(info, _, _)| info.name.to_owned()).collect();
@@ -2358,7 +2358,7 @@ fn a_step_goes_between_two_tiles_from_the_plus_on_their_seam() {
     let ids: Vec<String> = app(&h).m.recipes[i].root.ids().into_iter().map(str::to_owned).collect();
     let k = ids.iter().position(|x| x == "flac").unwrap();
     assert_eq!(ids[k + 2], "review", "{ids:?}");
-    assert!(drt_engine::check(&app(&h).m.recipes[i].root, &app(&h).m.engine.registry).is_ok());
+    assert!(trip_engine::check(&app(&h).m.recipes[i].root, &app(&h).m.engine.registry).is_ok());
     // Between Choose and Cover art nothing fits in line (Cover art goes
     // straight after Choose), but Lyrics does beside it, on a branch.
     h.get_by_label("Add between Choose and Cover art").click_accesskit();
@@ -2367,7 +2367,7 @@ fn a_step_goes_between_two_tiles_from_the_plus_on_their_seam() {
     h.run_steps(3);
     let root = &app(&h).m.recipes[i].root;
     assert!(root.ids().contains(&"lyrics"), "{:?}", root.ids());
-    assert!(drt_engine::check(root, &app(&h).m.engine.registry).is_ok());
+    assert!(trip_engine::check(root, &app(&h).m.engine.registry).is_ok());
 }
 
 #[test]
@@ -2410,14 +2410,14 @@ fn choose_can_be_skipped() {
 }
 
 /// MusicBrainz that finds nothing.
-struct NoMatch(std::sync::Arc<dyn drt_engine::Step>);
+struct NoMatch(std::sync::Arc<dyn trip_engine::Step>);
 
 #[async_trait::async_trait]
-impl drt_engine::Step for NoMatch {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for NoMatch {
+    fn info(&self) -> trip_engine::StepInfo {
         self.0.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         while let Some(disc) = inlet.recv().await {
             cx.status("Nothing", "by disc ID");
             outlet.send(disc).await;
@@ -2634,7 +2634,7 @@ fn a_setting_of_yours_resets_and_a_seeded_recipe_goes_back_to_built_in() {
 fn a_game_redump_doesnt_know_is_named_by_typing_it() {
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::TOMB_RAIDER_UNKNOWN]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::TOMB_RAIDER_UNKNOWN]));
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
@@ -2676,7 +2676,7 @@ fn a_game_redump_doesnt_know_is_named_by_typing_it() {
 fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_DAMAGED]));
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 1040.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
@@ -2739,7 +2739,7 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
     // A game Check names: nothing for Redump to look up.
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::APE_ESCAPE]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::APE_ESCAPE]));
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 800.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
@@ -2762,7 +2762,7 @@ fn check_says_why_a_game_doesnt_match_and_redump_says_what_it_did() {
 fn check_rips_again_and_combines_until_it_matches() {
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_DAMAGED]));
     let mut h = window_on(&e, reg, true, 0.0, egui::vec2(1280.0, 1100.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
@@ -2800,7 +2800,7 @@ fn check_repairs_by_the_disc_s_error_correction_last() {
     let held = |a: &App| a.m.snapshot(a.sel).steps["g_check"].items.first().is_some_and(|i| i.state == ItemState::Bad);
     let start = |e: &Env| {
         let mut reg = simulated(None);
-        reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+        reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_DAMAGED]));
         let mut h = window_on(e, reg, true, 0.0, egui::vec2(1280.0, 1100.0), 1.0);
         h.get_by_label_contains("Games, Ready").click();
         h.run_steps(2);
@@ -2856,7 +2856,7 @@ fn check_repairs_by_the_disc_s_error_correction_last() {
 /// and the canvas draws that path dashed.
 #[test]
 fn a_notify_on_rips_needs_you_path_says_at_once() {
-    use drt_engine::Side;
+    use trip_engine::Side;
     let e = env();
     let mut all = recipes::all();
     for r in all.iter_mut().filter(|r| r.name == "Games") {
@@ -2865,7 +2865,7 @@ fn a_notify_on_rips_needs_you_path_says_at_once() {
     }
     Store::new(e.dir.path().join("config")).save_recipes(&all).unwrap();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
     let mut h = window_on(&e, reg, true, 1.0, egui::vec2(1280.0, 720.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
@@ -2890,7 +2890,7 @@ fn a_notify_on_rips_needs_you_path_says_at_once() {
 /// a message, Notify, and puts it on that path.
 #[test]
 fn the_buttons_on_a_card_put_a_notify_on_its_fail_and_needs_paths() {
-    use drt_engine::Side;
+    use trip_engine::Side;
     let e = env();
     let mut h = window(&e, None, true, 0.0);
     assert!(h.query_by_label("If Rip fails").is_none(), "only while editing");
@@ -2907,7 +2907,7 @@ fn the_buttons_on_a_card_put_a_notify_on_its_fail_and_needs_paths() {
     h.get_all_by_role(Role::ListItem).find(|n| n.accesskit_node().label().as_deref() == Some("Notify")).unwrap().click_accesskit();
     h.run_steps(2);
     let root = app(&h).m.recipes[0].root.clone();
-    drt_engine::check(&root, &app(&h).m.engine.registry).unwrap();
+    trip_engine::check(&root, &app(&h).m.engine.registry).unwrap();
     let rip = root.steps().into_iter().find(|n| n.ids()[0] == "rip").unwrap().clone();
     for s in Side::BOTH {
         assert!(matches!(rip.side(s), Some(Node::Step { step, .. }) if step == "tell"), "{s:?}");
@@ -2931,17 +2931,17 @@ fn the_buttons_on_a_card_put_a_notify_on_its_fail_and_needs_paths() {
 fn a_scratched_disc_says_how_its_read_and_re_read_go() {
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
     let mut h = window_on(&e, reg, true, 1.0, egui::vec2(1280.0, 900.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
     h.run_steps(2);
-    let live = |a: &App| a.m.snapshot(a.sel).steps["g_rip"].now.clone().and_then(|n| serde_json::from_value::<drt_steps::real::redumper::Live>(n).ok());
+    let live = |a: &App| a.m.snapshot(a.sel).steps["g_rip"].now.clone().and_then(|n| serde_json::from_value::<trip_steps::real::redumper::Live>(n).ok());
     click(&mut h, "Start");
     // The read crawls over the scratch: said on the card and in the
     // sidebar, with Stop.
     until(&mut h, "the read to crawl", |a| live(a).is_some_and(|l| l.crawling && !l.rereading));
     open_id(&mut h, "g_rip");
-    h.get_by_label(drt_steps::real::redumper::CRAWLING);
+    h.get_by_label(trip_steps::real::redumper::CRAWLING);
     // Its speed still said, however slow: on the card, and in the sidebar
     // with why.
     let card = snap(&h).steps["g_rip"].detail.clone();
@@ -2967,7 +2967,7 @@ fn a_scratched_disc_says_how_its_read_and_re_read_go() {
         a.m.snapshot(a.sel).steps["g_rip"].detail.clone()
     };
     assert!(card.starts_with("Re-reading bad parts: sector 148,") && card.ends_with("2 put right so far · try 19 of 20 · The drive can't read parts of this disc"), "{card}");
-    h.get_by_label(drt_steps::real::redumper::CRAWLING);
+    h.get_by_label(trip_steps::real::redumper::CRAWLING);
     shot(&mut h, "games-rip-rereading");
     // It couldn't: how many, and what to try.
     until(&mut h, "Rip to need you", |a| a.m.snapshot(a.sel).steps["g_rip"].items.first().is_some_and(|i| i.state == ItemState::Bad));
@@ -2988,7 +2988,7 @@ fn a_scratched_disc_says_how_its_read_and_re_read_go() {
 fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_DAMAGED]));
     // Twice as slow as real time: a slow machine still sees each stage.
     let mut h = window_on(&e, reg, true, 2.0, egui::vec2(1280.0, 1100.0), 1.0);
     h.get_by_label_contains("Games, Ready").click();
@@ -2999,10 +2999,10 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
     app_mut(&mut h).close_tray();
     h.run_steps(2);
     click(&mut h, "Start");
-    until(&mut h, "Check to re-read the bad sectors", |a| a.m.snapshot(a.sel).steps["g_check"].status == drt_steps::real::game::REREADING);
+    until(&mut h, "Check to re-read the bad sectors", |a| a.m.snapshot(a.sel).steps["g_check"].status == trip_steps::real::game::REREADING);
     // The sidebar first, while it's at it, then the card.
     open_id(&mut h, "g_check");
-    h.get_by_label(drt_steps::real::game::REREADING);
+    h.get_by_label(trip_steps::real::game::REREADING);
     assert!(row_says(&h, &["2, Read bad sectors again", "Re-reading"]));
     shot(&mut h, "step-check-fixing");
     app_mut(&mut h).close_tray();
@@ -3026,11 +3026,11 @@ fn check_fixes_bad_sectors_by_itself_then_rips_again() {
 }
 
 /// Check's sector being read again now.
-fn rereading(a: &App) -> Option<drt_steps::real::fix::Rereading> {
+fn rereading(a: &App) -> Option<trip_steps::real::fix::Rereading> {
     a.m.snapshot(a.sel).steps["g_check"].now.clone().and_then(|n| serde_json::from_value(n).ok())
 }
 
-fn check_map(a: &App) -> drt_steps::map::SectorMap {
+fn check_map(a: &App) -> trip_steps::map::SectorMap {
     serde_json::from_value(a.m.snapshot(a.sel).steps["g_check"].record.map.clone().expect("a map")).unwrap()
 }
 
@@ -3040,10 +3040,10 @@ fn check_map(a: &App) -> drt_steps::map::SectorMap {
 /// marked.
 #[test]
 fn reading_bad_sectors_again_says_how_it_goes_and_the_map_changes_as_it_goes() {
-    use drt_steps::map::Mark;
+    use trip_steps::map::Mark;
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_DAMAGED]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_DAMAGED]));
     // Twice as slow as real time: the pass is still going while it's
     // looked at.
     let mut h = window_on(&e, reg, true, 2.0, egui::vec2(1280.0, 1100.0), 1.0);
@@ -3058,7 +3058,7 @@ fn reading_bad_sectors_again_says_how_it_goes_and_the_map_changes_as_it_goes() {
     assert_eq!(first.total(Mark::Wrong) + back, 140, "each found bad is on the map, bad or put right");
     open_id(&mut h, "g_check");
     h.run_steps(3);
-    h.get_by_label(drt_steps::real::game::REREADING);
+    h.get_by_label(trip_steps::real::game::REREADING);
     h.get_by_label_contains(" of 140 · try ");
     h.get_by_label_contains("put right so far · 1 still bad");
     assert!(h.query_by_label("Time left unknown").is_some() || h.query_all_by_label_contains(" left").any(|n| n.accesskit_node().value().is_some_and(|l| l.starts_with("About "))));
@@ -3082,20 +3082,20 @@ fn reading_bad_sectors_again_says_how_it_goes_and_the_map_changes_as_it_goes() {
 
 #[test]
 fn every_step_has_its_own_icon_and_colour() {
-    let p = drt_app::theme::Pal::get(false);
-    for (which, reg) in [("real", drt_steps::real()), ("simulated", simulated(None))] {
+    let p = trip_app::theme::Pal::get(false);
+    for (which, reg) in [("real", trip_steps::real()), ("simulated", simulated(None))] {
         for info in reg.infos() {
-            assert!(drt_app::theme::has_icon(info.kind), "{which}: {} has no icon of its own", info.kind);
+            assert!(trip_app::theme::has_icon(info.kind), "{which}: {} has no icon of its own", info.kind);
             assert!(p.kind_known(info.kind).is_some(), "{which}: {} has no colour group", info.kind);
         }
     }
     // One not drawn yet still gets something sensible.
-    assert!(!drt_app::theme::kind_icon("choose-something", egui::Pos2::ZERO, 24.0, egui::Color32::WHITE).is_empty());
+    assert!(!trip_app::theme::kind_icon("choose-something", egui::Pos2::ZERO, 24.0, egui::Color32::WHITE).is_empty());
 }
 
-fn video_window(e: &Env, disc: drt_steps::real::video::sim::SimDisc) -> Harness<'static, Window> {
+fn video_window(e: &Env, disc: trip_steps::real::video::sim::SimDisc) -> Harness<'static, Window> {
     let mut reg = simulated(None);
-    drt_steps::real::video::sim::register(&mut reg, disc);
+    trip_steps::real::video::sim::register(&mut reg, disc);
     let mut h = window_on(e, reg, true, 0.0, egui::vec2(1280.0, 720.0), 1.0);
     h.get_by_label_contains("Films and TV,").click();
     h.run_steps(2);
@@ -3105,7 +3105,7 @@ fn video_window(e: &Env, disc: drt_steps::real::video::sim::SimDisc) -> Harness<
 #[test]
 fn a_season_disc_is_sorted_title_by_title_in_its_sidebar() {
     let e = env();
-    let mut h = video_window(&e, drt_steps::real::video::sim::SimDisc::Season);
+    let mut h = video_window(&e, trip_steps::real::video::sim::SimDisc::Season);
     let i = app(&h).sel;
     app(&h).m.engine.settings.lock().unwrap().set_app("tmdb", "api_key", Setting::chosen(Value::from("test-key")));
     h.run_steps(2);
@@ -3135,7 +3135,7 @@ fn a_season_disc_is_sorted_title_by_title_in_its_sidebar() {
 #[test]
 fn an_api_key_is_set_once_for_the_app_and_never_shown_whole() {
     let e = env();
-    let mut h = video_window(&e, drt_steps::real::video::sim::SimDisc::Film);
+    let mut h = video_window(&e, trip_steps::real::video::sim::SimDisc::Film);
     h.get_by_label_contains("TMDb, API key?");
     click_tile(&mut h, "TMDb, API key?");
     h.get_by_label_contains("not set, app-wide");
@@ -3179,7 +3179,7 @@ fn every_pill_is_twenty_pixels_tall() {
     let header = h.get_all_by_label("Needs you").find(|n| n.rect().top() < 50.0).expect("the header's pill").rect();
     let sidebar = h.get_all_by_label("Needs you").find(|n| n.rect().left() > side.left()).expect("the sidebar's pill").rect();
     for r in [header, sidebar] {
-        assert!((r.height() - drt_app::widgets::PILL_H).abs() < 0.5, "{r:?}");
+        assert!((r.height() - trip_app::widgets::PILL_H).abs() < 0.5, "{r:?}");
     }
 }
 
@@ -3187,7 +3187,7 @@ fn every_pill_is_twenty_pixels_tall() {
 fn the_keyboard_focus_shows_a_ring() {
     let e = env();
     let mut h = window(&e, None, true, 0.0);
-    let action = drt_app::theme::Pal::get(false).action;
+    let action = trip_app::theme::Pal::get(false).action;
     let ring = |h: &mut Harness<Window>| {
         let r = h.get_by_label("Edit").rect();
         let img = h.render().unwrap();
@@ -3215,12 +3215,12 @@ fn the_keyboard_focus_shows_a_ring() {
 fn reduced_motion_turns_animation_off() {
     let e = env();
     let mut h = window(&e, None, true, 0.0);
-    // The system's say: DRT_REDUCED_MOTION.
-    std::env::set_var("DRT_REDUCED_MOTION", "1");
-    assert!(drt_app::motion::reduced_by_system());
-    std::env::set_var("DRT_REDUCED_MOTION", "0");
-    assert!(!drt_app::motion::reduced_by_system());
-    std::env::remove_var("DRT_REDUCED_MOTION");
+    // The system's say: TRIP_REDUCED_MOTION.
+    std::env::set_var("TRIP_REDUCED_MOTION", "1");
+    assert!(trip_app::motion::reduced_by_system());
+    std::env::set_var("TRIP_REDUCED_MOTION", "0");
+    assert!(!trip_app::motion::reduced_by_system());
+    std::env::remove_var("TRIP_REDUCED_MOTION");
     // The sidebar opening from shut, a twentieth of a second in.
     let top_after = |h: &mut Harness<Window>, motion: bool| {
         app_mut(h).motion = motion;
@@ -3358,9 +3358,9 @@ fn not_enough_room_is_said_with_the_sizes() {
     let mine = e.dir.path().to_owned();
     let f = full.clone();
     app_mut(&mut h).m.set_reach(Arc::new(move |p: &Path, need| {
-        let free: drt_steps::real::reach::FreeFn = if f.load(std::sync::atomic::Ordering::Relaxed) { |_| Ok(Some(400_000_000)) } else { |_| Ok(None) };
+        let free: trip_steps::real::reach::FreeFn = if f.load(std::sync::atomic::Ordering::Relaxed) { |_| Ok(Some(400_000_000)) } else { |_| Ok(None) };
         if p.starts_with(&mine) {
-            drt_steps::real::reach::look(p, need, free)
+            trip_steps::real::reach::look(p, need, free)
         } else {
             Ok(())
         }
@@ -3406,7 +3406,7 @@ fn the_watcher_notices_a_drive_go_by_itself() {
 /// they look up, when the recipe loads.
 #[test]
 fn chained_lookups_are_branched_off_what_they_look_up() {
-    use drt_engine::recipe::{branches, chain};
+    use trip_engine::recipe::{branches, chain};
     let reg = simulated(None);
     let mut root = chain([
         Node::step("d", "drive"),
@@ -3419,8 +3419,8 @@ fn chained_lookups_are_branched_off_what_they_look_up() {
         Node::step("r", "rip"),
         Node::step("f", "flac"),
     ]);
-    assert!(drt_engine::check(&root, &reg).is_err());
-    assert!(drt_app::model::migrate(&mut root, &reg));
+    assert!(trip_engine::check(&root, &reg).is_err());
+    assert!(trip_app::model::migrate(&mut root, &reg));
     let want = chain([
         Node::step("d", "drive"),
         Node::step("cd", "audio-cd"),
@@ -3431,9 +3431,9 @@ fn chained_lookups_are_branched_off_what_they_look_up() {
         Node::step("f", "flac"),
     ]);
     assert_eq!(root, want);
-    drt_engine::check(&root, &reg).unwrap();
+    trip_engine::check(&root, &reg).unwrap();
     // Once is enough.
-    assert!(!drt_app::model::migrate(&mut root, &reg));
+    assert!(!trip_app::model::migrate(&mut root, &reg));
 }
 
 /// A Cue sheet saved where it took the tracks from Rip moves after the
@@ -3441,7 +3441,7 @@ fn chained_lookups_are_branched_off_what_they_look_up() {
 /// Lyrics' old *.lrc files too* becomes a Lyrics file after each Library.
 #[test]
 fn cue_and_lrc_from_before_move_after_the_libraries() {
-    use drt_engine::recipe::{branches, chain};
+    use trip_engine::recipe::{branches, chain};
     let reg = simulated(None);
     let old = |cue: Node| {
         chain([
@@ -3466,8 +3466,8 @@ fn cue_and_lrc_from_before_move_after_the_libraries() {
         ])
     };
     let mut root = old(Node::step("c", "cue").with("ext", "mp3").with("names", "{track}"));
-    assert!(drt_engine::check(&root, &reg).is_err(), "Cue no longer takes tracks");
-    assert!(drt_app::model::migrate(&mut root, &reg));
+    assert!(trip_engine::check(&root, &reg).is_err(), "Cue no longer takes tracks");
+    assert!(trip_app::model::migrate(&mut root, &reg));
     let want = chain([
         Node::step("d", "drive"),
         Node::step("cd", "audio-cd"),
@@ -3496,9 +3496,9 @@ fn cue_and_lrc_from_before_move_after_the_libraries() {
     let Some(Node::Step { params, .. }) = root.find_mut("ly") else { panic!() };
     assert!(params.is_empty(), "{params:?}");
     assert_eq!(root, want);
-    drt_engine::check(&root, &reg).unwrap();
-    drt_engine::check(&root, &drt_steps::real()).unwrap();
-    assert!(!drt_app::model::migrate(&mut root, &reg), "once is enough");
+    trip_engine::check(&root, &reg).unwrap();
+    trip_engine::check(&root, &trip_steps::real()).unwrap();
+    assert!(!trip_app::model::migrate(&mut root, &reg), "once is enough");
 
     // No format named: FLAC's, as the old default was. *.lrc files too*
     // off adds nothing, and its old value is just ignored.
@@ -3506,8 +3506,8 @@ fn cue_and_lrc_from_before_move_after_the_libraries() {
     if let Some(Node::Step { params, .. }) = root.find_mut("ly") {
         params.insert("lrc".into(), Setting::chosen(Value::from(false)));
     }
-    assert!(drt_app::model::migrate(&mut root, &reg));
-    drt_engine::check(&root, &reg).unwrap();
+    assert!(trip_app::model::migrate(&mut root, &reg));
+    trip_engine::check(&root, &reg).unwrap();
     assert!(!root.ids().iter().any(|i| i.starts_with("lyricsfile")));
     let json = serde_json::to_string(&root).unwrap();
     assert_eq!(json.matches("\"cue\"").count(), 1, "one Cue: {json}");
@@ -3525,7 +3525,7 @@ fn cue_and_lrc_from_before_move_after_the_libraries() {
         branches([chain([Node::step("f", "flac"), Node::step("lib", "folder")]), chain([Node::step("c", "cue"), Node::step("arc", "folder")])]),
         Node::step("t", "tell"),
     ]);
-    assert!(drt_app::model::migrate(&mut root, &reg));
+    assert!(trip_app::model::migrate(&mut root, &reg));
     let want = chain([
         Node::step("d", "drive"),
         Node::step("cd", "audio-cd"),
@@ -3537,7 +3537,7 @@ fn cue_and_lrc_from_before_move_after_the_libraries() {
         branches([Node::step("t", "tell"), chain([Node::step("c", "cue"), Node::step("arc", "folder")])]),
     ]);
     assert_eq!(root, want);
-    drt_engine::check(&root, &reg).unwrap();
+    trip_engine::check(&root, &reg).unwrap();
 }
 
 /// Runs the CDs recipe to its end: the second release, the hold let go.
@@ -3613,15 +3613,15 @@ fn a_steps_sidebar_shows_what_it_found_and_what_it_offered() {
 
 /// A step that fails: logs why, then stops with an error.
 struct Failing {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for Failing {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for Failing {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, _outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, mut inlet: trip_engine::Inlet, _outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         inlet.recv().await;
         cx.log("GnuDB did not answer within 10 s");
         anyhow::bail!("no answer")
@@ -3668,25 +3668,25 @@ fn the_table_of_contents_shows_no_titles_before_choose() {
 
 /// Every card in the window as it's built: its step's view and what it
 /// shows besides, fitted at 100 % with the window's own fonts.
-fn cards(h: &mut Harness<Window>) -> Vec<(String, drt_app::card::Card)> {
+fn cards(h: &mut Harness<Window>) -> Vec<(String, trip_app::card::Card)> {
     let ctx = h.ctx.clone();
     let s = snap(h);
     let extras = app_mut(h).cards(&ctx, &s);
     let painter = egui::Painter::new(ctx, egui::LayerId::background(), egui::Rect::EVERYTHING);
-    let measure = drt_app::card::measurer(&painter);
+    let measure = trip_app::card::measurer(&painter);
     s.steps
         .iter()
         .map(|(id, v)| {
             let x = &extras[id];
-            let inp = drt_app::card::Input { v, settings: &x.settings, locked: x.locked, cover: !matches!(x.picture, drt_app::card::Picture::None), asking: x.asking, retries: x.retries };
-            (id.clone(), drt_app::card::build(&inp, &measure))
+            let inp = trip_app::card::Input { v, settings: &x.settings, locked: x.locked, cover: !matches!(x.picture, trip_app::card::Picture::None), asking: x.asking, retries: x.retries };
+            (id.clone(), trip_app::card::build(&inp, &measure))
         })
         .collect()
 }
 
 #[test]
 fn every_card_has_its_five_slots_in_the_same_place() {
-    use drt_app::card::{self, Cell};
+    use trip_app::card::{self, Cell};
     let e = env();
     let mut h = window(&e, None, true, 0.03);
     // Every tile is one card size, at 100 %.
@@ -3725,7 +3725,7 @@ fn every_card_has_its_five_slots_in_the_same_place() {
 
 #[test]
 fn the_item_strip_has_one_cell_per_item() {
-    use drt_app::card::Cell;
+    use trip_app::card::Cell;
     let e = env();
     let mut h = window(&e, Some(9), true, 0.0);
     // Before a run: blueprints, with no strip; only the Drive speaks.
@@ -3748,7 +3748,7 @@ fn the_item_strip_has_one_cell_per_item() {
     assert_eq!(rip.cells.len(), s.steps["rip"].items.len());
     assert_eq!(rip.cells.iter().filter(|c| **c == Cell::Verified).count(), 16);
     assert_eq!(rip.cells[8], Cell::Needs, "track 9 needs you");
-    assert_eq!(rip.shown, drt_app::card::Shown::Needs);
+    assert_eq!(rip.shown, trip_app::card::Shown::Needs);
     // Audio CD: the disc's tracks; a lookup, the disc as a whole.
     assert_eq!(get("cd").cells, vec![Cell::Done; 17]);
     assert_eq!(get("mb").cells, vec![Cell::Done]);
@@ -3760,7 +3760,7 @@ fn the_item_strip_has_one_cell_per_item() {
 
 #[test]
 fn short_settings_and_outcomes_are_never_cut_and_long_ones_shorten_smartly() {
-    use drt_app::card::{self, CardSetting};
+    use trip_app::card::{self, CardSetting};
     let e = env();
     let mut h = window(&e, None, true, 0.0);
     click(&mut h, "Start");
@@ -3782,7 +3782,7 @@ fn short_settings_and_outcomes_are_never_cut_and_long_ones_shorten_smartly() {
     let painter = egui::Painter::new(ctx, egui::LayerId::background(), egui::Rect::EVERYTHING);
     let measure = card::measurer(&painter);
     let mut v = snap(&h).steps["flac"].clone();
-    let build = |v: &drt_engine::StepView, sets: &[CardSetting], cover: bool| card::build(&card::Input { v, settings: sets, locked: true, cover, asking: false, retries: false }, &measure);
+    let build = |v: &trip_engine::StepView, sets: &[CardSetting], cover: bool| card::build(&card::Input { v, settings: sets, locked: true, cover, asking: false, retries: false }, &measure);
     let set = |l: &str, val: &str, path: bool| CardSetting { label: l.into(), value: val.into(), yours: true, path, help: None };
     for (status, q, detail) in [
         ("The White Stripes", "1999", "Sympathy · SFTRI 577"),
@@ -3880,7 +3880,7 @@ fn a_setting_you_changed_has_its_dot_and_all_are_locked_while_ripping() {
 // ---- the sidebar --------------------------------------------------------------------------------
 
 /// The card's settings as the canvas shows them, for one step.
-fn card_settings(h: &mut Harness<Window>, id: &str) -> Vec<drt_app::card::CardSetting> {
+fn card_settings(h: &mut Harness<Window>, id: &str) -> Vec<trip_app::card::CardSetting> {
     let ctx = h.ctx.clone();
     let s = snap(h);
     app_mut(h).cards(&ctx, &s).remove(id).unwrap().settings
@@ -4090,7 +4090,7 @@ fn sidebar_shots(size: egui::Vec2, tag: &str) {
     drop(h);
     // A missing key, asked for.
     let e = env();
-    let mut h = video_window(&e, drt_steps::real::video::sim::SimDisc::Film);
+    let mut h = video_window(&e, trip_steps::real::video::sim::SimDisc::Film);
     h.set_size(size);
     h.run_steps(3);
     click_tile(&mut h, "TMDb, API key?");
@@ -4132,7 +4132,7 @@ fn open_folder_opens_where_the_files_went_and_the_picker_starts_at_the_folder() 
     open_id(&mut h, "lib1");
     // Before anything is filed: the base folder; the picker starts there
     // (or the nearest parent that's there).
-    let base = drt_steps::real::expand("~/Music/FLAC");
+    let base = trip_steps::real::expand("~/Music/FLAC");
     click(&mut h, "Choose folder");
     until(&mut h, "the picker", |_| !e.picked_from.lock().unwrap().is_empty());
     let from = e.picked_from.lock().unwrap()[0].clone().unwrap();
@@ -4147,7 +4147,7 @@ fn open_folder_opens_where_the_files_went_and_the_picker_starts_at_the_folder() 
     assert!(!files.is_empty());
     // The album's folder, which holds every file it filed.
     assert!(opened[0] != e.dir.path().join("lib") && opened[0].starts_with(e.dir.path().join("lib")), "{opened:?}");
-    assert!(files.iter().all(|f| drt_steps::real::expand(&f.path).parent() == Some(opened[0].as_path())), "{opened:?} {:?}", files[0]);
+    assert!(files.iter().all(|f| trip_steps::real::expand(&f.path).parent() == Some(opened[0].as_path())), "{opened:?} {:?}", files[0]);
 }
 
 #[test]
@@ -4166,7 +4166,7 @@ fn short_text_in_the_sidebar_is_never_cut_at_1280() {
     for id in ["cd", "cdtext", "mb", "choose", "rip", "flac", "review", "mp3"] {
         look(&mut h, id);
     }
-    app(&h).m.send(0, drt_engine::Command::Retry { step: "rip".into(), item: "track-9".into(), option: "keep".into() });
+    app(&h).m.send(0, trip_engine::Command::Retry { step: "rip".into(), item: "track-9".into(), option: "keep".into() });
     until(&mut h, "the hold", |a| a.m.snapshot(0).steps["hold"].detail == "All here");
     for id in ["hold", "review"] {
         look(&mut h, id);
@@ -4180,16 +4180,16 @@ const MBIDS: [&str; 2] = ["9b4f7c1e-2d3a-4e5f-8a6b-1c2d3e4f5a6b", "3f2e1d0c-b9a8
 
 /// MusicBrainz as the real one offers: releases by their MBIDs.
 struct TestMb {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestMb {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestMb {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_engine::{Candidate, Fact, Subject};
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_engine::{Candidate, Fact, Subject};
         while let Some(mut disc) = inlet.recv().await {
             let release = |id: &str, title: &str, detail: &str, year: &str, score: f32| {
                 let fact = |subject, key: &str, value: &str| Fact { step: String::new(), subject, key: key.into(), value: value.into(), source: "MusicBrainz".into() };
@@ -4199,7 +4199,7 @@ impl drt_engine::Step for TestMb {
                     fact(Subject::Disc, "year", year),
                     fact(Subject::Disc, "musicbrainz_albumid", id),
                 ];
-                for (k, (t, len)) in drt_steps::sim::TRACKS.iter().enumerate() {
+                for (k, (t, len)) in trip_steps::sim::TRACKS.iter().enumerate() {
                     facts.push(fact(Subject::Part(k as u32 + 1), "title", t));
                     facts.push(fact(Subject::Part(k as u32 + 1), "length", &len.to_string()));
                 }
@@ -4218,22 +4218,22 @@ impl drt_engine::Step for TestMb {
 
 /// Lyrics as LRCLIB gives them: synced, plain, or none.
 struct TestLyrics {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
 }
 
 const SYNCED: &str = "[ar:The White Stripes]\n[00:12.40]Well, I was walking down the road\n[00:16.10]With my head held to the sky\n[00:20.85]And a long and winding verse that goes on well past the edge of any sidebar you could draw\n[00:25.00]\n[00:27.30]Jimmy, Jimmy, Jimmy";
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestLyrics {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestLyrics {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_engine::Subject;
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_engine::Subject;
         while let Some(mut disc) = inlet.recv().await {
             for t in 1..=disc.context().parts() {
                 let title = disc.context().get(Subject::Part(t), "title").unwrap_or("").to_owned();
-                let track = drt_engine::Item::track(t, title);
+                let track = trip_engine::Item::track(t, title);
                 match t {
                     3 => cx.item(&track, ItemState::Skipped, "none"),
                     2 => {
@@ -4257,7 +4257,7 @@ impl drt_engine::Step for TestLyrics {
 
 /// CDs with Lyrics beside Cover art, on the test steps.
 fn links_window(e: &Env, size: egui::Vec2) -> Harness<'static, Window> {
-    use drt_engine::recipe::{branches, chain};
+    use trip_engine::recipe::{branches, chain};
     let mut reg = simulated(None);
     let png = e.dir.path().join("cover.png");
     write_cover(&png);
@@ -4277,7 +4277,7 @@ fn links_window(e: &Env, size: egui::Vec2) -> Harness<'static, Window> {
         Node::step("rip", "rip"),
         Node::step("flac", "flac"),
     ]);
-    drt_engine::check(&r.root, &reg).unwrap();
+    trip_engine::check(&r.root, &reg).unwrap();
     std::fs::create_dir_all(e.dir.path().join("config")).unwrap();
     std::fs::write(e.dir.path().join("config/recipes.json"), serde_json::to_string(&vec![r]).unwrap()).unwrap();
     window_on(e, reg, true, 0.0, size, 1.0)
@@ -4350,27 +4350,27 @@ fn lookups_link_to_their_entries_and_lyrics_open_in_place_at_1920() {
 /// Rip as the real one reports: each track's percentage as it reads.
 /// Track 2 moves on by 8.2× over three seconds, then waits.
 struct TestRip {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     release: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for TestRip {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for TestRip {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, _outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_engine::Subject;
+    async fn run(&self, mut inlet: trip_engine::Inlet, _outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_engine::Subject;
         let Some(disc) = inlet.recv().await else { return Ok(()) };
         let n = disc.context().parts();
         let title = |t: u32| disc.context().get(Subject::Part(t), "title").unwrap_or("").to_owned();
-        let mut items: Vec<drt_engine::Item> = (1..=n).map(|t| drt_engine::Item::track(t, title(t)).knowing(&disc)).collect();
+        let mut items: Vec<trip_engine::Item> = (1..=n).map(|t| trip_engine::Item::track(t, title(t)).knowing(&disc)).collect();
         for it in &items {
             cx.item(it, ItemState::Waiting, "");
         }
-        drt_steps::real::rip_verdict(&cx, &mut items[0], ItemState::Ok, "✓ 104");
+        trip_steps::real::rip_verdict(&cx, &mut items[0], ItemState::Ok, "✓ 104");
         let len: f32 = disc.context().get(Subject::Part(2), "length").and_then(|l| l.parse().ok()).unwrap();
-        drt_steps::real::rip_says(&cx, format!("Track 2 · {}", items[1].label));
+        trip_steps::real::rip_says(&cx, format!("Track 2 · {}", items[1].label));
         cx.item(&items[1], ItemState::Busy, "reading 30%");
         tokio::time::sleep(Duration::from_millis(3200)).await;
         let p = 30.0 + 100.0 * 8.2 * 3.2 / len;
@@ -4381,9 +4381,9 @@ impl drt_engine::Step for TestRip {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         for it in items.iter_mut().skip(1) {
-            drt_steps::real::rip_verdict(&cx, it, ItemState::Ok, "✓ 104");
+            trip_steps::real::rip_verdict(&cx, it, ItemState::Ok, "✓ 104");
         }
-        drt_steps::real::rip_done(&cx);
+        trip_steps::real::rip_done(&cx);
         Ok(())
     }
 }
@@ -4410,7 +4410,7 @@ fn rip_pace(size: egui::Vec2, tag: &str) {
     let speed: f32 = parts[3].strip_suffix('×').unwrap().parse().unwrap();
     assert!((7.6..=8.8).contains(&speed), "about 8.2×: {line}");
     // The disc: what's left of track 2 and all of 4 to 17 at that speed.
-    let lens: Vec<f32> = drt_steps::sim::TRACKS.iter().map(|t| t.1 as f32).collect();
+    let lens: Vec<f32> = trip_steps::sim::TRACKS.iter().map(|t| t.1 as f32).collect();
     let want = (lens[1] * 0.5 + lens[3..].iter().sum::<f32>()) / speed / 60.0;
     let mins: f32 = parts[2].trim_start_matches("disc ").trim_end_matches(" min left").parse().unwrap();
     assert!((mins - want).abs() <= 2.0, "{mins} min, want about {want}");
@@ -4494,8 +4494,8 @@ fn slip_places(n: u64, from: f64, to: f64) -> Vec<u64> {
 /// (as a scratch is, 2% off the nominal turn, as on a real disc), read up
 /// to `upto`; re-read and put right once `reread`, all but `left` of the
 /// spot's sectors.
-fn held_map(n: u64, from: f64, to: f64, upto: u64, reread: bool, left: usize) -> drt_steps::map::SectorMap {
-    use drt_steps::map::{Geometry, Mark, Sectors};
+fn held_map(n: u64, from: f64, to: f64, upto: u64, reread: bool, left: usize) -> trip_steps::map::SectorMap {
+    use trip_steps::map::{Geometry, Mark, Sectors};
     let mut s = Sectors::new(CD_SECTORS);
     for k in 0..upto.min(CD_SECTORS) {
         s.set(k, Mark::Good);
@@ -4520,8 +4520,8 @@ fn held_map(n: u64, from: f64, to: f64, upto: u64, reread: bool, left: usize) ->
 /// A Rip's map of a disc like Koudelka's: the places [`slips`] logged, and
 /// two spots met once per turn (2% off the nominal turn), about 4.4 and
 /// 4.9 cm out; all re-read and put right.
-fn spots_map() -> drt_steps::map::SectorMap {
-    use drt_steps::map::{Geometry, Mark, Sectors};
+fn spots_map() -> trip_steps::map::SectorMap {
+    use trip_steps::map::{Geometry, Mark, Sectors};
     let mut s = Sectors::new(CD_SECTORS);
     for k in 0..CD_SECTORS {
         s.set(k, Mark::Good);
@@ -4550,8 +4550,8 @@ const HANDED_ON: u64 = 34;
 /// turn (2% off the nominal turn) about 4.4 and 4.9 cm out, as Koudelka
 /// (Europe) (Disc 4)'s: re-read, and all but [`HANDED_ON`] put right. With
 /// the sectors left unreadable.
-fn handed_map() -> (drt_steps::map::SectorMap, Vec<u64>) {
-    use drt_steps::map::{Geometry, Mark, Sectors};
+fn handed_map() -> (trip_steps::map::SectorMap, Vec<u64>) {
+    use trip_steps::map::{Geometry, Mark, Sectors};
     let mut s = Sectors::new(DISC_4);
     for k in 0..DISC_4 {
         s.set(k, Mark::Good);
@@ -4592,13 +4592,13 @@ struct HeldCheck {
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for HeldCheck {
-    fn info(&self) -> drt_engine::StepInfo {
-        drt_steps::real::data::check_info()
+impl trip_engine::Step for HeldCheck {
+    fn info(&self) -> trip_engine::StepInfo {
+        trip_steps::real::data::check_info()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_steps::map::{Mark, SectorMap};
-        use drt_steps::real::mismatch::{Combination, File, Fixing, Mismatch, Pair, Read, RipRead};
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_steps::map::{Mark, SectorMap};
+        use trip_steps::real::mismatch::{Combination, File, Fixing, Mismatch, Pair, Read, RipRead};
         let Some(dump) = inlet.recv().await else { return Ok(()) };
         let done = self.at == CheckAt::Verified;
         let stopped = self.at == CheckAt::Stopped;
@@ -4676,10 +4676,10 @@ impl drt_engine::Step for HeldCheck {
 /// of `open` open.
 fn held_game<'a>(e: &Env, at: At, check: Option<CheckAt>, open: &str, size: egui::Vec2) -> Harness<'a, Window> {
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::LANTERN_KEEP_SCRATCHED]));
     let rip = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let checked = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    reg.add(HeldRip { info: drt_steps::real::game::rip_info(), at, held: rip.clone() });
+    reg.add(HeldRip { info: trip_steps::real::game::rip_info(), at, held: rip.clone() });
     reg.add(HeldCheck { at: check.unwrap_or(CheckAt::Verified), held: checked.clone() });
     let mut h = window_on(e, reg, true, 0.0, size, 1.0);
     h.get_by_label_contains("Games,").click();
@@ -4701,8 +4701,8 @@ fn held_game<'a>(e: &Env, at: At, check: Option<CheckAt>, open: &str, size: egui
 /// redumper's first read of a CD as Image logs it, its progress lines fed
 /// through the real trail: `n` places with errors, spread from `from` to
 /// `to` (shares of the disc), stopping at `upto`. Gives the counts at the end.
-fn slips(cx: &drt_engine::Cx, n: u64, from: f64, to: f64, upto: u64) -> (u64, u64) {
-    use drt_steps::real::redumper;
+fn slips(cx: &trip_engine::Cx, n: u64, from: f64, to: f64, upto: u64) -> (u64, u64) {
+    use trip_steps::real::redumper;
     let mut trail = redumper::ErrorTrail::new();
     trail.line("*** DUMP (time check: 0s)");
     cx.log("*** DUMP (time check: 0s)");
@@ -4744,7 +4744,7 @@ fn koudelka_wrong() -> String {
 /// Image, a game's Rip or a video Rip as the real ones report (their notes,
 /// redumper's and MakeMKV's lines), held at one moment.
 struct HeldRip {
-    info: drt_engine::StepInfo,
+    info: trip_engine::StepInfo,
     at: At,
     /// Set once it's there.
     held: Arc<std::sync::atomic::AtomicBool>,
@@ -4756,8 +4756,8 @@ impl HeldRip {
     /// The first pass, from sector `from` for `secs` at 8× (600 sectors a
     /// second), as redumper prints it and Image reports it; its heading
     /// already logged.
-    async fn read(cx: &drt_engine::Cx, item: &drt_engine::Item, from: u64, secs: f32, scsi: u64, c2: u64) {
-        use drt_steps::real::redumper;
+    async fn read(cx: &trip_engine::Cx, item: &trip_engine::Item, from: u64, secs: f32, scsi: u64, c2: u64) {
+        use trip_steps::real::redumper;
         cx.status("", "Reading");
         let mut at = from;
         for k in 0..=(secs * 4.0) as u32 {
@@ -4773,9 +4773,9 @@ impl HeldRip {
         }
     }
 
-    async fn dump(&self, disc: &drt_engine::Item, outlet: &drt_engine::Outlet, cx: &drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_engine::{Item, ItemKind};
-        let item = Item::new(drt_steps::real::data::DUMP, ItemKind::Dump, disc.label.clone(), None, None).knowing(disc);
+    async fn dump(&self, disc: &trip_engine::Item, outlet: &trip_engine::Outlet, cx: &trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_engine::{Item, ItemKind};
+        let item = Item::new(trip_steps::real::data::DUMP, ItemKind::Dump, disc.label.clone(), None, None).knowing(disc);
         cx.log(format!("redumper dump --drive=/dev/sr0 --retries=20 --image-name={}", disc.label));
         match self.at {
             At::Reading | At::Crawling => {
@@ -4784,7 +4784,7 @@ impl HeldRip {
                 cx.map(serde_json::to_value(held_map(160, 0.10, 0.70, 141_500 + 150 * 18, false, 0)).ok());
                 Self::read(cx, &item, 141_500, 4.5, 2, 37).await;
                 if self.at == At::Crawling {
-                    let live = drt_steps::real::redumper::Live { at: 144_200, of: CD_SECTORS, crawling: true, ..Default::default() };
+                    let live = trip_steps::real::redumper::Live { at: 144_200, of: CD_SECTORS, crawling: true, ..Default::default() };
                     cx.now(serde_json::to_value(live).ok());
                 }
             }
@@ -4816,11 +4816,11 @@ impl HeldRip {
                 ] {
                     cx.log(l);
                 }
-                let note = drt_steps::real::data::made_anyway_note(HANDED_ON);
+                let note = trip_steps::real::data::made_anyway_note(HANDED_ON);
                 cx.item(&item, ItemState::Ok, note.clone());
                 cx.status("633 MB", note);
                 let mut made = item.becomes(ItemKind::Dump, Some(PathBuf::from(format!("{}.cue", disc.label))));
-                made.context_mut().add(drt_engine::Subject::Disc, drt_steps::real::data::UNREADABLE, HANDED_ON.to_string(), "Rip");
+                made.context_mut().add(trip_engine::Subject::Disc, trip_steps::real::data::UNREADABLE, HANDED_ON.to_string(), "Rip");
                 outlet.send(made).await;
             }
             At::Clean => {
@@ -4911,21 +4911,21 @@ impl HeldRip {
         Ok(())
     }
 
-    async fn titles(&self, disc: &drt_engine::Item, outlet: &drt_engine::Outlet, cx: &drt_engine::Cx) -> anyhow::Result<()> {
-        use drt_engine::{ItemKind, Subject};
-        use drt_steps::real::video;
+    async fn titles(&self, disc: &trip_engine::Item, outlet: &trip_engine::Outlet, cx: &trip_engine::Cx) -> anyhow::Result<()> {
+        use trip_engine::{ItemKind, Subject};
+        use trip_steps::real::video;
         let items = video::rip_items(disc);
         for i in &items {
             cx.item(i, ItemState::Waiting, "");
         }
-        let len = |i: &drt_engine::Item| i.context().get(Subject::Part(i.index.unwrap_or(0)), video::facts::LENGTH).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let len = |i: &trip_engine::Item| i.context().get(Subject::Part(i.index.unwrap_or(0)), video::facts::LENGTH).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
         let busy = if self.at == At::Done { items.len() } else { 1.min(items.len().saturating_sub(1)) };
         for (k, item) in items.iter().enumerate() {
             if k < busy || (self.at == At::Failed && k != 1) {
                 if self.at == At::Failed && k > 1 && k < busy {
                     continue;
                 }
-                cx.item(item, ItemState::Ok, format!("✓ {}, {}", video::hms(len(item)), drt_steps::real::media::size(len(item) as u64 * 4_200_000)));
+                cx.item(item, ItemState::Ok, format!("✓ {}, {}", video::hms(len(item)), trip_steps::real::media::size(len(item) as u64 * 4_200_000)));
                 outlet.send(item.becomes(ItemKind::Title, Some(PathBuf::from(format!("title-{k:02}.mkv"))))).await;
             }
         }
@@ -4952,11 +4952,11 @@ impl HeldRip {
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for HeldRip {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for HeldRip {
+    fn info(&self) -> trip_engine::StepInfo {
         self.info.clone()
     }
-    async fn run(&self, mut inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, mut inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         let Some(disc) = inlet.recv().await else { return Ok(()) };
         if self.info.kind == "rip-video" {
             self.titles(&disc, &outlet, &cx).await?;
@@ -4976,12 +4976,12 @@ impl drt_engine::Step for HeldRip {
 /// `video` for a season's disc, `film` for one title), started and held at
 /// `at`, its sidebar open.
 fn held_rip<'a>(e: &Env, kind: &str, at: At, size: egui::Vec2) -> (Harness<'a, Window>, &'static str) {
-    use drt_steps::real::{data, game, video};
+    use trip_steps::real::{data, game, video};
     let mut reg = simulated(None);
     let (info, recipe, id) = match kind {
         "data" => (data::image_info(), "Data discs", "d_image"),
         "game" => {
-            reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::COLONY_WARS_1]));
+            reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::COLONY_WARS_1]));
             (game::rip_info(), "Games", "g_rip")
         }
         _ => {
@@ -5126,7 +5126,7 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
         let (mut h, _) = held_rip(&e, "game", at, size);
         // Every sector in rows first, a small switch to the disc drawn to
         // scale under the heading.
-        assert_eq!(app(&h).map_view, drt_app::sectormap::MapView::Sectors);
+        assert_eq!(app(&h).map_view, trip_app::sectormap::MapView::Sectors);
         h.get_by_label("Where on the disc");
         h.get_by_label("Map: Sectors");
         if at == At::Spots {
@@ -5171,7 +5171,7 @@ fn disc_rip_shots(size: egui::Vec2, tag: &str) {
 /// The map's view picked stays picked, the next time too.
 #[test]
 fn the_map_s_view_is_remembered() {
-    use drt_app::sectormap::MapView;
+    use trip_app::sectormap::MapView;
     let e = env();
     let (mut h, _) = held_rip(&e, "game", At::Clean, egui::vec2(1280.0, 720.0));
     assert_eq!(app(&h).map_view, MapView::Sectors, "every sector first");
@@ -5185,14 +5185,14 @@ fn the_map_s_view_is_remembered() {
 /// A map with no distances (not a CD) has only its sectors: no switch.
 #[test]
 fn a_map_without_distances_has_no_disc_view() {
-    use drt_steps::map::{Mark, Sectors};
+    use trip_steps::map::{Mark, Sectors};
     let mut s = Sectors::new(2_000_000);
     for k in 0..2_000_000 {
         s.set(k, Mark::Good);
     }
     let m = s.map(None, false);
-    let h = Harness::builder().with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts())).build_ui(move |ui| {
-        drt_app::sectormap::show(ui, &drt_app::theme::Pal::light(), &m, 0.0, drt_app::sectormap::MapView::Disc, drt_app::sectormap::Whose::Rip);
+    let h = Harness::builder().with_context_setup(|ctx| ctx.set_fonts(trip_app::theme::fonts())).build_ui(move |ui| {
+        trip_app::sectormap::show(ui, &trip_app::theme::Pal::light(), &m, 0.0, trip_app::sectormap::MapView::Disc, trip_app::sectormap::Whose::Rip);
     });
     h.get_by_label("Map of the disc: 2,000,000 good");
     assert!(h.query_by_label("Map: Disc").is_none());
@@ -5288,14 +5288,14 @@ fn a_setting_says_its_choices_in_words_and_its_help_under_its_name() {
     assert!(drive.help.is_some_and(|h| h.starts_with("How early or late")));
     let v = &s.steps["drive"];
     let painter = egui::Painter::new(ctx, egui::LayerId::background(), egui::Rect::EVERYTHING);
-    let measure = drt_app::card::measurer(&painter);
-    let c = drt_app::card::build(&drt_app::card::Input { v, settings: &cards["drive"].settings, locked: false, cover: false, asking: false, retries: false }, &measure);
-    let row = drt_app::card::SETTINGS[1];
+    let measure = trip_app::card::measurer(&painter);
+    let c = trip_app::card::build(&trip_app::card::Input { v, settings: &cards["drive"].settings, locked: false, cover: false, asking: false, retries: false }, &measure);
+    let row = trip_app::card::SETTINGS[1];
     assert_eq!(c.help_at(egui::vec2(30.0, (row.0 + row.1) / 2.0)), drive.help, "over the offset's label");
     assert_eq!(c.help_at(egui::vec2(150.0, (row.0 + row.1) / 2.0)), None, "not over its value");
     // Every card label fits its column whole.
-    use drt_app::card::{M, SMALL, THIRD};
-    let cut: Vec<String> = drt_steps::real()
+    use trip_app::card::{M, SMALL, THIRD};
+    let cut: Vec<String> = trip_steps::real()
         .infos()
         .flat_map(|info| info.params.iter().filter_map(|p| p.on_card).filter(|on| measure(on.label, SMALL, 400) > THIRD - M - 4.0).map(|on| format!("{}: {}", info.kind, on.label)).collect::<Vec<_>>())
         .collect();
@@ -5362,17 +5362,17 @@ fn notify_makes_up_a_topic_and_sends_a_test() {
 
 /// The sim Drive, but every disc after the first waits until `disc` is set.
 struct WaitingDrive {
-    inner: std::sync::Arc<dyn drt_engine::Step>,
+    inner: std::sync::Arc<dyn trip_engine::Step>,
     runs: std::sync::atomic::AtomicUsize,
     disc: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait::async_trait]
-impl drt_engine::Step for WaitingDrive {
-    fn info(&self) -> drt_engine::StepInfo {
+impl trip_engine::Step for WaitingDrive {
+    fn info(&self) -> trip_engine::StepInfo {
         self.inner.info()
     }
-    async fn run(&self, inlet: drt_engine::Inlet, outlet: drt_engine::Outlet, cx: drt_engine::Cx) -> anyhow::Result<()> {
+    async fn run(&self, inlet: trip_engine::Inlet, outlet: trip_engine::Outlet, cx: trip_engine::Cx) -> anyhow::Result<()> {
         if self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
             while !self.disc.load(std::sync::atomic::Ordering::SeqCst) {
                 cx.status("Empty", "Insert a disc");
@@ -5440,7 +5440,7 @@ fn the_appearance_is_picked_and_remembered() {
     assert_eq!(std::fs::read_to_string(e.dir.path().join("config/appearance")).unwrap(), "dark");
     h.get_by_label("Appearance: System").click();
     h.run_steps(2);
-    assert_eq!(app(&h).appearance, drt_app::Appearance::System);
+    assert_eq!(app(&h).appearance, trip_app::Appearance::System);
     assert_eq!(std::fs::read_to_string(e.dir.path().join("config/appearance")).unwrap(), "system");
 }
 
@@ -5450,7 +5450,7 @@ fn the_appearance_is_picked_and_remembered() {
 fn several_tracks_to_decide_each_have_their_choices_on_their_row() {
     for (size, tag) in [(egui::vec2(1280.0, 720.0), ""), (egui::vec2(1920.0, 1080.0), "-1920")] {
         let e = env();
-        let mut h = window_on(&e, drt_steps::simulated_bad(vec![4, 9]), true, 0.0, size, 1.0);
+        let mut h = window_on(&e, trip_steps::simulated_bad(vec![4, 9]), true, 0.0, size, 1.0);
         click(&mut h, "Start");
         until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
         click(&mut h, "Use this one");
@@ -5501,7 +5501,7 @@ fn open_tray_from_the_drive_and_from_rip_mid_read() {
     assert_eq!(e.trays.lock().unwrap().len(), 2);
     let s = snap(&h);
     let rip = &s.steps["rip"];
-    assert!(rip.items.iter().filter(|i| i.state == ItemState::Bad).all(|i| i.note == drt_steps::real::TRAY_OPENED), "{:?}", rip.items);
+    assert!(rip.items.iter().filter(|i| i.state == ItemState::Bad).all(|i| i.note == trip_steps::real::TRAY_OPENED), "{:?}", rip.items);
     assert!(!s.finished && !s.stopped);
     // The one being read and every one after it.
     assert!(rip.count(ItemState::Bad) >= 5, "{:?}", rip.items);
@@ -5518,7 +5518,7 @@ fn look_at_join(h: &mut Harness<Window>, plus: &str, zoom: f32) {
     let (i, lay, c) = (a.sel, a.layout(a.sel), a.canvas_rect());
     let root = a.m.recipes[i].root.clone();
     let snap = a.m.snapshot(i);
-    let j = lay.joins.iter().find(|j| drt_app::popover::join_title(&root, &j.path, &snap) == plus).unwrap_or_else(|| panic!("no + {plus}"));
+    let j = lay.joins.iter().find(|j| trip_app::popover::join_title(&root, &j.path, &snap) == plus).unwrap_or_else(|| panic!("no + {plus}"));
     let want = egui::vec2(c.width() * 0.4, c.height() * 0.45);
     app_mut(h).set_view(i, (zoom, want - egui::vec2(j.at.0, j.at.1) * zoom));
     h.run_steps(2);
@@ -5562,7 +5562,7 @@ fn branches_meet_at_a_plus_and_what_goes_there_gets_all_of_them() {
     shot(&mut h, "join-plus-cd-end");
     h.get_by_label("Add after FLAC, MP3 and Next disc").click_accesskit();
     h.run_steps(2);
-    assert!(app(&h).popover.as_ref().is_some_and(|p| matches!(p.at, drt_engine::Spot::Join(_))));
+    assert!(app(&h).popover.as_ref().is_some_and(|p| matches!(p.at, trip_engine::Spot::Join(_))));
     let offered: Vec<String> = h.get_all_by_role(Role::ListItem).filter_map(|n| n.accesskit_node().label()).filter(|l| !l.contains(", ")).collect();
     assert_eq!(offered, ["Notify"], "only what takes what all three give");
     shot(&mut h, "join-plus-cd");
@@ -5631,7 +5631,7 @@ fn a_ps1_recipe_is_built_by_hand_with_its_side_by_side_steps_joined() {
     let plus = format!("Add between {} and {}", n(&h, "game-choose"), n(&h, "chd"));
     add_with_plus(&mut h, &plus, "next-disc");
     let r = app(&h).m.recipes[i].clone();
-    use drt_engine::recipe::{branches, chain};
+    use trip_engine::recipe::{branches, chain};
     let want = chain([
         Node::step("drive", "drive"),
         Node::step("gamedisc", "game-disc"),
@@ -5666,7 +5666,7 @@ fn a_ps1_recipe_is_built_by_hand_with_its_side_by_side_steps_joined() {
         }
     }
     assert_eq!(shape(&r.root), shape(&want), "{:#?}", r.root);
-    drt_engine::check(&r.root, &app(&h).m.engine.registry).unwrap();
+    trip_engine::check(&r.root, &app(&h).m.engine.registry).unwrap();
     click(&mut h, "Fit to window");
     shot(&mut h, "ps1-canvas");
     let met = format!("{join}, before {}", n(&h, "tell"));
@@ -5781,8 +5781,8 @@ fn follow_brings_the_latest_step_into_view() {
 /// just under Rip, with the line back to the drive under that.
 #[test]
 fn the_plus_on_each_cards_edge_has_its_path_buttons_above_and_below() {
-    use drt_engine::recipe::{branches, chain};
-    use drt_engine::Side;
+    use trip_engine::recipe::{branches, chain};
+    use trip_engine::Side;
     let e = env();
     let mut all = recipes::all();
     for r in all.iter_mut().filter(|r| r.name == "Games") {
@@ -5940,7 +5940,7 @@ fn the_game_rip_sidebars_in_their_four_states() {
         let e = env();
         let mut h = held_game(&e, At::Crawling, None, "g_rip", size);
         h.get_by_label("Slowed by read errors");
-        h.get_by_label(drt_steps::real::redumper::CRAWLING);
+        h.get_by_label(trip_steps::real::redumper::CRAWLING);
         assert_eq!(h.get_all_by_label("Stop").count(), 1);
         h.get_by_label("Open tray");
         assert!(row_says(&h, &["1, Read the disc", "140 bad so far"]));
@@ -5986,7 +5986,7 @@ fn the_game_rip_sidebars_in_their_four_states() {
         let mut h = held_game(&e, At::HandedOn, Some(CheckAt::Stopped), "g_check", size);
         shot(&mut h, &format!("ripside-stopped{tag}"));
         assert!(row_says(&h, &["2, Read bad sectors again", "9 put right", "3 skipped, the drive stalled"]));
-        h.get_by_label(drt_steps::real::fix::STOPPED);
+        h.get_by_label(trip_steps::real::fix::STOPPED);
         h.get_by_label("Rip again and combine, SLES_147.11");
 
         // D: still 3 it can't read; only what can still help.
@@ -6012,9 +6012,9 @@ fn the_game_rip_sidebars_in_their_four_states() {
 
 /// MakeMKV's hooks for a test: one found at a made-up path, and each time
 /// it's run (for its version) noted.
-fn makemkv_hooks(sandboxed: bool, host_allowed: bool, ran: Arc<Mutex<Vec<drt_steps::real::video::makemkv::Location>>>) -> drt_app::makemkv::Hooks {
-    use drt_steps::real::video::makemkv::Location;
-    drt_app::makemkv::Hooks {
+fn makemkv_hooks(sandboxed: bool, host_allowed: bool, ran: Arc<Mutex<Vec<trip_steps::real::video::makemkv::Location>>>) -> trip_app::makemkv::Hooks {
+    use trip_steps::real::video::makemkv::Location;
+    trip_app::makemkv::Hooks {
         required: true,
         sandboxed,
         host_allowed: Arc::new(move || host_allowed),
@@ -6030,7 +6030,7 @@ fn makemkv_hooks(sandboxed: bool, host_allowed: bool, ran: Arc<Mutex<Vec<drt_ste
 
 /// A video recipe, with TMDb's key given so MakeMKV is all that's left.
 fn makemkv_window(e: &Env) -> Harness<'static, Window> {
-    let mut h = video_window(e, drt_steps::real::video::sim::SimDisc::Film);
+    let mut h = video_window(e, trip_steps::real::video::sim::SimDisc::Film);
     app(&h).m.engine.settings.lock().unwrap().set_app("tmdb", "api_key", Setting::chosen(Value::from("test-key")));
     h.run_steps(3);
     h
@@ -6054,7 +6054,7 @@ fn a_video_recipe_waits_for_your_ok_to_run_makemkv_and_runs_it_once_when_given()
     assert!(app_mut(&mut h).m.start(i).is_err(), "Start refuses too");
     // The step's sidebar says why, and offers what was found.
     click_tile(&mut h, "Video disc, MakeMKV not set up");
-    h.get_by_label_contains("Disc Rip Trip only runs it if you say so.");
+    h.get_by_label_contains("Trip only runs it if you say so.");
     h.get_by_label("Use this: /usr/bin/makemkvcon");
     h.get_by_label("Use this: MakeMKV's flatpak (com.makemkv.MakeMKV)");
     h.get_by_label("Choose makemkvcon");
@@ -6065,7 +6065,7 @@ fn a_video_recipe_waits_for_your_ok_to_run_makemkv_and_runs_it_once_when_given()
     // Use this: run once, for its version, then saved.
     h.get_by_label("Use this: /usr/bin/makemkvcon").click_accesskit();
     h.run_steps(2);
-    until(&mut h, "its version", |a| a.m.makemkv.readiness() == drt_app::makemkv::Readiness::Ready);
+    until(&mut h, "its version", |a| a.m.makemkv.readiness() == trip_app::makemkv::Readiness::Ready);
     assert_eq!(ran.lock().unwrap().len(), 1, "run once, for its version");
     let saved = std::fs::read_to_string(e.dir.path().join("config/makemkv")).unwrap();
     assert!(saved.contains("/usr/bin/makemkvcon") && saved.contains("MakeMKV v1.18.2"), "{saved}");
@@ -6073,13 +6073,13 @@ fn a_video_recipe_waits_for_your_ok_to_run_makemkv_and_runs_it_once_when_given()
     assert_eq!(snap(&h).steps["v_disc"].state, StepState::Idle);
     // Its page at the foot of the list: what's used, and its version;
     // the key switch is off until turned on.
-    app_mut(&mut h).open_page(drt_app::Page::MakeMkv);
+    app_mut(&mut h).open_page(trip_app::Page::MakeMkv);
     h.run_steps(3);
     h.get_by_label("MakeMKV v1.18.2");
     h.get_by_label("MakeMKV, v1.18.2");
     let switch = h.get_by_label("Keep MakeMKV's beta key up to date");
     assert_eq!(switch.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
-    assert!(!app(&h).m.makemkv.key_updates && !drt_steps::real::video::makemkv::key_updates());
+    assert!(!app(&h).m.makemkv.key_updates && !trip_steps::real::video::makemkv::key_updates());
     shot(&mut h, "makemkv-page");
     h.get_by_label("Keep MakeMKV's beta key up to date").click_accesskit();
     h.run_steps(2);
@@ -6102,7 +6102,7 @@ fn approved_makemkv_is_remembered_and_not_run_again_at_the_next_start() {
     std::fs::create_dir_all(e.dir.path().join("config")).unwrap();
     std::fs::write(e.dir.path().join("config/makemkv"), r#"{"location":{"kind":"flatpak"},"version":"MakeMKV v1.18.2"}"#).unwrap();
     let h = makemkv_window(&e);
-    assert_eq!(app(&h).m.makemkv.readiness(), drt_app::makemkv::Readiness::Ready);
+    assert_eq!(app(&h).m.makemkv.readiness(), trip_app::makemkv::Readiness::Ready);
     assert!(!h.get_by_label("Start").accesskit_node().is_disabled());
     assert!(ran.lock().unwrap().is_empty(), "its version is known: not run");
 }
@@ -6118,14 +6118,14 @@ fn in_a_flatpak_whose_permission_was_taken_away_makemkv_isnt_run_and_it_says_why
     h.get_by_label("Use this: MakeMKV's flatpak (com.makemkv.MakeMKV)").click_accesskit();
     h.run_steps(3);
     // Saved, but it can't be started from here, so it isn't run.
-    assert_eq!(app(&h).m.makemkv.readiness(), drt_app::makemkv::Readiness::NeedsPermission);
+    assert_eq!(app(&h).m.makemkv.readiness(), trip_app::makemkv::Readiness::NeedsPermission);
     assert!(ran.lock().unwrap().is_empty());
     assert_eq!(snap(&h).steps["v_disc"].status, "MakeMKV can't be started");
     assert!(h.get_by_label("Start").accesskit_node().is_disabled());
     assert!(app(&h).m.cant_start(i).unwrap().contains("turned off"));
     assert!(h.query_by_label_contains("flatpak override").is_none(), "no command to type");
     h.get_by_label_contains("Flatseal");
-    h.get_by_label_contains("close Disc Rip Trip and open it again");
+    h.get_by_label_contains("close Trip and open it again");
     shot(&mut h, "makemkv-permission");
     // Checking again can't see a change made after the app started.
     h.get_by_label("Check again").click_accesskit();
@@ -6137,7 +6137,7 @@ fn in_a_flatpak_whose_permission_was_taken_away_makemkv_isnt_run_and_it_says_why
 
 /// A working folder under the test's `work/`, with these files, marked as
 /// a settled run would mark it (`None`: as a run cut off would leave it).
-fn work_folder(e: &Env, name: &str, files: &[&str], mark: Option<drt_app::workfiles::Mark>) -> PathBuf {
+fn work_folder(e: &Env, name: &str, files: &[&str], mark: Option<trip_app::workfiles::Mark>) -> PathBuf {
     let d = e.dir.path().join("work").join(name);
     for f in files {
         let p = d.join(f);
@@ -6145,7 +6145,7 @@ fn work_folder(e: &Env, name: &str, files: &[&str], mark: Option<drt_app::workfi
         std::fs::write(p, vec![0u8; 1000]).unwrap();
     }
     if let Some(m) = mark {
-        drt_app::workfiles::write_mark(&d, &m);
+        trip_app::workfiles::write_mark(&d, &m);
     }
     d
 }
@@ -6161,7 +6161,7 @@ fn backdate(p: &Path, by: Duration) {
 
 #[test]
 fn working_files_never_filed_are_kept_listed_and_deleted_only_when_you_say() {
-    use drt_app::workfiles::{Class, Mark};
+    use trip_app::workfiles::{Class, Mark};
     let e = env();
     let unfiled = work_folder(&e, "cds-1", &["flac/01.flac", "flac/02.flac", "flac/03.flac", "rip/01.wav"], Some(Mark { class: Class::Unfiled, title: "Tortoise – TNT".into() }));
     // Cut off mid-run long ago, with encodes in it: kept all the same.
@@ -6182,7 +6182,7 @@ fn working_files_never_filed_are_kept_listed_and_deleted_only_when_you_say() {
     assert!(!filed.exists() && !raw.exists(), "filed, and raw a day old: gone");
     assert!(unfiled.join("flac/01.flac").exists() && cut_off.join("mp3/01.mp3").exists() && fresh_raw.exists());
     h.get_by_label("Working files, 2 never filed");
-    app_mut(&mut h).open_page(drt_app::Page::WorkingFiles);
+    app_mut(&mut h).open_page(trip_app::Page::WorkingFiles);
     h.run_steps(3);
     h.get_by_label("Tortoise – TNT: 3 tracks, never filed");
     assert!(app(&h).m.work.kept.iter().any(|k| k.line.starts_with("A disc from ") && k.line.ends_with(": 1 track, never filed")), "{:?}", app(&h).m.work.kept);
@@ -6241,10 +6241,10 @@ fn in_work(h: &Harness<Window>, rel: &str) -> PathBuf {
     w
 }
 
-fn mark_of(dir: &Path, h: &mut Harness<Window>) -> drt_app::workfiles::Class {
+fn mark_of(dir: &Path, h: &mut Harness<Window>) -> trip_app::workfiles::Class {
     let start = Instant::now();
     loop {
-        if let Some(m) = drt_app::workfiles::read_mark(dir) {
+        if let Some(m) = trip_app::workfiles::read_mark(dir) {
             return m.class;
         }
         assert!(start.elapsed() < Duration::from_secs(10), "never marked");
@@ -6262,7 +6262,7 @@ fn a_run_stopped_before_anything_was_encoded_goes_when_the_next_disc_replaces_it
     let first = in_work(&h, "rip/01.wav");
     click(&mut h, "Stop");
     until(&mut h, "the stop", |a| a.m.snapshot(0).finished);
-    assert_eq!(mark_of(&first, &mut h), drt_app::workfiles::Class::Raw);
+    assert_eq!(mark_of(&first, &mut h), trip_app::workfiles::Class::Raw);
     assert!(first.exists(), "kept while it's shown");
     // The next disc: it's replaced, and its folder goes.
     std::thread::sleep(Duration::from_millis(1100));
@@ -6283,11 +6283,11 @@ fn a_run_stopped_mid_encode_keeps_its_encodes_and_lists_them() {
     click(&mut h, "Start");
     until(&mut h, "the question", |a| matches!(a.tray, Some(Tray::Question { .. })));
     click(&mut h, "Use this one");
-    until(&mut h, "an encode", |a| a.m.snapshot(0).steps.values().any(|v| drt_app::tray::is_encoder(&v.step) && v.count(ItemState::Ok) > 0));
+    until(&mut h, "an encode", |a| a.m.snapshot(0).steps.values().any(|v| trip_app::tray::is_encoder(&v.step) && v.count(ItemState::Ok) > 0));
     let w = in_work(&h, "flac/01 - Track.flac");
     click(&mut h, "Stop");
     until(&mut h, "the stop", |a| a.m.snapshot(0).finished);
-    assert_eq!(mark_of(&w, &mut h), drt_app::workfiles::Class::Unfiled);
+    assert_eq!(mark_of(&w, &mut h), trip_app::workfiles::Class::Unfiled);
     until(&mut h, "it's listed", |a| a.m.work.kept.iter().any(|k| k.path == w));
     // Replaced, it stays: it may be the only copy.
     std::thread::sleep(Duration::from_millis(1100));

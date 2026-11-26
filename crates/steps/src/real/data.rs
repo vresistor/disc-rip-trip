@@ -8,10 +8,10 @@ use super::{chd, device, hash, media, redump, redumper};
 use crate::template;
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
-use drt_engine::setting::ParamKind;
-use drt_engine::{Context, Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Step, StepInfo, StepState, Subject};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use trip_engine::setting::ParamKind;
+use trip_engine::{Context, Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Step, StepInfo, StepState, Subject};
 
 /// The id of the one item a data disc becomes: its dump, then the files
 /// made from it. Place files an item with this id as a set, in a folder.
@@ -863,7 +863,7 @@ pub fn image_files(main: &Path) -> Vec<PathBuf> {
     data_files(main).into_iter().filter(|f| !f.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue"))).collect()
 }
 
-/// The cache folder beside the runs: `…/disc-rip-trip/cache/redump`.
+/// The cache folder beside the runs: `…/trip/cache/redump`.
 pub fn redump_cache(work: &Path) -> PathBuf {
     work.parent().and_then(Path::parent).unwrap_or(work).join("cache/redump")
 }
@@ -1199,7 +1199,7 @@ mod tests {
 
     #[test]
     fn check_and_fix_rips_again_in_the_order_rip_used() {
-        let dev = std::env::current_dir().unwrap().join("../../target/drt-test-rip-options-drive");
+        let dev = std::env::current_dir().unwrap().join("../../target/trip-test-rip-options-drive");
         std::fs::write(&dev, "").unwrap();
         let mut c = Context::default();
         c.add(Subject::Disc, "device", dev.display().to_string(), "the drive");
@@ -1225,7 +1225,7 @@ mod tests {
     #[test]
     fn a_pass_s_map_follows_the_state_file_and_only_this_dump_s() {
         use crate::map::Mark;
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/map-watch");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test/map-watch");
         std::fs::create_dir_all(&dir).unwrap();
         let t = redumper::Target { dir: dir.clone(), name: "D".into() };
         let mut disc = Item::new(DUMP, ItemKind::Dump, "D", None, None);
@@ -1285,26 +1285,26 @@ mod tests {
 
     #[test]
     fn the_cache_is_beside_the_runs() {
-        assert_eq!(redump_cache(Path::new("/home/u/.cache/disc-rip-trip/runs/data-discs-1")), PathBuf::from("/home/u/.cache/disc-rip-trip/cache/redump"));
+        assert_eq!(redump_cache(Path::new("/home/u/.cache/trip/runs/data-discs-1")), PathBuf::from("/home/u/.cache/trip/cache/redump"));
     }
 
     /// A Folder's names in a recipe, as the run reads them: from what
     /// reaches it, and what it was saved with.
-    fn names_in(root: &drt_engine::Node, id: &str, saved: Option<&str>) -> (Vec<&'static str>, Option<Value>) {
+    fn names_in(root: &trip_engine::Node, id: &str, saved: Option<&str>) -> (Vec<&'static str>, Option<Value>) {
         let reg = crate::real();
-        let flows = drt_engine::flows_in(root, &reg);
+        let flows = trip_engine::flows_in(root, &reg);
         let flow = flows.get(id);
         let info = place_info("folder", "Folder");
         let spec = info.params.iter().find(|p| p.key == "names").unwrap();
         let presets = spec.fitted(flow).map(|f| f.presets.iter().map(|(n, _)| *n).collect()).unwrap_or_default();
-        let set = saved.map_or(drt_engine::Setting::Default, |v| drt_engine::Setting::chosen(Value::from(v)));
+        let set = saved.map_or(trip_engine::Setting::Default, |v| trip_engine::Setting::chosen(Value::from(v)));
         (presets, spec.resolve_at(&set, flow))
     }
 
     #[test]
     fn a_folder_s_names_follow_what_reaches_it() {
         use crate::recipes;
-        let at = |r: drt_engine::Recipe, id: &str, saved| names_in(&r.root, id, saved);
+        let at = |r: trip_engine::Recipe, id: &str, saved| names_in(&r.root, id, saved);
         // Tracks: the music layouts.
         let (presets, v) = at(recipes::cd(), "lib1", None);
         assert_eq!(v, Some(Value::from(template::DEFAULT)));
@@ -1356,7 +1356,7 @@ mod tests {
 
     #[test]
     fn a_plain_image_is_named_as_redump_names_it() {
-        let base = std::env::current_dir().unwrap().join("../../target/drt-test/redump-names");
+        let base = std::env::current_dir().unwrap().join("../../target/trip-test/redump-names");
         let _ = std::fs::remove_dir_all(&base);
         let src = base.join("image");
         std::fs::create_dir_all(&src).unwrap();
@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn several_tracks_are_numbered_as_redump_numbers_them() {
-        let base = std::env::current_dir().unwrap().join("../../target/drt-test/redump-tracks");
+        let base = std::env::current_dir().unwrap().join("../../target/trip-test/redump-tracks");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let cue = |n: usize| (1..=n).map(|k| format!("FILE \"disc (Track {k}).bin\" BINARY\n  TRACK {k:02} AUDIO\n")).collect::<String>();
@@ -1409,7 +1409,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_dump_set_is_filed_together() {
-        let base = std::env::current_dir().unwrap().join("../../target/drt-test/place-dump");
+        let base = std::env::current_dir().unwrap().join("../../target/trip-test/place-dump");
         let _ = std::fs::remove_dir_all(&base);
         let src = base.join("work");
         std::fs::create_dir_all(&src).unwrap();

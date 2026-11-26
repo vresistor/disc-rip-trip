@@ -160,7 +160,7 @@ pub fn mix(a: Color32, p: f32, b: Color32) -> Color32 {
 /// Anything else missing comes from the system's fonts (eframe's provider).
 pub fn fonts() -> FontDefinitions {
     let mut d = FontDefinitions::empty();
-    d.font_data.insert("symbols".into(), Arc::new(FontData::from_static(include_bytes!("../assets/DrtSymbols.ttf"))));
+    d.font_data.insert("symbols".into(), Arc::new(FontData::from_static(include_bytes!("../assets/TripSymbols.ttf"))));
     for (w, bytes, tnum) in [
         (400, &include_bytes!("../assets/SchibstedGrotesk-400.ttf")[..], &include_bytes!("../assets/SchibstedGrotesk-400-tnum.ttf")[..]),
         (500, &include_bytes!("../assets/SchibstedGrotesk-500.ttf")[..], &include_bytes!("../assets/SchibstedGrotesk-500-tnum.ttf")[..]),
@@ -240,8 +240,8 @@ pub fn apply(ctx: &egui::Context, p: &Pal) {
 }
 
 /// The state icon in a tile's corner, 16 units square, at `c` (its centre).
-pub fn state_icon(p: &Pal, state: drt_engine::StepState, c: Pos2, z: f32, t: f64) -> Vec<Shape> {
-    use drt_engine::StepState::*;
+pub fn state_icon(p: &Pal, state: trip_engine::StepState, c: Pos2, z: f32, t: f64) -> Vec<Shape> {
+    use trip_engine::StepState::*;
     let r = 7.0 * z;
     let white = Color32::WHITE;
     let s = |w: f32, col: Color32| Stroke::new(w * z, col);

@@ -9,12 +9,12 @@
 use super::tool;
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
-use drt_engine::setting::ParamKind;
-use drt_engine::{Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Step, StepInfo, Subject};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use trip_engine::setting::ParamKind;
+use trip_engine::{Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Step, StepInfo, Subject};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Codec {
@@ -459,7 +459,7 @@ pub fn finish_tags(codec: Codec, file: &std::path::Path, later: &[Later], id3v23
 /// facts first, under names of our own that [`Codec::container_tags`]
 /// turns into each container's. Written by ffmpeg (and [`finish_tags`]),
 /// never by cyanrip, whose tag syntax mangles a title with a colon in it.
-pub fn tags(c: &drt_engine::Context, t: u32) -> Vec<(String, String)> {
+pub fn tags(c: &trip_engine::Context, t: u32) -> Vec<(String, String)> {
     {
         let n = c.parts();
         let mut out = vec![];
@@ -564,7 +564,7 @@ impl Step for Encode {
             let (cx, outlet, busy, done, partial, sums) = (cx.clone(), outlet.clone(), busy.clone(), done.clone(), partial.clone(), sums.clone());
             // Its encoder's output is the step's, though it runs apart.
             let step = cx.clone();
-            tasks.push(tokio::spawn(drt_engine::within(step, async move {
+            tasks.push(tokio::spawn(trip_engine::within(step, async move {
                 let _core = cx.lane(LaneKind::Encode).await;
                 let shown = |cx: &Cx| {
                     let (b, d) = (busy.load(Ordering::SeqCst), done.load(Ordering::SeqCst));
@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn a_track_s_tags_come_from_what_it_knows() {
-        let mut c = drt_engine::Context::default();
+        let mut c = trip_engine::Context::default();
         for (k, v) in [("parts", "13"), ("album", "Wide Awake!"), ("album_artist", "Parquet Courts"), ("discnumber", "1"), ("disctotal", "2"), ("musicbrainz_albumid", "rel")] {
             c.add(Subject::Disc, k, v, "test");
         }

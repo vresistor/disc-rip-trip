@@ -1,4 +1,4 @@
-//! `drt rename-full-copies`: plain images filed before Plain image named
+//! `tripr rename-full-copies`: plain images filed before Plain image named
 //! its files as Redump does, renamed to Redump's names.
 //!
 //! Each cue sheet in a folder (and the folders in it) is a set: the sheet,
@@ -116,7 +116,7 @@ pub fn apply(moves: &[(PathBuf, PathBuf)]) -> Result<()> {
     let names: Vec<(String, String)> = rest.iter().map(|(a, b)| (file_name(a), file_name(b))).collect();
     let mut parked = vec![];
     for (k, (from, to)) in rest.iter().enumerate().filter(|(_, (a, b))| a != b) {
-        let tmp = to.with_file_name(format!(".drt-rename-{k}-{}", file_name(to)));
+        let tmp = to.with_file_name(format!(".trip-rename-{k}-{}", file_name(to)));
         std::fs::rename(from, &tmp)?;
         parked.push((tmp, to));
     }
@@ -124,7 +124,7 @@ pub fn apply(moves: &[(PathBuf, PathBuf)]) -> Result<()> {
         std::fs::rename(tmp, to)?;
     }
     let new = data::rename_in_cue(&text, &names);
-    let tmp = cue.1.with_file_name(format!(".drt-rename-{}", file_name(&cue.1)));
+    let tmp = cue.1.with_file_name(format!(".trip-rename-{}", file_name(&cue.1)));
     std::fs::write(&tmp, new)?;
     std::fs::rename(&tmp, &cue.1)?;
     if cue.0 != cue.1 {
@@ -151,11 +151,11 @@ pub fn hash_set(cue: &Path) -> Result<Vec<super::redump::Rom>> {
 /// flatpak's.
 pub fn cached_lists() -> Vec<PathBuf> {
     let mut dirs = vec![];
-    if let Some(c) = drt_engine::run::cache_dir() {
+    if let Some(c) = trip_engine::run::cache_dir() {
         dirs.push(c.join("cache/redump"));
     }
     if let Some(h) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(h).join(".var/app/io.github.vresistor.disc-rip-trip/cache/disc-rip-trip/cache/redump"));
+        dirs.push(PathBuf::from(h).join(".var/app/io.github.vresistor.trip/cache/trip/cache/redump"));
     }
     let mut out: Vec<PathBuf> = dirs.iter().filter_map(|d| std::fs::read_dir(d).ok()).flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "dat")).collect();
     out.sort();
@@ -199,7 +199,7 @@ mod tests {
     }
 
     fn folder(name: &str) -> PathBuf {
-        let d = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+        let d = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

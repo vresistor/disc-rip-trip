@@ -1,11 +1,11 @@
 //! Every choice of every built-in step has words to show, and a
 //! setting's help, where it has any, is one short sentence.
 
-use drt_engine::{ParamKind, HELP_MAX};
+use trip_engine::{ParamKind, HELP_MAX};
 
 #[test]
 fn every_choice_has_a_label_and_help_is_short() {
-    let (real, sim) = (drt_steps::real(), drt_steps::simulated(None));
+    let (real, sim) = (trip_steps::real(), trip_steps::simulated(None));
     let mut checked = 0;
     for info in real.infos().chain(sim.infos()) {
         for p in &info.params {

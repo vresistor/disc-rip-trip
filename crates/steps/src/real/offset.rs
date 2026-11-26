@@ -107,7 +107,7 @@ pub async fn list(cache: &Path) -> Result<Vec<(String, String, Listed)>> {
 /// ("MATSHITA BD-MLT UJ240AS 1.01 SCSI CD-ROM").
 pub fn from_old_app(vendor: &str, model: &str) -> Option<i64> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let file = home.join(".var/app/io.github.vresistor.disc-rip-trip/config/disc-rip-trip/config.json");
+    let file = home.join(".var/app/io.github.vresistor.trip/config/trip/config.json");
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
     let want = words(&format!("{vendor} {model}")).to_lowercase();
     json.get("drive_offsets")?.as_object()?.iter().find_map(|(k, v)| words(k).to_lowercase().starts_with(&want).then(|| v.as_i64()).flatten())

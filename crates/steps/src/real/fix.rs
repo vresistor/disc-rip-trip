@@ -769,7 +769,7 @@ pub(crate) mod tests {
     }
 
     fn base(name: &str) -> PathBuf {
-        let b = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+        let b = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
         let _ = std::fs::remove_dir_all(&b);
         std::fs::create_dir_all(&b).unwrap();
         b
@@ -1108,15 +1108,15 @@ pub(crate) mod tests {
     }
 
     /// Fixes a real redumper image from the disc in the drive, read-only on
-    /// the drive: `DRT_CUE=…cue DRT_WANT=<sha1> cargo test -p drt-steps
+    /// the drive: `TRIP_CUE=…cue TRIP_WANT=<sha1> cargo test -p trip-steps
     /// real_fix -- --ignored --nocapture`. Work on a copy: it patches the
     /// image in place, keeping its original beside it.
     #[test]
     #[ignore]
     fn real_fix() {
-        let dev = std::env::var("DRT_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
+        let dev = std::env::var("TRIP_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
         assert!(super::super::media::disc_in(&dev), "no disc in {dev}");
-        let cue = PathBuf::from(std::env::var("DRT_CUE").unwrap());
+        let cue = PathBuf::from(std::env::var("TRIP_CUE").unwrap());
         let sectors: i64 = combine::layout(&cue).unwrap().iter().map(|t| (t.size / SECTOR as u64) as i64).sum();
         let mut d = Drive { device: dev, sectors };
         let keep = cue.with_extension("before-fix");
@@ -1132,7 +1132,7 @@ pub(crate) mod tests {
         for r in &roms {
             println!("{} size {} crc {} md5 {} sha1 {}", r.name, r.size, r.crc, r.md5, r.sha1);
         }
-        if let Ok(want) = std::env::var("DRT_WANT") {
+        if let Ok(want) = std::env::var("TRIP_WANT") {
             assert_eq!(roms[0].sha1, want);
         }
     }

@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn the_three_hashes_of_a_file() {
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/hash");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test/hash");
         std::fs::create_dir_all(&dir).unwrap();
         // 40960 zero bytes. `redumper hash` (b744) on the same file printed
         // <rom name="test.iso" size="40960" crc="2c2bb90a"
@@ -83,7 +83,7 @@ mod tests {
     /// here. A tool that isn't there skips its own comparison only.
     #[test]
     fn the_hashes_are_coreutils_own() {
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/hash-coreutils");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test/hash-coreutils");
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("sectors.bin");
         std::fs::write(&f, (0..2352 * 300u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect::<Vec<u8>>()).unwrap();

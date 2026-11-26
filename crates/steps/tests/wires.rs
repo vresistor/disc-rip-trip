@@ -6,11 +6,11 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::{branches, chain};
-use drt_engine::snapshot::QuestionShape;
-use drt_engine::{Answer, Candidate, Command, Cx, Engine, Fact, Group, Inlet, Item, ItemKind, Node, Outlet, Recipe, Snapshot, Step, StepInfo, Subject};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use trip_engine::recipe::{branches, chain};
+use trip_engine::snapshot::QuestionShape;
+use trip_engine::{Answer, Candidate, Command, Cx, Engine, Fact, Group, Inlet, Item, ItemKind, Node, Outlet, Recipe, Snapshot, Step, StepInfo, Subject};
 
 const TITLES: [&str; 3] = ["JIMMY THE EXPLODER", "STOP BREAKING DOWN", "THE BIG THREE KILLED MY BABY"];
 
@@ -104,15 +104,15 @@ async fn run(root: Node, answer: impl Fn(&str, &QuestionShape) -> Answer) -> (Sn
 
 async fn run_on(disc: Disc, root: Node, answer: impl Fn(&str, &QuestionShape) -> Answer) -> (Snapshot, BTreeMap<String, Item>) {
     let probe = Probe::default();
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(disc);
     reg.add(TwoReleases);
     reg.add(probe.clone());
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
-    e.work_root = std::env::temp_dir().join(format!("drt-wires-{}", std::process::id()));
+    e.work_root = std::env::temp_dir().join(format!("trip-wires-{}", std::process::id()));
     let recipe = Recipe { name: "Wires".into(), root };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     let run = e.start(&recipe).unwrap();
     let mut rx = run.snapshot.clone();
     let mut answered = vec![];
@@ -158,10 +158,10 @@ async fn cd_text_is_an_option_in_choose_and_choosing_it_names_the_tracks() {
     assert!(c.candidates().is_empty());
     assert_eq!(c.get(Subject::Disc, "offset"), Some("103"));
     // Tracks are tagged and named from it.
-    let tags = drt_steps::real::encode::tags(c, 1);
+    let tags = trip_steps::real::encode::tags(c, 1);
     assert!(tags.contains(&("title".into(), "JIMMY THE EXPLODER".into())), "{tags:?}");
     assert!(tags.contains(&("album".into(), "THE WHITE STRIPES".into())), "{tags:?}");
-    let f = drt_steps::real::fields_in(c, 3, "Track 3");
+    let f = trip_steps::real::fields_in(c, 3, "Track 3");
     assert_eq!((f.title.as_str(), f.albumartist.as_str()), ("THE BIG THREE KILLED MY BABY", "THE WHITE STRIPES"));
 }
 
@@ -214,6 +214,6 @@ async fn rip_takes_the_offset_from_the_disc_and_never_reads_without_it() {
     let root = chain([Node::step("src", "audio-cd"), Node::step("rip", "rip")]);
     let (s, _) = run_on(Disc { offset: false }, root, |_, q| panic!("asked {q:?}")).await;
     let rip = &s.steps["rip"];
-    assert_eq!(rip.state, drt_engine::StepState::Bad);
+    assert_eq!(rip.state, trip_engine::StepState::Bad);
     assert!(rip.detail.contains("the drive's read offset isn't known"), "{}", rip.detail);
 }

@@ -336,8 +336,8 @@ Files filed before the audio audit carry two mistakes: cyanrip's name as a
 comment (`comment=cyanrip 0.9.3`, in every format), and a cover of picture
 type *Other* rather than *Front cover* (FLAC and MP3). To mend them:
 
-    drt fix-tags ~/Music            # lists what it would change
-    drt fix-tags ~/Music --apply    # changes it
+    tripr fix-tags ~/Music            # lists what it would change
+    tripr fix-tags ~/Music --apply    # changes it
 
 It removes a comment whose whole value is `cyanrip <version>`, and only in
 those files changes a lone picture of type Other to Front cover. Nothing
@@ -402,10 +402,10 @@ through the same drive lane, so the two never read at once. See
   read goes through its own error correction, so a sector pressed bad on
   purpose normally comes back with an error or the same bad bytes, and
   is left alone; only Redump's checksums can show it went right. To
-  check another drive: `DRT_BIN=<a .bin of the disc in the drive> cargo
-  test -p drt-steps real_read_cd -- --ignored --nocapture`, then
-  `DRT_CUE=<a copy of a rip's .cue> DRT_WANT=<Redump's SHA-1> cargo test
-  --release -p drt-steps real_fix -- --ignored --nocapture`. Both only
+  check another drive: `TRIP_BIN=<a .bin of the disc in the drive> cargo
+  test -p trip-steps real_read_cd -- --ignored --nocapture`, then
+  `TRIP_CUE=<a copy of a rip's .cue> TRIP_WANT=<Redump's SHA-1> cargo test
+  --release -p trip-steps real_fix -- --ignored --nocapture`. Both only
   read from the drive, and never open the tray.
 - **The same disc, and the original kept.** Before changing anything, a
   few sectors that pass their check in the image are read again; one
@@ -438,7 +438,7 @@ through the same drive lane, so the two never read at once. See
   ECMA-130 does (checked against ECM's separate implementation, and made
   again byte for byte for all 202,847 form 1 sectors of a
   Redump-verified PlayStation image:
-  `DRT_ECC_BIN=<a .bin> cargo test --release -p drt-steps
+  `TRIP_ECC_BIN=<a .bin> cargo test --release -p trip-steps
   ecc::tests::real_sectors -- --ignored --exact --nocapture`). It
   corrects by syndromes: each codeword puts one wrong byte right, and
   passes of P then Q go on until nothing changes. A sector counts as

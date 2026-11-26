@@ -1,6 +1,6 @@
 # Third-party components, and where their source is
 
-Disc Rip Trip is [GPL-3.0-or-later](LICENSE). This file records what ships inside
+Trip is [GPL-3.0-or-later](LICENSE). This file records what ships inside
 a release, under what terms, and where to get the corresponding source — which
 is an obligation, not a courtesy, for the GPL components below.
 
@@ -8,7 +8,7 @@ is an obligation, not a courtesy, for the GPL components below.
 
 | Component | Licence | Shipped? |
 |---|---|---|
-| Disc Rip Trip itself | GPL-3.0-or-later | yes — this repository |
+| Trip itself | GPL-3.0-or-later | yes — this repository |
 | ffmpeg, ffprobe | GPL-3.0 as built | yes — in the flatpak's `/app/bin` |
 | cyanrip (as built, with libcdio) | GPL-3.0-or-later | yes — in the flatpak's `/app/bin` |
 | redumper | GPL-3.0 | yes — in the flatpak's `/app/bin` |
@@ -35,7 +35,7 @@ ffmpeg version N-125881-g946272b79a-20260801
 ```
 
 `scripts/fetch-tools.sh` records that string in `PROVENANCE.txt`, which
-the flatpak installs in `/app/share/doc/io.github.vresistor.disc-rip-trip/` and CI
+the flatpak installs in `/app/share/doc/io.github.vresistor.trip/` and CI
 attaches to the release as `tools-provenance.txt`, so every published build
 says exactly which source corresponds to it.
 
@@ -71,7 +71,7 @@ ffmpeg alongside it, along with lame, libcdio and libcdio-paranoia. The script
 *is* the recipe.
 
 It changes one thing in cyanrip's source: `src/musicbrainz.c` is replaced
-by a stub, and the libmusicbrainz dependency is dropped. Disc Rip Trip does its
+by a stub, and the libmusicbrainz dependency is dropped. Trip does its
 own MusicBrainz lookups, with a cache and a rate limiter, and passes the result
 in as tags; a second client in the same process tree could get your address
 blocked. The script fails loudly if that change stops applying.
@@ -115,7 +115,7 @@ because it is the check that had to be made rather than assumed.
 
 [`lofty`](https://crates.io/crates/lofty) reads and writes audio tags in
 `crates/steps`: the tags ffmpeg can't write (an ID3 `UFID` frame, MP4
-`----:com.apple.iTunes:` atoms) and `drt fix-tags`. It is MIT / Apache-2.0,
+`----:com.apple.iTunes:` atoms) and `tripr fix-tags`. It is MIT / Apache-2.0,
 pinned to an exact version in `crates/steps/Cargo.toml` and recorded in
 `Cargo.lock`. Its default feature (zlib, for compressed ID3 frames) is off.
 
@@ -140,7 +140,7 @@ as an ordinary external program over its documented `makemkvcon` interface.
 **It is never bundled**: nothing in this repository, the flatpak or a release
 contains, embeds or redistributes it, and CI fails any build that does. The app
 runs it only from a place the user has approved in the app (or named in
-`DRT_MAKEMKVCON`); until then it only checks which files exist.
+`TRIP_MAKEMKVCON`); until then it only checks which files exist.
 
 Its EULA does allow redistributing it unmodified, so the licence isn't the
 reason. These are:

@@ -1,15 +1,15 @@
 //! Choose: picking, typing the details, or skipping.
 
-use drt_engine::snapshot::QuestionShape;
-use drt_engine::{Answer, Command, Engine, Setting, Snapshot};
-use drt_steps::{recipes, simulated};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use trip_engine::snapshot::QuestionShape;
+use trip_engine::{Answer, Command, Engine, Setting, Snapshot};
+use trip_steps::{recipes, simulated};
 
 async fn run_answering(answer: impl Fn(&QuestionShape) -> Answer) -> Snapshot {
     let mut e = Engine::new(simulated(None));
     e.time_scale = 0.0;
-    e.work_root = std::env::temp_dir().join(format!("drt-choose-{}", std::process::id()));
+    e.work_root = std::env::temp_dir().join(format!("trip-choose-{}", std::process::id()));
     e.settings.lock().unwrap().set_drive(recipes::BLU_RAY, "offset", Setting::chosen(Value::from(103)));
     let run = e.start(&recipes::cd()).unwrap();
     let mut rx = run.snapshot.clone();

@@ -1,5 +1,5 @@
 [package]
-name = "drt"
+name = "tripr"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,8 @@ publish = false
 description = "Runs a recipe without a window"
 
 [dependencies]
-drt-engine = { path = "../engine" }
-drt-steps = { path = "../steps" }
+trip-engine = { path = "../engine" }
+trip-steps = { path = "../steps" }
 anyhow.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde_json.workspace = true

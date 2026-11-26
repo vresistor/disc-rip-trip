@@ -2,7 +2,7 @@
 //! simulated steps. The tests here are ignored; run them by hand:
 //!
 //! ```sh
-//! cargo test --release -p drt-app --test demo -- --ignored --test-threads 1
+//! cargo test --release -p trip-app --test demo -- --ignored --test-threads 1
 //! ```
 //!
 //! `docs_screenshots` writes `target/docs-shots/<name>-<light|dark>.png`,
@@ -29,15 +29,15 @@
 //! rm -r target/demo-cd
 //! ```
 
-use drt_app::{App, Deps, Model, Store, Tray, Window};
-use drt_engine::{Engine, ItemState, Setting};
-use drt_steps::{recipes, simulated};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use trip_app::{App, Deps, Model, Store, Tray, Window};
+use trip_engine::{Engine, ItemState, Setting};
+use trip_steps::{recipes, simulated};
 
 struct Env {
     rt: tokio::runtime::Runtime,
@@ -50,21 +50,21 @@ fn env() -> Env {
 
 /// The window on simulated steps, both drives measured, every recipe on
 /// the first; `fps` sets how far egui's clock moves each step.
-fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, size: egui::Vec2, ppp: f32, fps: f32, motion: bool) -> Harness<'a, Window> {
+fn window<'a>(e: &Env, reg: trip_engine::Registry, time_scale: f64, size: egui::Vec2, ppp: f32, fps: f32, motion: bool) -> Harness<'a, Window> {
     let app = make_app(e, reg, time_scale, motion);
     let mut h = Harness::builder()
         .with_size(size)
         .with_pixels_per_point(ppp)
         .with_step_dt(1.0 / fps)
         .with_render_cursor(false)
-        .with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts()))
+        .with_context_setup(|ctx| ctx.set_fonts(trip_app::theme::fonts()))
         .wgpu_setup(renderer())
         .build_eframe(|_| Window(app));
     h.run_steps(3);
     h
 }
 
-fn make_app(e: &Env, reg: drt_engine::Registry, time_scale: f64, motion: bool) -> App {
+fn make_app(e: &Env, reg: trip_engine::Registry, time_scale: f64, motion: bool) -> App {
     let mut engine = Engine::new(reg);
     engine.time_scale = time_scale;
     engine.work_root = e.dir.path().join("work");
@@ -78,7 +78,7 @@ fn make_app(e: &Env, reg: drt_engine::Registry, time_scale: f64, motion: bool) -
     let deps = Deps {
         // Every folder can take a disc; a test that looks gives its own.
         reach: Arc::new(|_, _| Ok(())),
-        makemkv: drt_app::makemkv::Hooks::not_needed(),
+        makemkv: trip_app::makemkv::Hooks::not_needed(),
         engine,
         store: Store::new(e.dir.path().join("config")),
         drives: drives.clone(),
@@ -203,7 +203,7 @@ fn docs_screenshots() {
     // The other kinds of disc, each run to the end.
     let e = env();
     let mut reg = simulated(None);
-    drt_steps::real::video::sim::register(&mut reg, drt_steps::real::video::sim::SimDisc::Film);
+    trip_steps::real::video::sim::register(&mut reg, trip_steps::real::video::sim::SimDisc::Film);
     let mut h = window(&e, reg, 0.0, egui::vec2(1280.0, 720.0), 1.0, 4.0, false);
     for (recipe, name) in [("Data discs", "data-done"), ("Games", "games-done"), ("Films and TV", "video-done")] {
         pick(&mut h, recipe);
@@ -245,7 +245,7 @@ impl eframe::App for Demo {
             .show(&ctx, |ui| {
                 egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(22, 26, 34, a(235.0))).corner_radius(10).inner_margin(egui::Margin::symmetric(16, 10)).show(ui, |ui| {
                     ui.set_max_width((canvas.width() - 48.0).min(560.0));
-                    ui.add(egui::Label::new(egui::RichText::new(&self.last).font(drt_app::theme::font(16.0, 500)).color(egui::Color32::from_white_alpha(a(255.0)))).wrap());
+                    ui.add(egui::Label::new(egui::RichText::new(&self.last).font(trip_app::theme::font(16.0, 500)).color(egui::Color32::from_white_alpha(a(255.0)))).wrap());
                 });
             });
     }
@@ -257,14 +257,14 @@ impl eframe::App for Demo {
 
 /// The demo's window: 1120×700 at twice the pixels, so its words read
 /// when the README shrinks it; Follow on, the canvas a little zoomed out.
-fn demo_window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64) -> Harness<'a, Demo> {
+fn demo_window<'a>(e: &Env, reg: trip_engine::Registry, time_scale: f64) -> Harness<'a, Demo> {
     let w = Window(make_app(e, reg, time_scale, true));
     let mut h = Harness::builder()
         .with_size(egui::vec2(1120.0, 700.0))
         .with_pixels_per_point(2.0)
         .with_step_dt(1.0 / FPS as f32)
         .with_render_cursor(false)
-        .with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts()))
+        .with_context_setup(|ctx| ctx.set_fonts(trip_app::theme::fonts()))
         .wgpu_setup(renderer())
         .build_eframe(|_| Demo { w, caption: None, last: String::new() });
     h.run_steps(3);
@@ -281,10 +281,10 @@ fn demo_window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64) -> Harne
 }
 
 /// Its start, close enough to read: 80%, the drive at the left.
-fn close_up(a: &App) -> drt_app::canvas::View {
+fn close_up(a: &App) -> trip_app::canvas::View {
     let lay = a.layout(a.sel);
     let z = 0.8;
-    drt_app::canvas::View { zoom: z, pan: egui::vec2(24.0, ((700.0 - 52.0 - 40.0 - lay.height * z) / 2.0).max(16.0)) }
+    trip_app::canvas::View { zoom: z, pan: egui::vec2(24.0, ((700.0 - 52.0 - 40.0 - lay.height * z) / 2.0).max(16.0)) }
 }
 
 const FPS: f64 = 30.0;
@@ -465,7 +465,7 @@ fn demo_video() {
             P::Filing => {
                 // Done once the library has them, before the canvas goes
                 // back to the next disc.
-                let filed = a.m.runs[&i].iter().find(|r| Some(r.id) == first).is_none_or(|r| r.snap.finished || r.snap.steps["lib1"].state == drt_engine::StepState::Ok);
+                let filed = a.m.runs[&i].iter().find(|r| Some(r.id) == first).is_none_or(|r| r.snap.finished || r.snap.steps["lib1"].state == trip_engine::StepState::Ok);
                 if filed && end.is_none() {
                     end = Some(t);
                 }
@@ -556,7 +556,7 @@ fn demo_video_retry() {
                 (1.0, Some("Track 9 doesn't match AccurateRip. The rip goes on with the rest."))
             }
             P::Faster => {
-                if rip.state == drt_engine::StepState::Bad {
+                if rip.state == trip_engine::StepState::Bad {
                     demo_mut(&mut h).open(Tray::Step { id: "rip".into(), focus: None });
                     next = Some(P::Asks);
                 }

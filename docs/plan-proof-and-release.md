@@ -2,7 +2,7 @@
 
 24 November 2026; revised 25 November. Proposed; nothing here is built yet.
 
-Disc Rip Trip rips well on one machine, two drives and a handful of discs,
+Trip rips well on one machine, two drives and a handful of discs,
 and nobody else has run it. This plan does two things:
 
 1. **Prove it**, in ways a stranger can check without taking our word.
@@ -64,7 +64,7 @@ can replay.
 - **What it doesn't hold:** the disc's content. Sectors are filled with
   made-up data that passes or fails its own checks as the recording says.
   The repo is public, and game and album data can't go in it.
-- **Where recordings come from:** a `drt record-drive` command writes one
+- **Where recordings come from:** a `tripr record-drive` command writes one
   from a real rip's logs and `.state` file. That way, when someone reports
   a drive problem, their recording becomes a test.
 
@@ -154,7 +154,7 @@ From Flathub's rules (docs.flathub.org: *Requirements* and *Linter*)
 |---|---|
 | **Built from source, from a public URL; no prebuilt binaries** in the submission | The manifest installs `payload/`, which holds binaries built beforehand, plus ffmpeg and redumper downloaded already built (`fetch-tools.sh`). This is the main change. |
 | **No network during the build;** each Rust crate listed as a source, using `flatpak-cargo-generator` | Our build script fetches crates and tools over the network inside the SDK. |
-| **App id matches the repo:** `io.github.<user>.<repo>` maps to `github.com/<user>/<repo>`, and that page must exist | **Done (D1).** The id is now `io.github.vresistor.disc-rip-trip`, matching `github.com/vresistor/disc-rip-trip`. The old `io.github.vresistor.DiscRipTrip` pointed at a repo that doesn't exist. |
+| **App id matches the repo:** `io.github.<user>.<repo>` maps to `github.com/<user>/<repo>`, and that page must exist | **Done (D1).** The id is now `io.github.vresistor.trip`, matching `github.com/vresistor/trip`. The first id pointed at a repo that never existed. |
 | **Valid metainfo,** with the licence matching the source, and a licence file for each module | We have a metainfo file; it hasn't been through `flatpak-builder-lint`. **To find out.** |
 | **Stable releases only:** no snapshots or nightlies | We have no version tags yet. |
 | **Static permissions kept to a minimum,** with portals where they fit | We ask for `--device=all`, `--filesystem=host` and `--talk-name=org.freedesktop.Flatpak`. See 2.3. |
@@ -249,7 +249,7 @@ every OS.
 
 ## Decisions for you
 
-**D1. The app id. Made:** `io.github.vresistor.disc-rip-trip`, which
+**D1. The app id. Made:** `io.github.vresistor.trip`, which
 matches the repo. Recipes and settings move from the old id's folder under
 `~/.var/app/` once, on first start.
 

@@ -3,7 +3,7 @@
 //! hand:
 //!
 //! ```sh
-//! cargo test -p drt-app --test inventory -- --ignored --test-threads 1
+//! cargo test -p trip-app --test inventory -- --ignored --test-threads 1
 //! ```
 //!
 //! Writes `target/inventory/<recipe>-<moment>-<step>[-<tab>].png` (light,
@@ -11,9 +11,6 @@
 //! each shot with its step's name, subtitle, status and detail as the
 //! snapshot has them.
 
-use drt_app::{App, Deps, Model, Store, Tray, Window};
-use drt_engine::{ItemState, Node, Setting, StepState};
-use drt_steps::{recipes, simulated};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use serde_json::Value;
@@ -21,6 +18,9 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use trip_app::{App, Deps, Model, Store, Tray, Window};
+use trip_engine::{ItemState, Node, Setting, StepState};
+use trip_steps::{recipes, simulated};
 
 struct Env {
     rt: tokio::runtime::Runtime,
@@ -33,8 +33,8 @@ fn env() -> Env {
 
 /// The window on simulated steps, both drives measured, TMDb's key set.
 /// `plugged` lists the drives connected.
-fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, plugged: Vec<String>) -> Harness<'a, Window> {
-    let mut engine = drt_engine::Engine::new(reg);
+fn window<'a>(e: &Env, reg: trip_engine::Registry, time_scale: f64, plugged: Vec<String>) -> Harness<'a, Window> {
+    let mut engine = trip_engine::Engine::new(reg);
     engine.time_scale = time_scale;
     engine.work_root = e.dir.path().join("work");
     {
@@ -46,7 +46,7 @@ fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, plugged: Vec<
     let deps = Deps {
         // Every folder can take a disc; a test that looks gives its own.
         reach: Arc::new(|_, _| Ok(())),
-        makemkv: drt_app::makemkv::Hooks::not_needed(),
+        makemkv: trip_app::makemkv::Hooks::not_needed(),
         engine,
         store: Store::new(e.dir.path().join("config")),
         drives: vec![recipes::BLU_RAY.to_owned(), recipes::DVD.to_owned()],
@@ -65,7 +65,7 @@ fn window<'a>(e: &Env, reg: drt_engine::Registry, time_scale: f64, plugged: Vec<
         .with_size(egui::vec2(1280.0, 720.0))
         .with_pixels_per_point(1.0)
         .with_render_cursor(false)
-        .with_context_setup(|ctx| ctx.set_fonts(drt_app::theme::fonts()))
+        .with_context_setup(|ctx| ctx.set_fonts(trip_app::theme::fonts()))
         .wgpu_setup(renderer())
         .build_eframe(|_| Window(app));
     h.run_steps(3);
@@ -108,7 +108,7 @@ fn until(h: &mut Harness<Window>, what: &str, cond: impl Fn(&App) -> bool) {
     h.run_steps(3);
 }
 
-fn snap(h: &Harness<Window>) -> drt_engine::Snapshot {
+fn snap(h: &Harness<Window>) -> trip_engine::Snapshot {
     app(h).m.snapshot(app(h).sel)
 }
 
@@ -436,7 +436,7 @@ const GAME: [&str; 10] = ["g_drive", "g_disc", "g_rip", "g_check", "g_redump", "
 fn games() {
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::COLONY_WARS_1]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::COLONY_WARS_1]));
     let mut h = window(&e, reg, 0.0, both());
     pick(&mut h, "Games");
     canvas(&mut h, "ga-0idle-canvas", true);
@@ -454,7 +454,7 @@ fn games() {
 fn games_busy_and_unknown() {
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::APE_ESCAPE]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::APE_ESCAPE]));
     let mut h = window(&e, reg, 2.0, both());
     pick(&mut h, "Games");
     start(&mut h);
@@ -468,7 +468,7 @@ fn games_busy_and_unknown() {
     // A dump Redump doesn't know.
     let e = env();
     let mut reg = simulated(None);
-    reg.add(drt_steps::game_sim::GameDisc::new(vec![drt_steps::game_sim::TOMB_RAIDER_UNKNOWN]));
+    reg.add(trip_steps::game_sim::GameDisc::new(vec![trip_steps::game_sim::TOMB_RAIDER_UNKNOWN]));
     let mut h = window(&e, reg, 0.0, both());
     pick(&mut h, "Games");
     start(&mut h);
@@ -491,16 +491,16 @@ fn games_busy_and_unknown() {
 
 const VIDEO: [&str; 8] = ["v_drive", "v_disc", "v_tmdb", "v_choose", "v_rip", "v_make", "v_lib", "v_next"];
 
-fn video_reg(disc: drt_steps::real::video::sim::SimDisc) -> drt_engine::Registry {
+fn video_reg(disc: trip_steps::real::video::sim::SimDisc) -> trip_engine::Registry {
     let mut reg = simulated(None);
-    drt_steps::real::video::sim::register(&mut reg, disc);
+    trip_steps::real::video::sim::register(&mut reg, disc);
     reg
 }
 
 #[test]
 #[ignore = "renders the cards inventory; run by hand"]
 fn video() {
-    use drt_steps::real::video::sim::SimDisc;
+    use trip_steps::real::video::sim::SimDisc;
     let e = env();
     let mut h = window(&e, video_reg(SimDisc::Film), 0.0, both());
     pick(&mut h, "Films and TV");
@@ -525,7 +525,7 @@ fn video() {
 #[test]
 #[ignore = "renders the cards inventory; run by hand"]
 fn video_busy() {
-    use drt_steps::real::video::sim::SimDisc;
+    use trip_steps::real::video::sim::SimDisc;
     let e = env();
     let mut h = window(&e, video_reg(SimDisc::Film), 2.0, both());
     pick(&mut h, "Films and TV");

@@ -12,17 +12,17 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::{Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, Subject};
-use drt_steps::map::{Mark, Run as Stretch};
-use drt_steps::real::combine::{edc, msf, SECTOR};
-use drt_steps::real::data::{self, DUMP};
-use drt_steps::real::ecc;
-use drt_steps::real::fix::Source;
-use drt_steps::real::game::{RipFn, SourceFn};
-use drt_steps::real::mismatch::Mismatch;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use trip_engine::recipe::chain;
+use trip_engine::{Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, Subject};
+use trip_steps::map::{Mark, Run as Stretch};
+use trip_steps::real::combine::{edc, msf, SECTOR};
+use trip_steps::real::data::{self, DUMP};
+use trip_steps::real::ecc;
+use trip_steps::real::fix::Source;
+use trip_steps::real::game::{RipFn, SourceFn};
+use trip_steps::real::mismatch::Mismatch;
 
 const SECTORS: i64 = 12;
 
@@ -58,7 +58,7 @@ fn rip(slips: &[i64], flips: &[i64]) -> Vec<u8> {
 fn write_rip(dir: &Path, bin: &[u8]) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("G.bin"), bin).unwrap();
-    std::fs::write(dir.join("G.log"), drt_steps::game_sim::LANTERN_KEEP_LOG).unwrap();
+    std::fs::write(dir.join("G.log"), trip_steps::game_sim::LANTERN_KEEP_LOG).unwrap();
     let cue = dir.join("G.cue");
     std::fs::write(&cue, "FILE \"G.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n").unwrap();
     cue
@@ -66,12 +66,12 @@ fn write_rip(dir: &Path, bin: &[u8]) -> PathBuf {
 
 fn md5(bytes: &[u8]) -> String {
     use md5::Digest;
-    drt_steps::real::hash::hex(&md5::Md5::digest(bytes))
+    trip_steps::real::hash::hex(&md5::Md5::digest(bytes))
 }
 
 fn sha1(bytes: &[u8]) -> String {
     use sha1::Digest;
-    drt_steps::real::hash::hex(&sha1::Sha1::digest(bytes))
+    trip_steps::real::hash::hex(&sha1::Sha1::digest(bytes))
 }
 
 /// Gives the first rip, as Game disc and Rip would.
@@ -184,7 +184,7 @@ fn start_disc(base: &Path, good: &[u8], first: &[u8], later: Vec<Vec<u8>>, liste
     };
     std::fs::create_dir_all(base.join("cache/redump")).unwrap();
     std::fs::write(base.join("cache/redump/psx.dat"), dat).unwrap();
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Dumped { main });
     reg.add(data::Check { rip: stand_in(later), source });
     let mut e = Engine::new(reg);
@@ -193,7 +193,7 @@ fn start_disc(base: &Path, good: &[u8], first: &[u8], later: Vec<Vec<u8>>, liste
         name: "Fixture combine".into(),
         root: chain([Node::step("src", "dumped"), Node::step("check", "check").with("if_no_match", if_no_match), Node::step("redump", "redump"), Node::step("choose", "game-choose")]),
     };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     (e.start(&recipe).unwrap(), e)
 }
 
@@ -238,7 +238,7 @@ fn labels(s: &Snapshot) -> Vec<String> {
 }
 
 fn base(name: &str) -> PathBuf {
-    std::env::current_dir().unwrap().join("../../target/drt-test").join(name)
+    std::env::current_dir().unwrap().join("../../target/trip-test").join(name)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -386,7 +386,7 @@ impl Source for Held {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn reading_bad_sectors_again_says_how_it_goes_as_it_goes() {
-    use drt_steps::real::fix::Rereading;
+    use trip_steps::real::fix::Rereading;
     let base = base("fix-live");
     let first = rip(&[3, 7], &[9]);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -408,7 +408,7 @@ async fn reading_bad_sectors_again_says_how_it_goes_as_it_goes() {
     let now: Rereading = serde_json::from_value(check.now.clone().unwrap()).unwrap();
     assert_eq!((now.done, now.total, now.fixed, now.left), (1, 3, 1, 0));
     assert_eq!(now.line(), "Reading bad sectors again: sector 7 · 2 of 3 · try 1 of 10");
-    assert_eq!(check.status, drt_steps::real::game::REREADING);
+    assert_eq!(check.status, trip_steps::real::game::REREADING);
     assert_eq!(check.items[0].note, "re-reading 33%, 1 of 3 bad sectors");
     let map = map_of(&s);
     assert_eq!((map.total(Mark::Recovered), map.total(Mark::Wrong), map.at), (1, 2, Some(7)), "3 put right, 7 and 9 still to go");
@@ -570,7 +570,7 @@ fn log_of(s: &Snapshot) -> String {
     s.steps["check"].record.log.iter().map(|l| l.line.as_str()).collect::<Vec<_>>().join("\n")
 }
 
-fn map_of(s: &Snapshot) -> drt_steps::map::SectorMap {
+fn map_of(s: &Snapshot) -> trip_steps::map::SectorMap {
     serde_json::from_value(s.steps["check"].record.map.clone().expect("a map")).unwrap()
 }
 

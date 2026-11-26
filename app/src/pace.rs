@@ -4,9 +4,9 @@
 //! lengths, at the speed it has read at so far; kept steady, so the
 //! numbers count down rather than jump.
 
-use drt_engine::{ItemState, ItemView};
-use drt_steps::real::redumper::Live;
 use std::time::Instant;
+use trip_engine::{ItemState, ItemView};
+use trip_steps::real::redumper::Live;
 
 /// What's shown while Rip reads.
 #[derive(Clone, Debug, Default, PartialEq)]

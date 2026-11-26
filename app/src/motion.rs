@@ -2,7 +2,7 @@
 //!
 //! GNOME's *Reduce animations* (`org.gnome.desktop.interface
 //! enable-animations`), read once at start, turns every slide, glide and
-//! cue into an instant change; so does `DRT_REDUCED_MOTION=1`, for tests
+//! cue into an instant change; so does `TRIP_REDUCED_MOTION=1`, for tests
 //! and CI. Colour still changes; nothing slides, scales or marches, and
 //! the spinner stands still. Nothing here loops: a cue asks for frames
 //! only until it's done, so an idle window stays idle.
@@ -24,10 +24,10 @@ pub fn set(on: bool) {
     ON.with(|c| c.set(on));
 }
 
-/// Whether the system asks for less motion: `DRT_REDUCED_MOTION` ("1"
+/// Whether the system asks for less motion: `TRIP_REDUCED_MOTION` ("1"
 /// reduced, "0" not), else GNOME's setting, else no.
 pub fn reduced_by_system() -> bool {
-    match std::env::var("DRT_REDUCED_MOTION").as_deref() {
+    match std::env::var("TRIP_REDUCED_MOTION").as_deref() {
         Ok("1") | Ok("true") => return true,
         Ok("0") | Ok("false") => return false,
         _ => {}

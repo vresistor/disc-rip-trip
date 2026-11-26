@@ -15,8 +15,8 @@
 // Every figure on a card is tabular: its outcome, counts and times change
 // in place, and must not move what is beside them.
 use crate::theme::{kind_icon, state_icon, tnum as font, Pal};
-use drt_engine::{ItemState, StepState, StepView};
 use egui::{pos2, vec2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind};
+use trip_engine::{ItemState, StepState, StepView};
 
 pub const W: f32 = 288.0;
 pub const H: f32 = 192.0;
@@ -117,7 +117,7 @@ impl Shown {
 }
 
 /// Hold's detail once everything is in: it waits for you.
-pub const WAITS_FOR_YOU: &str = drt_steps::hold::WAITS_FOR_YOU;
+pub const WAITS_FOR_YOU: &str = trip_steps::hold::WAITS_FOR_YOU;
 
 /// One cell of the item strip, by the strip's legend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

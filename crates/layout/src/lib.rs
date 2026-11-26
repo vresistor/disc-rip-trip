@@ -9,7 +9,7 @@
 //!
 //! A window only draws what this gives it, scaled by its zoom.
 
-use drt_engine::{Node, Side};
+use trip_engine::{Node, Side};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Metrics {
@@ -631,7 +631,7 @@ fn wire_all(outs: &[((f32, f32), String)], ins: &[((f32, f32), String)], gap: f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use drt_steps::recipes;
+    use trip_steps::recipes;
 
     /// No vertical or horizontal leg of a line back crosses any card.
     fn crosses(l: &Layout, path: &[(f32, f32)], own: &str) -> Option<String> {
@@ -671,7 +671,7 @@ mod tests {
     /// runs under it and crosses neither it nor its lines.
     #[test]
     fn what_hears_of_a_step_goes_just_under_it_and_the_line_back_under_that() {
-        use drt_engine::recipe::{branches, chain};
+        use trip_engine::recipe::{branches, chain};
         let s = |id: &str, k: &str| Node::step(id, k);
         let shaped = |rip: Node| {
             chain([
@@ -790,7 +790,7 @@ mod tests {
             }
         }
         // A step with both paths has no buttons left; one with none, two.
-        let root = drt_engine::recipe::chain([Node::step("d", "drive"), Node::step("r", "rip").on(Side::Fails, Node::step("t", "tell"))]);
+        let root = trip_engine::recipe::chain([Node::step("d", "drive"), Node::step("r", "rip").on(Side::Fails, Node::step("t", "tell"))]);
         let l = layout(&root, m);
         let buttons: Vec<(&str, Side)> = l.side_buttons.iter().map(|b| (b.0.as_str(), b.1)).collect();
         assert_eq!(buttons, [("d", Side::Fails), ("d", Side::NeedsYou), ("r", Side::NeedsYou)]);
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn the_line_back_from_next_disc_goes_round_what_shares_its_branch() {
-        use drt_engine::recipe::{branches, chain};
+        use trip_engine::recipe::{branches, chain};
         let m = Metrics::default();
         // Next disc listed before Notify: it's still drawn last, under it.
         let root = chain([Node::step("d", "drive"), Node::step("r", "rip"), branches([Node::step("f", "flac"), Node::step("next", "next-disc"), Node::step("tell", "tell")])]);
@@ -885,7 +885,7 @@ mod tests {
 
     /// The archive recipe with its phone line in a named group.
     fn grouped() -> Node {
-        use drt_engine::recipe::group;
+        use trip_engine::recipe::group;
         let mut root = recipes::archive().root;
         let Node::Chain { nodes } = &mut root else { panic!() };
         let Some(Node::Branches { branches }) = nodes.iter_mut().rev().find(|n| matches!(n, Node::Branches { .. })) else { panic!() };
@@ -946,7 +946,7 @@ mod tests {
 
     #[test]
     fn a_plus_after_branches_knows_them_by_their_place_in_the_recipe_however_they_are_drawn() {
-        use drt_engine::recipe::{branches, chain};
+        use trip_engine::recipe::{branches, chain};
         let m = Metrics::default();
         // Next disc listed first is drawn last; the inner branches are still
         // the recipe's second branch's second part.

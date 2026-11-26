@@ -4,14 +4,14 @@
 //! whose sectors' distances from the centre are known.
 //!
 //! Rings, not spots: where round the disc a sector lies can't be worked
-//! out (see [`drt_steps::map`]), so a ring is drawn the whole way round,
+//! out (see [`trip_steps::map`]), so a ring is drawn the whole way round,
 //! and where errors come back once per turn to a single spot its ring is
 //! dashed, never a dot at a made-up place.
 
 use crate::sectormap::{colour, range_text, Whose};
 use crate::theme::{font, mix, tnum, Pal};
-use drt_steps::map::{cm, Mark, Ring, SectorMap};
 use egui::{pos2, vec2, Color32, Pos2, Sense, Shape, Stroke, Ui};
+use trip_steps::map::{cm, Mark, Ring, SectorMap};
 
 /// A CD's edge, its hole, and where a drive holds it (IEC 60908: a 15 mm
 /// hole, clamped from 26 to 33 mm across), in metres from the centre.
@@ -219,14 +219,14 @@ mod tests {
 
     #[test]
     fn quiet_rings_are_drawn_together_and_a_spot_s_ring_over_them() {
-        let r = |k: u32, m: Mark, spot: bool| Ring { first: 0, last: 0, inner: k as f64, outer: k as f64 + 1.0, mark: m, counts: [0; drt_steps::map::KINDS], spot };
+        let r = |k: u32, m: Mark, spot: bool| Ring { first: 0, last: 0, inner: k as f64, outer: k as f64 + 1.0, mark: m, counts: [0; trip_steps::map::KINDS], spot };
         let rings = [r(25, Mark::Good, false), r(26, Mark::Good, false), r(27, Mark::Recovered, true), r(28, Mark::Good, false), r(29, Mark::C2, false), r(30, Mark::NotRead, false)];
         assert_eq!(stretches(&rings), [(25.0, 29.0, Mark::Good), (29.0, 30.0, Mark::C2), (30.0, 31.0, Mark::NotRead)]);
     }
 
     #[test]
     fn hovering_a_ring_says_how_far_out_and_what_s_in_it() {
-        let mut s = drt_steps::map::Sectors::new(333_000);
+        let mut s = trip_steps::map::Sectors::new(333_000);
         for k in 0..333_000 {
             s.set(k, Mark::Good);
         }

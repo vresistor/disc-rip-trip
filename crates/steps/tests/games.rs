@@ -4,17 +4,17 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::{
-    check, fits_flow, flow_after, Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Setting, Snapshot, Step, StepInfo, StepState, Subject,
-};
-use drt_steps::game_sim::{self, Disc, APE_ESCAPE, COLONY_WARS_1, COLONY_WARS_2, LANTERN_KEEP_DAMAGED, TOMB_RAIDER_UNKNOWN};
-use drt_steps::real::data::DUMP;
-use drt_steps::real::mismatch::Mismatch;
-use drt_steps::{recipes, simulated};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use trip_engine::recipe::chain;
+use trip_engine::{
+    check, fits_flow, flow_after, Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Setting, Snapshot, Step, StepInfo, StepState, Subject,
+};
+use trip_steps::game_sim::{self, Disc, APE_ESCAPE, COLONY_WARS_1, COLONY_WARS_2, LANTERN_KEEP_DAMAGED, TOMB_RAIDER_UNKNOWN};
+use trip_steps::real::data::DUMP;
+use trip_steps::real::mismatch::Mismatch;
+use trip_steps::{recipes, simulated};
 
 fn engine(discs: Vec<Disc>) -> Engine {
     let mut reg = simulated(None);
@@ -26,9 +26,9 @@ fn engine(discs: Vec<Disc>) -> Engine {
 }
 
 /// The Games recipe with Check asking first, rather than fixing by itself.
-fn asking() -> drt_engine::Recipe {
+fn asking() -> trip_engine::Recipe {
     let mut r = recipes::games();
-    if let Some(drt_engine::Node::Step { params, .. }) = r.root.find_mut("g_check") {
+    if let Some(trip_engine::Node::Step { params, .. }) = r.root.find_mut("g_check") {
         params.insert("if_no_match".into(), Setting::chosen(Value::from("ask")));
     }
     r
@@ -76,7 +76,7 @@ async fn drive_retrying(run: Run, answer: Answer, retries: &[&str]) -> (Snapshot
 
 #[test]
 fn the_games_recipe_checks_and_its_steps_follow_from_one_another() {
-    for reg in [simulated(None), drt_steps::real()] {
+    for reg in [simulated(None), trip_steps::real()] {
         let r = recipes::games().root;
         check(&r, &reg).unwrap();
         let names = |id: &str| fits_flow(&flow_after(&r, id, &reg).unwrap(), &reg).iter().map(|i| (i.kind, i.name)).collect::<Vec<_>>();
@@ -98,7 +98,7 @@ fn the_games_recipe_checks_and_its_steps_follow_from_one_another() {
 
 #[test]
 fn the_simulated_game_steps_are_the_real_ones() {
-    let (sim, real) = (simulated(None), drt_steps::real());
+    let (sim, real) = (simulated(None), trip_steps::real());
     for kind in ["game-disc", "game-rip", "redump", "game-choose", "m3u", "libcrypt"] {
         let (a, b) = (sim.info(kind).unwrap(), real.info(kind).unwrap());
         let keys = |i: &StepInfo| i.params.iter().map(|p| p.key).collect::<Vec<_>>();
@@ -139,7 +139,7 @@ async fn a_game_goes_all_the_way_and_redump_names_it() {
 /// Folder's default, files a game by system and name, as its card says.
 #[tokio::test]
 async fn a_game_s_folder_on_no_names_or_the_old_music_default_files_by_system_and_name() {
-    for saved in [None, Some(drt_steps::template::DEFAULT), Some("Artist / Album / 01 - Title")] {
+    for saved in [None, Some(trip_steps::template::DEFAULT), Some("Artist / Album / 01 - Title")] {
         let e = engine(vec![APE_ESCAPE]);
         let mut r = recipes::games();
         if let Some(Node::Step { params, .. }) = r.root.find_mut("g_lib") {
@@ -196,7 +196,7 @@ async fn a_dump_redump_disagrees_with_is_held_until_you_say() {
     assert_eq!(item.note, "Doesn't match Redump's dumps of SLUS-00152");
     assert_eq!(held.steps["g_check"].state, StepState::Bad);
     assert_eq!(held.steps["g_lib"].count(ItemState::Ok), 0);
-    let check = drt_steps::real().info("check").unwrap();
+    let check = trip_steps::real().info("check").unwrap();
     assert_eq!(check.retries.iter().map(|r| r.label).collect::<Vec<_>>(), ["Re-read bad parts", "Fix bad sectors", "Rip again and combine", "Keep it anyway", "Skip this disc"]);
     // No log to say the drive reported nothing: re-reading may help; no
     // rip of sectors to combine.
@@ -275,7 +275,7 @@ async fn ripping_again_and_combining_until_it_matches_redump() {
     let run = e.start(&asking()).unwrap();
     let s = until(&run, held).await;
     let item = s.steps["g_check"].items[0].clone();
-    let labels = |i: &drt_engine::ItemView| i.options.iter().map(|o| o.1.clone()).collect::<Vec<_>>();
+    let labels = |i: &trip_engine::ItemView| i.options.iter().map(|o| o.1.clone()).collect::<Vec<_>>();
     assert_eq!(
         labels(&item),
         ["Fix bad sectors", "Rip again and combine", "Repair with the disc's error correction", "Keep it anyway", "Skip this disc"],
@@ -396,7 +396,7 @@ fn dump(dir: &Path, label: &str, seed: u8) -> PathBuf {
 }
 
 fn sha1(file: &Path) -> String {
-    drt_steps::real::hash::hash_files(&[file], |_| {}, || false).unwrap()[0].sha1.clone()
+    trip_steps::real::hash::hash_files(&[file], |_| {}, || false).unwrap()[0].sha1.clone()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -430,7 +430,7 @@ async fn a_two_disc_game_filed_in_one_folder_has_its_playlist_beside_its_discs()
 /// default when empty): `at`
 /// gives where a disc's files go (without extension), relative.
 async fn two_discs(dir: &str, names: &str, at: fn(&str) -> String, m3u: &str, body: &str) {
-    let base = std::env::current_dir().unwrap().join("../../target/drt-test").join(dir);
+    let base = std::env::current_dir().unwrap().join("../../target/trip-test").join(dir);
     let _ = std::fs::remove_dir_all(&base);
     let one = dump(&base.join("dump1"), "SLES_008.60", 0);
     let two = dump(&base.join("dump2"), "SLES_108.60", 0x5A);
@@ -457,7 +457,7 @@ async fn two_discs(dir: &str, names: &str, at: fn(&str) -> String, m3u: &str, bo
         z.finish().unwrap();
     }
 
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Dumped { discs: vec![(one, "SLES_008.60", "SLES-00860"), (two, "SLES_108.60", "SLES-10860")], next: AtomicUsize::new(0) });
     let mut e = Engine::new(reg);
     e.work_root = base.join("runs");
@@ -511,7 +511,7 @@ async fn two_discs(dir: &str, names: &str, at: fn(&str) -> String, m3u: &str, bo
 /// why from the files and the log; kept, Redump finds the serial's games.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_real_check_explains_a_dump_redump_disagrees_with() {
-    let base = std::env::current_dir().unwrap().join("../../target/drt-test/real-games-mismatch");
+    let base = std::env::current_dir().unwrap().join("../../target/trip-test/real-games-mismatch");
     let _ = std::fs::remove_dir_all(&base);
     let main = dump(&base.join("dump"), "SLES_047.11", 0);
     std::fs::write(main.with_extension("log"), game_sim::LANTERN_KEEP_LOG).unwrap();
@@ -522,7 +522,7 @@ async fn the_real_check_explains_a_dump_redump_disagrees_with() {
 </datafile>"#;
     std::fs::create_dir_all(base.join("cache/redump")).unwrap();
     std::fs::write(base.join("cache/redump/psx.dat"), dat).unwrap();
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Dumped { discs: vec![(main, "SLES_047.11", "SLES-04711")], next: AtomicUsize::new(0) });
     let mut e = Engine::new(reg);
     e.work_root = base.join("runs");

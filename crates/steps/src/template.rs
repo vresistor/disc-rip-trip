@@ -195,8 +195,8 @@ impl Files {
     /// From what arrives at the Folder: what kind of file, and whether the
     /// steps before it found which system it's for. `None` when it could
     /// be anything (branches of different kinds joined).
-    pub fn of(flow: &drt_engine::Flow) -> Option<Files> {
-        use drt_engine::ItemKind as K;
+    pub fn of(flow: &trip_engine::Flow) -> Option<Files> {
+        use trip_engine::ItemKind as K;
         match flow.kind {
             K::ImageFile if flow.found.contains("system") => Some(Files::Game),
             K::ImageFile => Some(Files::Data),
@@ -207,7 +207,7 @@ impl Files {
     }
 
     /// Its default, presets and tokens.
-    pub fn fitted(self) -> drt_engine::Fitted {
+    pub fn fitted(self) -> trip_engine::Fitted {
         // Saved when every Folder started on the music layout: an image or
         // a video on it means its own default.
         const MUSIC_DEFAULT: &[&str] = &[DEFAULT, PRESETS[0].0];
@@ -217,14 +217,14 @@ impl Files {
             Files::Data => (DUMP_DEFAULT, DATA_PRESETS, DATA_TOKENS, MUSIC_DEFAULT),
             Files::Video => (JELLYFIN, VIDEO_PRESETS, VIDEO_TOKENS, MUSIC_DEFAULT),
         };
-        drt_engine::Fitted { default, presets, tokens, was_default }
+        trip_engine::Fitted { default, presets, tokens, was_default }
     }
 }
 
 /// A Folder's names where it stands: [`Files::of`] what arrives, or every
 /// layout when that's mixed.
-pub fn names_for(flow: &drt_engine::Flow) -> drt_engine::Fitted {
-    Files::of(flow).map_or(drt_engine::Fitted { default: DEFAULT, presets: LIBRARY_PRESETS, tokens: TOKENS, was_default: &[] }, Files::fitted)
+pub fn names_for(flow: &trip_engine::Flow) -> trip_engine::Fitted {
+    Files::of(flow).map_or(trip_engine::Fitted { default: DEFAULT, presets: LIBRARY_PRESETS, tokens: TOKENS, was_default: &[] }, Files::fitted)
 }
 
 /// A preset's name for a template or a name, from every layout there is;
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn what_a_folder_files_comes_from_what_reaches_it() {
-        use drt_engine::{Flow, ItemKind as K};
+        use trip_engine::{Flow, ItemKind as K};
         let flow = |kind, found: &[&'static str]| Flow { kind, found: found.iter().copied().collect(), ..Flow::start() };
         assert_eq!(Files::of(&flow(K::AudioFile, &["release"])), Some(Files::Music));
         // A cue sheet, a lyrics file or a scan is filed beside its tracks.

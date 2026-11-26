@@ -2,16 +2,16 @@
 //! each sector's data, subchannel and C2 in is found by short test reads,
 //! kept on the drive, and given to redumper then and on every later rip;
 //! a drive redumper knows isn't tested. A stand-in redumper
-//! (`DRT_REDUMPER`, set once for this test binary) answers as the Lite-On
+//! (`TRIP_REDUMPER`, set once for this test binary) answers as the Lite-On
 //! eHAU324 does; the "drive" is a plain file, so no drive is touched.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::setting::Setting;
-use drt_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, Node, Outlet, ParamKind, ParamSpec, Recipe, Run, Snapshot, Step, StepInfo, Subject};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use trip_engine::recipe::chain;
+use trip_engine::setting::Setting;
+use trip_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, Node, Outlet, ParamKind, ParamSpec, Recipe, Run, Snapshot, Step, StepInfo, Subject};
 
 const DRIVE: &str = "ACME XY123";
 
@@ -70,14 +70,14 @@ kill -KILL $$
 "#;
 
 fn base() -> PathBuf {
-    let b = std::env::current_dir().unwrap().join("../../target/drt-test/sector-order");
+    let b = std::env::current_dir().unwrap().join("../../target/trip-test/sector-order");
     let _ = std::fs::remove_dir_all(&b);
     std::fs::create_dir_all(&b).unwrap();
     b
 }
 
 fn engine(b: &Path) -> Engine {
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Disc { device: b.join("drive") });
     let mut e = Engine::new(reg);
     e.work_root = b.join("runs");
@@ -129,7 +129,7 @@ async fn an_unknown_drive_s_order_is_found_once_and_kept() {
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     // SAFETY: set before any thread of this binary runs a tool, and this
     // binary's only test.
-    unsafe { std::env::set_var("DRT_REDUMPER", &script) };
+    unsafe { std::env::set_var("TRIP_REDUMPER", &script) };
 
     // First rip: redumper's guess, then DATA_SUB_C2, which reads cleanly;
     // kept on the drive, and the whole read told it.

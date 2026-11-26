@@ -176,7 +176,7 @@ run cyanrip-clone git clone --depth 1 --branch "v$CYANRIP_VERSION" \
   # longer packages it, and linking it statically drags in neon, GnuTLS, nettle,
   # p11-kit, idn2 and a dozen more, none of which this ever calls.
   cat > src/musicbrainz.c <<'STUB'
-/* Replaced by scripts/build-cyanrip.sh. Disc Rip Trip performs its own
+/* Replaced by scripts/build-cyanrip.sh. Trip performs its own
  * MusicBrainz lookups, with a cache and a rate limiter, and passes the result
  * in as tags. See THIRD-PARTY.md. */
 #include "musicbrainz.h"

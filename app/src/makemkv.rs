@@ -6,23 +6,23 @@
 //! run. Approving runs it once, for its version.
 
 use crate::model::Model;
-use drt_steps::real::video::makemkv::{self as mk, Location};
 use std::path::PathBuf;
 use std::sync::Arc;
+use trip_steps::real::video::makemkv::{self as mk, Location};
 
 /// The app's id, which flatpak knows it by.
-pub const APP_ID: &str = "io.github.vresistor.disc-rip-trip";
+pub const APP_ID: &str = "io.github.vresistor.trip";
 
 /// Where to get it.
 pub const GET_URL: &str = "https://www.makemkv.com/download/";
 
 /// What the sidebar says first, when it isn't set up.
-pub const WHY: &str = "Video discs are read by MakeMKV, which doesn't come with this app: it isn't free software, and it gets round copy protection. Disc Rip Trip only runs it if you say so.";
+pub const WHY: &str = "Video discs are read by MakeMKV, which doesn't come with this app: it isn't free software, and it gets round copy protection. Trip only runs it if you say so.";
 
 /// What the sidebar says when the flatpak's permission to start programs
 /// outside it has been taken away. It comes with it; choosing MakeMKV is
 /// all it should take.
-pub const TAKEN_AWAY: &str = "Disc Rip Trip has been stopped from starting programs outside its flatpak, so it can't start MakeMKV. This is usually turned off in Flatseal (\"Talk to org.freedesktop.Flatpak\"). Turn it back on there, then close Disc Rip Trip and open it again.";
+pub const TAKEN_AWAY: &str = "Trip has been stopped from starting programs outside its flatpak, so it can't start MakeMKV. This is usually turned off in Flatseal (\"Talk to org.freedesktop.Flatpak\"). Turn it back on there, then close Trip and open it again.";
 
 pub type Candidates = Arc<dyn Fn() -> Vec<Location> + Send + Sync>;
 pub type Version = Arc<dyn Fn(Location) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> + Send + Sync>;
@@ -40,7 +40,7 @@ pub struct Hooks {
     /// Whether the flatpak may start programs on the host, as it was
     /// started (true outside a flatpak).
     pub host_allowed: HostAllowed,
-    /// `DRT_MAKEMKVCON` is set: you said where, outside the app.
+    /// `TRIP_MAKEMKVCON` is set: you said where, outside the app.
     pub from_env: bool,
     /// The MakeMKVs that seem to be installed. Checks files only.
     pub candidates: Candidates,
@@ -62,7 +62,7 @@ impl Hooks {
             candidates: Arc::new(|| mk::candidates(&mk::Places::here())),
             version: Arc::new(move |loc| {
                 Box::pin(async move {
-                    let dir = std::env::temp_dir().join(format!("drt-makemkv-{}", std::process::id()));
+                    let dir = std::env::temp_dir().join(format!("trip-makemkv-{}", std::process::id()));
                     let r = mk::version(&mk::Launcher::of(&loc, mk::sandboxed()), &dir).await;
                     let _ = std::fs::remove_dir_all(&dir);
                     r
@@ -179,7 +179,7 @@ impl MakeMkv {
     /// The line the settings area shows.
     pub fn summary(&self) -> String {
         if self.hooks.from_env {
-            return "Set by DRT_MAKEMKVCON".into();
+            return "Set by TRIP_MAKEMKVCON".into();
         }
         match (self.readiness(), &self.saved) {
             (Readiness::Checking, _) => "Checking…".into(),
@@ -200,7 +200,7 @@ impl Model {
     /// Whether the recipe has a step that runs MakeMKV, and so needs it
     /// chosen.
     pub fn needs_makemkv(&self, i: usize) -> bool {
-        self.makemkv.hooks.required && self.recipes.get(i).is_some_and(|r| r.root.steps().into_iter().any(|n| matches!(n, drt_engine::Node::Step { step, .. } if runs_makemkv(step))))
+        self.makemkv.hooks.required && self.recipes.get(i).is_some_and(|r| r.root.steps().into_iter().any(|n| matches!(n, trip_engine::Node::Step { step, .. } if runs_makemkv(step))))
     }
 
     /// What keeps the recipe from starting, as far as MakeMKV goes.

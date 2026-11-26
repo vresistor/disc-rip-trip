@@ -1,5 +1,5 @@
 [package]
-name = "drt-app"
+name = "trip-app"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -8,13 +8,13 @@ publish = false
 description = "The window: the list of recipes, the canvas, live tiles and the sidebar"
 
 [[bin]]
-name = "disc-rip-trip"
+name = "trip"
 path = "src/main.rs"
 
 [dependencies]
-drt-engine = { path = "../crates/engine" }
-drt-steps = { path = "../crates/steps" }
-drt-layout = { path = "../crates/layout" }
+trip-engine = { path = "../crates/engine" }
+trip-steps = { path = "../crates/steps" }
+trip-layout = { path = "../crates/layout" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

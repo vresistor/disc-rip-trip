@@ -1,7 +1,7 @@
 //! The built-in recipes.
 
-use drt_engine::recipe::{branches, chain};
-use drt_engine::{Node, Recipe};
+use trip_engine::recipe::{branches, chain};
+use trip_engine::{Node, Recipe};
 
 /// The simulated drives. The built-in recipes read from these; on real
 /// hardware they're not connected until you pick yours on a recipe's Drive

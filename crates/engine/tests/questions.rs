@@ -3,9 +3,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::{branches, chain};
-use drt_engine::snapshot::{Choice, Question, QuestionShape};
-use drt_engine::{Answer, Command, Cx, Engine, Group, Inlet, ItemKind, Node, Outlet, Recipe, Registry, Step, StepInfo};
+use trip_engine::recipe::{branches, chain};
+use trip_engine::snapshot::{Choice, Question, QuestionShape};
+use trip_engine::{Answer, Command, Cx, Engine, Group, Inlet, ItemKind, Node, Outlet, Recipe, Registry, Step, StepInfo};
 
 struct Start;
 
@@ -17,7 +17,7 @@ impl Step for Start {
 
     async fn run(&self, mut inlet: Inlet, outlet: Outlet, _cx: Cx) -> Result<()> {
         inlet.recv().await;
-        outlet.send(drt_engine::Item::disc("d")).await;
+        outlet.send(trip_engine::Item::disc("d")).await;
         Ok(())
     }
 }
@@ -58,7 +58,7 @@ async fn two_steps_asking_at_once_are_asked_in_turn() {
     reg.add(Asker);
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
-    e.work_root = std::env::temp_dir().join(format!("drt-questions-{}", std::process::id()));
+    e.work_root = std::env::temp_dir().join(format!("trip-questions-{}", std::process::id()));
     let recipe = Recipe { name: "q".into(), root: chain([Node::step("s", "start"), branches([Node::step("a", "asker"), Node::step("b", "asker")])]) };
     let run = e.start(&recipe).unwrap();
     let mut rx = run.snapshot.clone();

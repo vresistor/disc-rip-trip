@@ -3,8 +3,8 @@
 //! name, and what came before by the steps on the way, so the test doesn't
 //! just repeat the kinds the steps declare.
 
-use drt_engine::{check, fits, fits_flow, flow_after, ItemKind, Node, Registry, StepInfo};
-use drt_steps::{real, recipes, simulated};
+use trip_engine::{check, fits, fits_flow, flow_after, ItemKind, Node, Registry, StepInfo};
+use trip_steps::{real, recipes, simulated};
 
 /// Only make sense on a disc image: a game's or a data disc's.
 const DUMP_ONLY: &[&str] = &["image", "game-rip", "check", "redump", "game-choose", "chd", "keep", "libcrypt", "m3u"];
@@ -197,7 +197,7 @@ fn every_plus_offers_only_what_makes_sense() {
 #[test]
 fn the_plus_still_offers_what_belongs() {
     for (which, reg) in registries() {
-        let at = |r: &drt_engine::Recipe, id: &str| offered(&r.root, id, &reg).1.iter().map(|i| i.kind).collect::<Vec<_>>();
+        let at = |r: &trip_engine::Recipe, id: &str| offered(&r.root, id, &reg).1.iter().map(|i| i.kind).collect::<Vec<_>>();
         let (cd, games, data, video) = (recipes::cd(), recipes::games(), recipes::data(), recipes::video());
 
         // The bug that started this: a Library of audio files offered LibCrypt.
@@ -283,8 +283,8 @@ fn simulated_and_real_steps_fit_the_same_places() {
 /// through a Folder that hands on what it's given.
 #[test]
 fn nothing_after_an_unknown_step_is_a_misfit() {
-    use drt_engine::first_misfit;
-    use drt_engine::recipe::chain;
+    use trip_engine::first_misfit;
+    use trip_engine::recipe::chain;
     for (which, reg) in registries() {
         let after_unknown = |rest: &[(&str, &str)]| {
             let mut v = vec![Node::step("d", "drive"), Node::step("c", "audio-cd"), Node::step("r", "rip"), Node::step("x", "from-the-future")];

@@ -1,4 +1,4 @@
-//! Rip's re-reads, with a stand-in for cyanrip (`DRT_CYANRIP`) and for
+//! Rip's re-reads, with a stand-in for cyanrip (`TRIP_CYANRIP`) and for
 //! clearing the drive's cache, so no drive is touched: every read after a
 //! track's first is preceded by clearing the cache, a re-read without it
 //! can't settle a track by agreeing, and *Read again slowly* on a drive
@@ -6,12 +6,12 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, Subject};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use trip_engine::recipe::chain;
+use trip_engine::{Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Run, Snapshot, Step, StepInfo, Subject};
 
 /// Two tracks of a disc that runs on long enough to clear the cache from
 /// well away: track 1 from LBA 0 to 1000, track 2 from 1000 to 9850.
@@ -94,14 +94,14 @@ struct Setup {
 }
 
 fn setup(name: &str, reads: &str, refuse_speed: bool, fixed: bool) -> Setup {
-    let base = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+    let base = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
     let _ = std::fs::remove_dir_all(&base);
     let tools = base.join("tools");
     std::fs::create_dir_all(&tools).unwrap();
     let script = tools.join("cyanrip.py");
     std::fs::write(&script, FAKE).unwrap();
     let log = base.join("calls.log");
-    std::env::set_var("DRT_CYANRIP", format!("python3 -I {}", script.display()));
+    std::env::set_var("TRIP_CYANRIP", format!("python3 -I {}", script.display()));
     std::env::set_var("FAKE_LOG", &log);
     std::env::set_var("READS", reads);
     std::env::set_var("REFUSE_SPEED", if refuse_speed { "1" } else { "0" });
@@ -112,12 +112,12 @@ fn setup(name: &str, reads: &str, refuse_speed: bool, fixed: bool) -> Setup {
 /// Starts Rip with a cache-clearing stand-in that notes each call where
 /// cyanrip's are, and succeeds while `ok` holds.
 fn start(s: &Setup, ok: Arc<AtomicBool>) -> Run {
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Disc);
     reg.add(Sink);
     let log = s.log.clone();
     reg.add(
-        drt_steps::real::Rip::with_flush(Arc::new(move |dev, lba, count| {
+        trip_steps::real::Rip::with_flush(Arc::new(move |dev, lba, count| {
             use std::io::Write;
             let good = ok.load(Ordering::SeqCst);
             writeln!(std::fs::OpenOptions::new().append(true).create(true).open(&log)?, "flush {dev} {lba} {count}{}", if good { "" } else { " failed" })?;
@@ -134,7 +134,7 @@ fn start(s: &Setup, ok: Arc<AtomicBool>) -> Run {
     e.time_scale = 0.0;
     e.work_root = s.base.join("runs");
     let recipe = Recipe { name: "Cache".into(), root: chain([Node::step("cd", "audio-cd"), Node::step("rip", "rip"), Node::step("sink", "test-sink")]) };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     e.start(&recipe).unwrap()
 }
 
@@ -146,7 +146,7 @@ async fn settled(run: &Run, log: &Path, calls: usize) -> Snapshot {
         let rip = &s.steps["rip"];
         let idle = rip.items.len() == 2 && rip.items.iter().all(|i| i.state != ItemState::Busy && i.state != ItemState::Waiting);
         let made = std::fs::read_to_string(log).unwrap_or_default().lines().filter(|l| l.starts_with("cyanrip")).count();
-        if (s.finished || (idle && rip.state == drt_engine::StepState::Bad)) && made > calls {
+        if (s.finished || (idle && rip.state == trip_engine::StepState::Bad)) && made > calls {
             return s;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -224,7 +224,7 @@ async fn re_reads_clear_the_drives_cache_first_and_slow_ones_fall_back_to_its_sp
     let run = start(&s, ok.clone());
     let snap = settled(&run, &s.log, 0).await;
     assert_eq!(order(&s.log), ["read 1 P0", "flush failed", "read 1 P3", "read 2 P0", "flush failed", "read 2 P3"]);
-    assert!(notes(&snap).iter().all(|(st, n)| *st == ItemState::Bad && n == drt_steps::real::NOT_CLEARED), "{:?}", notes(&snap));
+    assert!(notes(&snap).iter().all(|(st, n)| *st == ItemState::Bad && n == trip_steps::real::NOT_CLEARED), "{:?}", notes(&snap));
     assert!(logged(&snap).contains("track 1: couldn't clear the drive's cache (the drive refused the command)"), "{}", logged(&snap));
     assert_eq!(snap.steps["rip"].detail, "2 tracks to decide");
     // Read again once clearing works: that read agrees, and settles it.
@@ -237,7 +237,7 @@ async fn re_reads_clear_the_drives_cache_first_and_slow_ones_fall_back_to_its_sp
     ok.store(false, Ordering::SeqCst);
     retry(&run, "track-2", "combine").await;
     let snap = settled(&run, &s.log, 5).await;
-    assert_eq!(notes(&snap)[1], (ItemState::Bad, drt_steps::real::NOT_CLEARED.into()), "{:?}", order(&s.log));
+    assert_eq!(notes(&snap)[1], (ItemState::Bad, trip_steps::real::NOT_CLEARED.into()), "{:?}", order(&s.log));
     end(run, s).await;
 
     // Read again slowly, on a drive that refuses: read at its own speed,

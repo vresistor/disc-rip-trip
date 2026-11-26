@@ -38,10 +38,10 @@ use crate::template;
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use cyanrip::{RipOptions, Verdict};
-use drt_engine::setting::ParamKind;
-use drt_engine::{Context, Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Registry, Step, StepInfo, StepState, Subject};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use trip_engine::setting::ParamKind;
+use trip_engine::{Context, Cx, Group, Inlet, Item, ItemKind, ItemState, LaneKind, Outlet, ParamSpec, Registry, Step, StepInfo, StepState, Subject};
 
 pub fn register(r: &mut Registry) {
     r.add(Drive);
@@ -172,7 +172,7 @@ impl Step for Drive {
 pub async fn find_offset(drive: &str, measure: bool) -> Option<(i64, String)> {
     let dev = find_drive(drive)?;
     let (vendor, model) = vendor_model(dev.rsplit('/').next().unwrap_or(""));
-    let cache = drt_engine::cache_dir()?.join("cache");
+    let cache = trip_engine::cache_dir()?.join("cache");
     let listed = match offset::list(&cache).await {
         Ok(list) => offset::find(&list, &vendor, &model),
         Err(_) => None,
@@ -180,7 +180,7 @@ pub async fn find_offset(drive: &str, measure: bool) -> Option<(i64, String)> {
     if measure {
         // In the app's own cache, not a fixed name in the shared /tmp that
         // someone else could have made first; made new, never reused.
-        let dir = cache.join(format!("measure-{}-{}", std::process::id(), drt_engine::setting::now()));
+        let dir = cache.join(format!("measure-{}-{}", std::process::id(), trip_engine::setting::now()));
         std::fs::create_dir_all(&cache).ok()?;
         std::fs::create_dir(&dir).ok()?;
         let measured = offset::measure(&dev, &dir, std::future::pending()).await;
@@ -499,7 +499,7 @@ async fn pick_cover(cx: &Cx, archive: &artwork::Online, release: &str, group: Op
     let pre = artwork::best_front(&fronts, wanted_px(size), true, false);
     let answer = cx.ask(artwork::cover_question(&fronts, &thumbs, pre)).await?;
     let k = match answer {
-        drt_engine::Answer::Pick(k) if k < fronts.len() => k,
+        trip_engine::Answer::Pick(k) if k < fronts.len() => k,
         _ => pre,
     };
     cx.log(format!("you picked {} ({} × {})", fronts[k].words, fronts[k].size.0, fronts[k].size.1));
@@ -673,7 +673,7 @@ impl Rip {
 
 /// A track's note when its read was stopped for the tray to open, or a
 /// read wasn't started after it opened.
-pub use drt_engine::snapshot::TRAY_OPENED;
+pub use trip_engine::snapshot::TRAY_OPENED;
 /// A track's note when there was no disc to read it from.
 pub const NO_DISC: &str = "No disc in the drive";
 
@@ -1397,7 +1397,7 @@ pub fn rip_says(cx: &Cx, detail: impl Into<String>) {
 
 /// Counting only real verifications (AccurateRip's): *16/17 verified*,
 /// and how the rest were settled, as one qualifier.
-pub fn rip_outcome(items: &[drt_engine::ItemView]) -> (String, String) {
+pub fn rip_outcome(items: &[trip_engine::ItemView]) -> (String, String) {
     let total = items.iter().filter(|i| i.state != ItemState::Skipped).count();
     let verified = items.iter().filter(|i| i.verified).count();
     let kept = items.iter().filter(|i| i.state == ItemState::Ok && is_kept(&i.note)).count();
@@ -1450,7 +1450,7 @@ pub fn rip_needs(bad: &[(u32, String)]) -> String {
 }
 
 /// A track's number, from its item's id (`track-9`).
-fn track_no(i: &drt_engine::ItemView) -> Option<u32> {
+fn track_no(i: &trip_engine::ItemView) -> Option<u32> {
     i.id.rsplit('-').next()?.parse().ok()
 }
 
@@ -1918,12 +1918,12 @@ async fn until_there(cx: &Cx, to: &mut Dest, file: &Item, need: u64) -> bool {
                 cx.state(StepState::Busy);
                 return true;
             }
-            Some(Ok(drt_engine::Answer::Pick(0))) => {
-                let q = drt_engine::Question {
+            Some(Ok(trip_engine::Answer::Pick(0))) => {
+                let q = trip_engine::Question {
                     prompt: "Which folder should this disc go in?".into(),
-                    shape: drt_engine::QuestionShape::Value { label: "Folder".into(), suggested: to.folder.clone(), folder: true },
+                    shape: trip_engine::QuestionShape::Value { label: "Folder".into(), suggested: to.folder.clone(), folder: true },
                 };
-                if let Ok(drt_engine::Answer::Value(v)) = cx.ask(q).await {
+                if let Ok(trip_engine::Answer::Value(v)) = cx.ask(q).await {
                     let v = v.trim();
                     if !v.is_empty() {
                         to.folder = v.to_owned();
@@ -1954,14 +1954,14 @@ async fn until_there(cx: &Cx, to: &mut Dest, file: &Item, need: u64) -> bool {
 
 /// What a Folder asks while its folder is away: *Waiting for /run/…/FLAC
 /// to come back*.
-fn away(why: &reach::Unreachable, root: &Path, cx: &Cx) -> drt_engine::Question {
-    let choice = |l: &str, d: String| drt_engine::Choice { label: l.into(), detail: d, destructive: false, picture: None };
+fn away(why: &reach::Unreachable, root: &Path, cx: &Cx) -> trip_engine::Question {
+    let choice = |l: &str, d: String| trip_engine::Choice { label: l.into(), detail: d, destructive: false, picture: None };
     let at = reach::shown(root);
     let prompt = if why.full() { format!("Waiting for room in {at}") } else { format!("Waiting for {at} to come back") };
     let work = cx.work().map(|w| reach::shown(&w)).unwrap_or_default();
-    drt_engine::Question {
+    trip_engine::Question {
         prompt,
-        shape: drt_engine::QuestionShape::PickOne {
+        shape: trip_engine::QuestionShape::PickOne {
             options: vec![choice("Choose another folder", "For this disc only".into()), choice("Skip", format!("Not filed: the files stay in {work}"))],
             preselected: 0,
             details: None,
@@ -2053,22 +2053,22 @@ enum Taken {
 }
 
 /// The answer to [`name_taken`].
-fn taken_choice(answer: drt_engine::Answer) -> Taken {
+fn taken_choice(answer: trip_engine::Answer) -> Taken {
     match answer {
-        drt_engine::Answer::Pick(0) => Taken::Replace,
-        drt_engine::Answer::Pick(2) | drt_engine::Answer::Skip => Taken::Skip,
+        trip_engine::Answer::Pick(0) => Taken::Replace,
+        trip_engine::Answer::Pick(2) | trip_engine::Answer::Skip => Taken::Skip,
         _ => Taken::KeepBoth,
     }
 }
 
 /// The one question a Folder asks when names are taken: *3 files already
 /// in Parquet Courts / Wide Awake!*. Keep both is picked: it loses nothing.
-pub fn name_taken(n: usize, place: &str) -> drt_engine::Question {
-    let choice = |l: &str, d: &str, destructive| drt_engine::Choice { label: l.into(), detail: d.into(), destructive, picture: None };
+pub fn name_taken(n: usize, place: &str) -> trip_engine::Question {
+    let choice = |l: &str, d: &str, destructive| trip_engine::Choice { label: l.into(), detail: d.into(), destructive, picture: None };
     let files = if n == 1 { "1 file".to_owned() } else { format!("{n} files") };
-    drt_engine::Question {
+    trip_engine::Question {
         prompt: format!("{files} already in {place}"),
-        shape: drt_engine::QuestionShape::PickOne {
+        shape: trip_engine::QuestionShape::PickOne {
             options: vec![
                 choice("Replace them", "The files there now are overwritten", true),
                 choice("Keep both", "The new files get \" (2)\" after their names", false),
@@ -2087,7 +2087,7 @@ mod tests {
 
     #[test]
     fn a_rip_counts_only_real_verifications() {
-        let item = |n: u32, state, note: &str, verified| drt_engine::ItemView { id: format!("track-{n}"), label: format!("{n}"), state, note: note.into(), verified, options: vec![] };
+        let item = |n: u32, state, note: &str, verified| trip_engine::ItemView { id: format!("track-{n}"), label: format!("{n}"), state, note: note.into(), verified, options: vec![] };
         let items =
             [item(1, ItemState::Ok, "✓ 104", true), item(2, ItemState::Ok, "✓ 98", true), item(3, ItemState::Ok, "kept, unverified", false), item(4, ItemState::Ok, "✓ two reads agree", false)];
         assert_eq!(rip_outcome(&items), ("2/4 verified".into(), "2 not verified".into()));
@@ -2111,7 +2111,7 @@ mod tests {
 
     #[test]
     fn combining_reads_keeps_the_majority_of_each_sample() {
-        let dir = std::env::temp_dir().join(format!("drt-combine-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-combine-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let base = vec![[1i16, 1]; 100];
         let (mut a, mut b, mut c) = (base.clone(), base.clone(), base.clone());
@@ -2165,7 +2165,7 @@ mod tests {
 
     #[test]
     fn samples_are_found_by_their_chunk_not_by_the_word_data() {
-        let dir = std::env::temp_dir().join(format!("drt-chunks-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-chunks-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // As cyanrip writes it: a LIST chunk of CD-Text before the samples,
         // here with "data" in a title.
@@ -2216,7 +2216,7 @@ mod tests {
         // Track 1 at 0:32 (2400 frames, less the 150 of lead-in): 2250 sectors.
         assert_eq!(hidden_track_frames("1 2 22000 2400 11382"), Some(2250 * 588));
         assert_eq!(hidden_track_frames("nonsense"), None);
-        let dir = std::env::temp_dir().join(format!("drt-hidden-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-hidden-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (quiet, music) = (dir.join("quiet.wav"), dir.join("music.wav"));
         wav(&quiet, &vec![[0i16, 0]; 588 * 3]);
@@ -2258,7 +2258,7 @@ mod tests {
 
     #[test]
     fn two_reads_are_compared_sample_by_sample() {
-        let dir = std::env::temp_dir().join(format!("drt-diff-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-diff-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut a = vec![[0i16, 0]; 44_100 * 3];
         let b = a.clone();

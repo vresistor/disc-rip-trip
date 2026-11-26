@@ -542,7 +542,7 @@ pub(crate) mod tests {
 
     #[test]
     fn whole_rips_combine_track_by_track_and_a_rip_of_another_size_is_left_out() {
-        let base = std::env::current_dir().unwrap().join("../../target/drt-test/combine");
+        let base = std::env::current_dir().unwrap().join("../../target/trip-test/combine");
         let _ = std::fs::remove_dir_all(&base);
         let good: Vec<Vec<u8>> = (0..4).map(|l| sector(l, 2, l as u8, true)).collect();
         let music: Vec<u8> = (0..SECTOR * 3).map(|i| (i % 7) as u8).collect();
@@ -578,15 +578,15 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(base).unwrap();
     }
 
-    /// Combines real rips: `DRT_RIPS=a.cue,b.cue,c.cue DRT_WANT=<sha1>
-    /// cargo test -p drt-steps real_rips -- --ignored --nocapture`. Each
+    /// Combines real rips: `TRIP_RIPS=a.cue,b.cue,c.cue TRIP_WANT=<sha1>
+    /// cargo test -p trip-steps real_rips -- --ignored --nocapture`. Each
     /// rip's own count of sectors failing their checks is printed, to set
     /// beside redumper's `info` for the same file.
     #[test]
     #[ignore]
     fn real_rips() {
-        let rips: Vec<PathBuf> = std::env::var("DRT_RIPS").unwrap().split(',').map(PathBuf::from).collect();
-        let out = std::env::temp_dir().join("drt-real-rips");
+        let rips: Vec<PathBuf> = std::env::var("TRIP_RIPS").unwrap().split(',').map(PathBuf::from).collect();
+        let out = std::env::temp_dir().join("trip-real-rips");
         let t0 = std::time::Instant::now();
         let c = combine(&rips, &out, |_| {}, &|| false).unwrap();
         let t = &c.tally;
@@ -607,7 +607,7 @@ pub(crate) mod tests {
         for r in &roms {
             println!("{} size {} crc {} md5 {} sha1 {}", r.name, r.size, r.crc, r.md5, r.sha1);
         }
-        if let Ok(want) = std::env::var("DRT_WANT") {
+        if let Ok(want) = std::env::var("TRIP_WANT") {
             assert_eq!(roms[0].sha1, want);
         }
         std::fs::remove_dir_all(out).unwrap();

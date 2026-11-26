@@ -1,4 +1,4 @@
-//! Rip and a hidden track, with a stand-in for cyanrip (`DRT_CYANRIP`)
+//! Rip and a hidden track, with a stand-in for cyanrip (`TRIP_CYANRIP`)
 //! that prints what cyanrip 0.9.3 prints and writes the WAV it would. No
 //! drive is touched. It checks what Rip does with what it's given: the
 //! split-off pregap is asked for only on track 0's read, silence isn't
@@ -10,10 +10,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::{Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Snapshot, Step, StepInfo, Subject};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use trip_engine::recipe::chain;
+use trip_engine::{Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Snapshot, Step, StepInfo, Subject};
 
 /// Track 1 starts 10 sectors late: 5880 sample frames of pregap. The disc
 /// runs on long enough to clear the drive's cache from well away.
@@ -102,17 +102,17 @@ async fn run(base: &Path, hidden: &str) -> (Snapshot, Vec<Item>, String) {
     let script = tools.join("cyanrip.py");
     std::fs::write(&script, FAKE).unwrap();
     let log = base.join("calls.log");
-    std::env::set_var("DRT_CYANRIP", format!("python3 -I {}", script.display()));
+    std::env::set_var("TRIP_CYANRIP", format!("python3 -I {}", script.display()));
     std::env::set_var("FAKE_LOG", &log);
     std::env::set_var("HIDDEN", hidden);
     let probe = Probe::default();
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Disc);
     reg.add(probe.clone());
     // No drive: clearing its cache is only noted where cyanrip's calls are.
     let flushes = log.clone();
     reg.add(
-        drt_steps::real::Rip::with_flush(Arc::new(move |_, lba, count| {
+        trip_steps::real::Rip::with_flush(Arc::new(move |_, lba, count| {
             use std::io::Write;
             writeln!(std::fs::OpenOptions::new().append(true).create(true).open(&flushes)?, "flush {lba} {count}")
         }))
@@ -123,14 +123,14 @@ async fn run(base: &Path, hidden: &str) -> (Snapshot, Vec<Item>, String) {
     e.time_scale = 0.0;
     e.work_root = base.join("runs");
     let recipe = Recipe { name: "Hidden".into(), root: chain([Node::step("cd", "audio-cd"), Node::step("rip", "rip"), Node::step("probe", "test-probe")]) };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     let run = e.start(&recipe).unwrap();
     let mut rx = run.snapshot.clone();
     // A track that needs you would wait for ever; stop once Rip settles.
     loop {
         let s = rx.borrow_and_update().clone();
         let rip = &s.steps["rip"];
-        let settled = rip.state == drt_engine::StepState::Bad && rip.items.iter().all(|i| i.state != ItemState::Busy && i.state != ItemState::Waiting);
+        let settled = rip.state == trip_engine::StepState::Bad && rip.items.iter().all(|i| i.state != ItemState::Busy && i.state != ItemState::Waiting);
         // And every track it settled has reached the probe.
         let sent = rip.items.iter().filter(|i| i.state == ItemState::Ok).count();
         if s.finished || (settled && probe.0.lock().unwrap().len() >= sent) {
@@ -145,14 +145,14 @@ async fn run(base: &Path, hidden: &str) -> (Snapshot, Vec<Item>, String) {
         }
     }
     let snap = run.snapshot.borrow().clone();
-    run.send(drt_engine::Command::Stop).await;
+    run.send(trip_engine::Command::Stop).await;
     let _ = run.finished().await;
     let got = probe.0.lock().unwrap().clone();
     (snap, got, std::fs::read_to_string(log).unwrap_or_default())
 }
 
 fn base(n: &str) -> PathBuf {
-    std::env::current_dir().unwrap().join("../../target/drt-test").join(n)
+    std::env::current_dir().unwrap().join("../../target/trip-test").join(n)
 }
 
 // One test, so the stand-in's environment is never shared between two at once.

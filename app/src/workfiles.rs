@@ -15,14 +15,14 @@
 //! under `runs/` are; the small run records beside them (`runs/*.json`)
 //! are left. All of it runs off the window's thread.
 
-use drt_engine::{ItemState, Snapshot, StepState};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+use trip_engine::{ItemState, Snapshot, StepState};
 
 /// What a run settles to, written into its folder so a later start-up
 /// knows without the run.
-pub const MARK: &str = ".disc-rip-trip.json";
+pub const MARK: &str = ".trip.json";
 
 /// How old a raw folder must be before start-up deletes it.
 pub const RAW_AGE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -338,7 +338,7 @@ pub fn worker(root: PathBuf, wake: std::sync::Arc<std::sync::OnceLock<egui::Cont
 #[cfg(test)]
 mod tests {
     use super::*;
-    use drt_engine::{ItemView, StepView};
+    use trip_engine::{ItemView, StepView};
 
     fn put(dir: &Path, rel: &str, bytes: usize) {
         let p = dir.join(rel);

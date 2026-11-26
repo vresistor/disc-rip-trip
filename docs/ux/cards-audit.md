@@ -5,7 +5,7 @@ Every built-in step's tile and drawer, as the window draws them today. The spec 
 **Renders:** 195 PNGs in `target/inventory/` (light, 1280 × 720, recipe list cropped off), named `<recipe>-<moment>-<step>[-<tab>].png`. The `index.tsv` beside them has each step's name, subtitle, status and detail as the snapshot gave them. Regenerate with:
 
 ```sh
-cargo test -p drt-app --test inventory -- --ignored --test-threads 1
+cargo test -p trip-app --test inventory -- --ignored --test-threads 1
 ```
 
 Not rendered, because the simulator never reaches them: Drive *Offset?* and *Insert a disc*; Discogs, GnuDB and TMDb *Not set up*; Video disc *MakeMKV isn't installed*. The spec rules on them from the real steps' code.

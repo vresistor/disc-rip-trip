@@ -1,4 +1,4 @@
-# Portability: what it takes to run Disc Rip Trip elsewhere
+# Portability: what it takes to run Trip elsewhere
 
 Written 2026-11-20 by reading the workspace (`crates/*`, `app/`), the
 packaging, and CI, and updated the same day for the swap: the first app
@@ -16,17 +16,17 @@ finds no drives.
 ## 1. External programs the new app runs
 
 Tools are found by `tool::command` (`crates/steps/src/real/tool.rs`):
-`DRT_<NAME>` if set (a whole command line), otherwise the name on `PATH`.
+`TRIP_<NAME>` if set (a whole command line), otherwise the name on `PATH`.
 It does **not** look beside its own binary. Inside the flatpak the tools are
-in `/app/bin`, which is on `PATH`, so it finds them with no `DRT_*` set.
+in `/app/bin`, which is on `PATH`, so it finds them with no `TRIP_*` set.
 
 | Program | For | How found | Bundled today? | Licence | If it's missing |
 |---|---|---|---|---|---|
-| `cyanrip` | Audio CD: TOC, rip each track, AccurateRip, measuring the offset | `DRT_CYANRIP`, then PATH | In the flatpak (0.9.3) | GPL-3.0+ as built (its own code is LGPL-2.1+; libcdio is GPL-3.0+) | Read disc / Rip card turns red: *Failed*, `couldn't start "cyanrip": No such file or directory`. No install hint. **Measuring the offset fails silently** (`find_offset` returns `None` through `.ok()?`). |
-| `redumper` | Image, Rip for games | `DRT_REDUMPER`, then PATH | In the flatpak (b744) | GPL-3.0 | Red card, `couldn't start "redumper"`. On Linux a drive-permission pre-check names the group to join first (`redumper.rs::drive_access`). |
-| `ffmpeg` | Every encoder, ReplayGain (ebur128), Transcode, Remux, interlace check (idet), tag rewrite | `DRT_FFMPEG`, then PATH | In the flatpak (BtbN GPL build, with x265) | GPL-3.0 as built | Red card, `couldn't start "ffmpeg"`. If ffmpeg is there but lacks an encoder (e.g. `libx265`), the card shows ffmpeg's last line. |
-| `ffprobe` | Checking a MakeMKV title is whole, field order, `drt fix-tags` | `DRT_FFPROBE`, then PATH | In the flatpak | GPL-3.0 | Whole-title check: red card, `couldn't run ffprobe`. In Transcode a missing ffprobe only loses the field-order hint; ffmpeg's idet still decides. |
-| `makemkvcon` | Video disc (scan titles), Rip for DVD and Blu-ray | `DRT_MAKEMKVCON`, else only the place you approved in the app (the app's `makemkv` setting). To offer choices it checks, without running anything, that files exist on PATH, at the installer's path for the OS (`/usr/bin`, `/Applications/MakeMKV.app/…`, `%ProgramFiles%\MakeMKV\makemkvcon64.exe`), and for the `com.makemkv.MakeMKV` flatpak's folder. Inside a flatpak it runs via `flatpak-spawn --host`; the flatpak comes with `--talk-name=org.freedesktop.Flatpak` for this, so choosing it is all it takes. | **Never** (CI fails any artifact that contains it) | Proprietary; free while in beta (beta key) or paid | Until approved, Video disc and Rip are in Needs and Start is off: *Video discs need MakeMKV: choose where it is first*. If that permission has been turned off (e.g. in Flatseal): it says so, and where to turn it back on. |
+| `cyanrip` | Audio CD: TOC, rip each track, AccurateRip, measuring the offset | `TRIP_CYANRIP`, then PATH | In the flatpak (0.9.3) | GPL-3.0+ as built (its own code is LGPL-2.1+; libcdio is GPL-3.0+) | Read disc / Rip card turns red: *Failed*, `couldn't start "cyanrip": No such file or directory`. No install hint. **Measuring the offset fails silently** (`find_offset` returns `None` through `.ok()?`). |
+| `redumper` | Image, Rip for games | `TRIP_REDUMPER`, then PATH | In the flatpak (b744) | GPL-3.0 | Red card, `couldn't start "redumper"`. On Linux a drive-permission pre-check names the group to join first (`redumper.rs::drive_access`). |
+| `ffmpeg` | Every encoder, ReplayGain (ebur128), Transcode, Remux, interlace check (idet), tag rewrite | `TRIP_FFMPEG`, then PATH | In the flatpak (BtbN GPL build, with x265) | GPL-3.0 as built | Red card, `couldn't start "ffmpeg"`. If ffmpeg is there but lacks an encoder (e.g. `libx265`), the card shows ffmpeg's last line. |
+| `ffprobe` | Checking a MakeMKV title is whole, field order, `tripr fix-tags` | `TRIP_FFPROBE`, then PATH | In the flatpak | GPL-3.0 | Whole-title check: red card, `couldn't run ffprobe`. In Transcode a missing ffprobe only loses the field-order hint; ffmpeg's idet still decides. |
+| `makemkvcon` | Video disc (scan titles), Rip for DVD and Blu-ray | `TRIP_MAKEMKVCON`, else only the place you approved in the app (the app's `makemkv` setting). To offer choices it checks, without running anything, that files exist on PATH, at the installer's path for the OS (`/usr/bin`, `/Applications/MakeMKV.app/…`, `%ProgramFiles%\MakeMKV\makemkvcon64.exe`), and for the `com.makemkv.MakeMKV` flatpak's folder. Inside a flatpak it runs via `flatpak-spawn --host`; the flatpak comes with `--talk-name=org.freedesktop.Flatpak` for this, so choosing it is all it takes. | **Never** (CI fails any artifact that contains it) | Proprietary; free while in beta (beta key) or paid | Until approved, Video disc and Rip are in Needs and Start is off: *Video discs need MakeMKV: choose where it is first*. If that permission has been turned off (e.g. in Flatseal): it says so, and where to turn it back on. |
 | `gdbus` / `notify-send` | Desktop notification (Notify step): portal, then freedesktop, then notify-send | PATH | Present in the GNOME runtime *(ran)* | n/a (system) | Notify reports `desktop: …` as an error. ntfy over HTTP still works. |
 | `gsettings` | Reduced motion (GNOME `enable-animations`) | PATH | GNOME runtime | n/a | Silent: animations stay on. Harmless. |
 | `flatpak`, `flatpak-spawn`, `pkill` | Running and stopping an approved MakeMKV across the sandbox | PATH / host | Host | n/a | Without the permission MakeMKV can't be started, and the app says so; a Stop may leave makemkvcon holding the drive. |
@@ -34,7 +34,7 @@ in `/app/bin`, which is on `PATH`, so it finds them with no `DRT_*` set.
 | `flac`, `metaflac`, `eject` | **Not used.** FLAC goes through ffmpeg, tags through `lofty`, eject is an ioctl. | n/a | n/a | n/a | n/a |
 
 **At start-up** the window checks for cyanrip, redumper, ffmpeg and ffprobe
-(`tool::missing`: the first word of `DRT_<NAME>`, else the name on `PATH`) and
+(`tool::missing`: the first word of `TRIP_<NAME>`, else the name on `PATH`) and
 says in the header which aren't there: *cyanrip isn't installed*. The cards
 still fail with the raw error if you start a step anyway. MakeMKV isn't in
 that check; a video recipe's cards ask where it is.
@@ -61,23 +61,23 @@ these.
 
 | Piece | What it does |
 |---|---|
-| `scripts/build-flatpak.sh` | Runs everything inside `org.gnome.Sdk//50` with `org.freedesktop.Sdk.Extension.rust-stable//25.08`, so glibc matches the runtime: `fetch-tools.sh` once into `target/flatpak/tools`, then `cargo build --release --locked -p drt-app -p drt` with `LIBCHDMAN_CPU=portable` into `target/flatpak`, then `flatpak-builder` and `flatpak build-bundle` to `dist/disc-rip-trip-<version>-x86_64.flatpak`. `--install` installs it. |
+| `scripts/build-flatpak.sh` | Runs everything inside `org.gnome.Sdk//50` with `org.freedesktop.Sdk.Extension.rust-stable//25.08`, so glibc matches the runtime: `fetch-tools.sh` once into `target/flatpak/tools`, then `cargo build --release --locked -p trip-app -p tripr` with `LIBCHDMAN_CPU=portable` into `target/flatpak`, then `flatpak-builder` and `flatpak build-bundle` to `dist/trip-<version>-x86_64.flatpak`. `--install` installs it. |
 | `scripts/fetch-tools.sh` | ffmpeg and ffprobe from BtbN (static, GPL, checked for x264, x265, LAME, Opus, Vorbis and SVT-AV1), redumper b744 (static), cyanrip from `build-cyanrip.sh`. Writes `PROVENANCE.txt`. Linux x86_64 only. |
 | `scripts/build-cyanrip.sh` | cyanrip 0.9.3 against an audio-only LGPL ffmpeg, lame and libcdio, static except glibc, libcurl and libxml2 (*(ran)*: needs GLIBC_2.38). |
-| `packaging/flatpak/io.github.vresistor.disc-rip-trip.yml` | Packages the payload: `disc-rip-trip`, `drt` and the four tools into `/app/bin`, `PROVENANCE.txt` into `/app/share/doc`, the desktop file, metainfo and icons. GNOME 50 runtime. `--device=all` (`/dev/sr*` and the GPU), `--filesystem=host` (libraries anywhere, `xdg-music` included), `--share=network`, Wayland with X11 fallback. `--talk-name=org.freedesktop.Flatpak`, to start the MakeMKV you choose; the sandbox would allow any host program with it, so the app itself starts nothing else, and nothing before you've chosen. Notifications and the folder picker go through portals, which need no permission. |
+| `packaging/flatpak/io.github.vresistor.trip.yml` | Packages the payload: `trip`, `tripr` and the four tools into `/app/bin`, `PROVENANCE.txt` into `/app/share/doc`, the desktop file, metainfo and icons. GNOME 50 runtime. `--device=all` (`/dev/sr*` and the GPU), `--filesystem=host` (libraries anywhere, `xdg-music` included), `--share=network`, Wayland with X11 fallback. `--talk-name=org.freedesktop.Flatpak`, to start the MakeMKV you choose; the sandbox would allow any host program with it, so the app itself starts nothing else, and nothing before you've chosen. Notifications and the folder picker go through portals, which need no permission. |
 | `.github/workflows/build.yml` | `check`: tests, clippy and rustfmt on ubuntu-24.04 with lavapipe. `flatpak`: builds the bundle, fails if anything MakeMKV- or libdvdcss-like is in it, uploads it as an artifact; on a `v*` tag, makes a draft release with the bundle and `tools-provenance.txt`. |
 
 **Where the flatpak keeps things.** `$XDG_CONFIG_HOME` is
-`~/.var/app/io.github.vresistor.disc-rip-trip/config`, so recipes and settings are in
-`config/disc-rip-trip/`. The first app kept its `config.json` in the same
+`~/.var/app/io.github.vresistor.trip/config`, so recipes and settings are in
+`config/trip/`. The first app kept its `config.json` in the same
 folder; this one only reads the drive offsets it recorded (`offset::from_old_app`). The first time the flatpak starts with no
 `recipes.json` there, it copies `recipes.json` and `settings.json` from
-`~/.config/disc-rip-trip/` (a build from source's), and leaves those where
+`~/.config/trip/` (a build from source's), and leaves those where
 they are (`Store::adopt`). Working files and downloaded lists go in
-`~/.var/app/io.github.vresistor.disc-rip-trip/cache/disc-rip-trip/`.
+`~/.var/app/io.github.vresistor.trip/cache/trip/`.
 
-**The app id** is `io.github.vresistor.disc-rip-trip`, so it maps to the
-repository (`github.com/vresistor/disc-rip-trip`) the way Flathub expects.
+**The app id** is `io.github.vresistor.trip`, so it maps to the
+repository (`github.com/vresistor/trip`) the way Flathub expects.
 Builds before November 2026 used a CamelCase id; flatpak treats that as a
 different app, and nothing moves its folder in `~/.var/app/` across. Move
 it by hand if you had one.
@@ -87,10 +87,10 @@ it by hand if you had one.
 | OS | To run it |
 |---|---|
 | **Any Linux, x86_64** | The flatpak from Releases. MakeMKV from Flathub (`com.makemkv.MakeMKV`) for video. |
-| **Fedora** (44, default repos *(ran: `dnf repoquery`)*), from source | Rust ≥ 1.89, `gcc-c++`, then `cargo build --release -p drt-app -p drt`. **cyanrip and redumper are not in Fedora's default repos**: build cyanrip with `scripts/build-cyanrip.sh`, take redumper's release build. `ffmpeg-free` has lame, opus, vorbis and svt-av1 but **no libx265**, so Transcode's default codec fails. You need full ffmpeg from RPM Fusion. |
+| **Fedora** (44, default repos *(ran: `dnf repoquery`)*), from source | Rust ≥ 1.89, `gcc-c++`, then `cargo build --release -p trip-app -p tripr`. **cyanrip and redumper are not in Fedora's default repos**: build cyanrip with `scripts/build-cyanrip.sh`, take redumper's release build. `ffmpeg-free` has lame, opus, vorbis and svt-av1 but **no libx265**, so Transcode's default codec fails. You need full ffmpeg from RPM Fusion. |
 | **Ubuntu 24.04** *(ran: `apt-cache policy`)*, from source | Rust (rustup; apt's may be too old), `build-essential`, `ffmpeg` (6.1.1, has x265). `cyanrip` **0.9.2** is in universe, older than the 0.9.3 the rip code was measured against, so it's untested. **No redumper package.** Debian 12 has **no cyanrip at all**. |
 | **macOS** | Not tested and not built. If it compiles (unverified), the window opens, but **`drives()` reads `/sys/class/block`, so it lists no drives and no real recipe can start.** The TOC, disc-type and eject paths are stubbed (empty, `None`, `false`). |
-| **Windows** | **Won't compile.** `tool.rs` uses `std::os::fd` and `libc::openpty` with no `cfg`. Config would land in `./disc-rip-trip` (no `HOME`/`XDG_*`). |
+| **Windows** | **Won't compile.** `tool.rs` uses `std::os::fd` and `libc::openpty` with no `cfg`. Config would land in `./trip` (no `HOME`/`XDG_*`). |
 
 ## 4. Platform reach
 

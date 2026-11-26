@@ -6,10 +6,10 @@ use crate::chrome;
 use crate::model::Model;
 use crate::theme::{self, font, kind_icon, mix, state_icon, Pal};
 use crate::widgets::{chip, pill, segmented, Btn, Look, Tone};
-use drt_engine::{Scope, Setting, StepState};
 use egui::{pos2, vec2, Align, Align2, Key, Layout as L, Margin, Rect, RichText, Sense, Stroke, Ui};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
+use trip_engine::{Scope, Setting, StepState};
 
 /// Both ends of a channel from a worker thread to the window.
 pub(crate) type Channel<T> = (mpsc::Sender<T>, mpsc::Receiver<T>);
@@ -96,7 +96,7 @@ pub struct App {
     /// The window title last sent.
     pub title: String,
     /// Whether things may move: off under GNOME's Reduce animations (or
-    /// DRT_REDUCED_MOTION=1), and while a screenshot's clock is pinned.
+    /// TRIP_REDUCED_MOTION=1), and while a screenshot's clock is pinned.
     pub motion: bool,
     motion_applied: Option<bool>,
     /// This frame's time, for cues started outside the UI pass.
@@ -119,7 +119,7 @@ pub struct App {
     follow_moved: f64,
     /// The +s that would offer nothing, for the tree they were worked out
     /// on: they aren't drawn.
-    dead_pluses: Option<(drt_engine::Node, std::collections::HashSet<drt_engine::Spot>)>,
+    dead_pluses: Option<(trip_engine::Node, std::collections::HashSet<trip_engine::Spot>)>,
     /// The top band this frame (the list's top row, the header), and the
     /// title field in it when editing, for `chrome::band`.
     band: Vec<Rect>,
@@ -286,10 +286,10 @@ impl App {
     }
 
     /// The recipe's layout, with Next disc's line back to the start.
-    pub fn layout(&self, i: usize) -> drt_layout::Layout {
+    pub fn layout(&self, i: usize) -> trip_layout::Layout {
         let root = &self.m.recipes[i].root;
         let reg = &self.m.engine.registry;
-        drt_layout::layout_with_loops(root, drt_layout::Metrics::default(), |id| crate::model::step_kind(root, id).and_then(|k| reg.info(&k)).is_some_and(|inf| inf.loops_back))
+        trip_layout::layout_with_loops(root, trip_layout::Metrics::default(), |id| crate::model::step_kind(root, id).and_then(|k| reg.info(&k)).is_some_and(|inf| inf.loops_back))
     }
 
     /// Moves the camera to `to`: a glide (zoom geometric, pan straight,
@@ -328,7 +328,7 @@ impl App {
     /// Notes each tile's state for the shown recipe and run; a tile that
     /// has just finished, failed or begun to ask plays its cue once.
     /// Switching recipe or run only notes, so nothing replays.
-    fn watch_cues(&mut self, i: usize, snap: &drt_engine::Snapshot) {
+    fn watch_cues(&mut self, i: usize, snap: &trip_engine::Snapshot) {
         let key = (i, self.m.shown_run(i).map_or(u64::MAX, |r| r.id));
         let fresh = self.cue_key != Some(key);
         if fresh {
@@ -388,7 +388,7 @@ impl App {
     /// wouldn't fit. A step that asks you goes first; otherwise it moves
     /// at most every second or so, so several busy steps don't pull it
     /// about.
-    fn follow_step(&mut self, i: usize, lay: &drt_layout::Layout, area: egui::Vec2) {
+    fn follow_step(&mut self, i: usize, lay: &trip_layout::Layout, area: egui::Vec2) {
         const SETTLE: f64 = 0.35;
         const GAP: f64 = 1.2;
         if !self.follow || self.editing || self.popover.is_some() {
@@ -553,7 +553,7 @@ impl App {
         for (id, key, text) in typed {
             let Some(info) = self.m.info(i, &id) else { continue };
             let Some(spec) = info.params.iter().find(|s| s.key == key) else { continue };
-            if !matches!(spec.kind, drt_engine::ParamKind::Text | drt_engine::ParamKind::Number | drt_engine::ParamKind::Folder) {
+            if !matches!(spec.kind, trip_engine::ParamKind::Text | trip_engine::ParamKind::Number | trip_engine::ParamKind::Folder) {
                 continue;
             }
             let shown = self.m.shown_value(i, &id, spec).map(|v| crate::model::value_text(&v)).unwrap_or_default();
@@ -894,7 +894,7 @@ impl App {
             let w = &self.m.work;
             let (value, col) = match w.kept.len() {
                 0 if w.total == 0 => ("None".to_owned(), p.subtle),
-                0 => (drt_steps::real::media::size(w.total), p.subtle),
+                0 => (trip_steps::real::media::size(w.total), p.subtle),
                 n => (format!("{n} never filed"), p.warn),
             };
             if self.setting_row(ui, p, "Working files", &value, col, Page::WorkingFiles) {
@@ -1185,7 +1185,7 @@ impl App {
                 ui.label(RichText::new(&self.m.recipes[i].name).font(font(17.0, 700)));
             }
             let drive = self.m.drive(i);
-            let album = self.m.shown_run(i).and_then(|r| r.run.context().get(drt_engine::Subject::Disc, "album").map(str::to_owned));
+            let album = self.m.shown_run(i).and_then(|r| r.run.context().get(trip_engine::Subject::Disc, "album").map(str::to_owned));
             let sub = match (album, drive.is_empty()) {
                 (Some(a), false) => format!("{a}, in {drive}"),
                 (Some(a), true) => a,
@@ -1382,7 +1382,7 @@ impl App {
         });
     }
 
-    fn stage(&mut self, ui: &mut Ui, p: &Pal, t: f64, snap: &drt_engine::Snapshot) {
+    fn stage(&mut self, ui: &mut Ui, p: &Pal, t: f64, snap: &trip_engine::Snapshot) {
         let rect = ui.max_rect();
         self.canvas = rect;
         let i = self.sel;
@@ -1440,7 +1440,7 @@ impl App {
         match clicked {
             Some(Click::Tile(id)) => self.tile_clicked(id),
             Some(Click::Cover(id)) => {
-                if let Some(path) = snap.steps.get(&id).and_then(|v| v.record.files.iter().map(|f| drt_steps::real::expand(&f.path)).find(|f| f.is_absolute())) {
+                if let Some(path) = snap.steps.get(&id).and_then(|v| v.record.files.iter().map(|f| trip_steps::real::expand(&f.path)).find(|f| f.is_absolute())) {
                     self.m.open(&path);
                 }
             }
@@ -1473,33 +1473,32 @@ impl App {
     /// What each card shows besides its step's view: the settings marked
     /// for it, as label and value (yours with a dot; locked while
     /// ripping), and Cover art's picture.
-    pub fn cards(&mut self, ctx: &egui::Context, snap: &drt_engine::Snapshot) -> std::collections::HashMap<String, CardExtra> {
+    pub fn cards(&mut self, ctx: &egui::Context, snap: &trip_engine::Snapshot) -> std::collections::HashMap<String, CardExtra> {
         let i = self.sel;
         let locked = self.m.locked(i, Scope::Recipe) || !self.m.shows_newest(i);
         let builtin = self.m.builtin(i);
         let mut out = std::collections::HashMap::new();
         for (id, v) in &snap.steps {
             let Some(info) = self.m.info(i, id) else { continue };
-            let sets: Vec<(&drt_engine::ParamSpec, Setting<serde_json::Value>)> = info.params.iter().map(|s| (s, self.m.shown_param(i, id, s))).collect();
+            let sets: Vec<(&trip_engine::ParamSpec, Setting<serde_json::Value>)> = info.params.iter().map(|s| (s, self.m.shown_param(i, id, s))).collect();
             let flow = self.m.shown_flow(i, id);
             let get = |k: &str| sets.iter().find(|(s, _)| s.key == k).and_then(|(s, set)| s.resolve_at(set, flow.as_ref()));
             // Changed by you, from what the recipe came with.
             let yours = |k: &str| sets.iter().find(|(s, _)| s.key == k).is_some_and(|(s, _)| self.m.is_yours(i, id, s, builtin.as_ref()));
-            let settings = sets
-                .iter()
-                .filter(|(s, _)| s.on_card.is_some() && s.applies(get))
-                .filter(|(s, _)| !(s.main_path_only && self.m.on_a_path(i, id)))
-                .filter(|(s, _)| !(s.scope == Scope::Drive && self.m.drive(i).is_empty()))
-                .take(2)
-                .map(|(s, _)| {
-                    let on = s.on_card.unwrap();
-                    let value =
-                        match on.value {
+            let settings =
+                sets.iter()
+                    .filter(|(s, _)| s.on_card.is_some() && s.applies(get))
+                    .filter(|(s, _)| !(s.main_path_only && self.m.on_a_path(i, id)))
+                    .filter(|(s, _)| !(s.scope == Scope::Drive && self.m.drive(i).is_empty()))
+                    .take(2)
+                    .map(|(s, _)| {
+                        let on = s.on_card.unwrap();
+                        let value = match on.value {
                             Some(f) => f(&get),
                             // A choice's word reads in lower case (*joint*); a name or a path as it is.
                             None => get(s.key)
                                 .map(|v| {
-                                    if matches!(s.kind, drt_engine::ParamKind::Choice(_)) {
+                                    if matches!(s.kind, trip_engine::ParamKind::Choice(_)) {
                                         card_value(label_head(s.choice_label(&crate::model::value_text(&v))))
                                     } else {
                                         crate::model::value_text(&v)
@@ -1507,13 +1506,19 @@ impl App {
                                 })
                                 .unwrap_or_default(),
                         };
-                    let value = if value.is_empty() { "—".to_owned() } else { value };
-                    crate::card::CardSetting { label: on.label.to_owned(), value, yours: yours(s.key) || on.with.iter().any(|k| yours(k)), path: s.kind == drt_engine::ParamKind::Folder, help: s.help }
-                })
-                .collect();
+                        let value = if value.is_empty() { "—".to_owned() } else { value };
+                        crate::card::CardSetting {
+                            label: on.label.to_owned(),
+                            value,
+                            yours: yours(s.key) || on.with.iter().any(|k| yours(k)),
+                            path: s.kind == trip_engine::ParamKind::Folder,
+                            help: s.help,
+                        }
+                    })
+                    .collect();
             // Cover art: the picture it made.
             let picture = if v.step == "cover-art" {
-                match v.record.files.iter().map(|f| drt_steps::real::expand(&f.path)).find(|f| f.is_absolute()) {
+                match v.record.files.iter().map(|f| trip_steps::real::expand(&f.path)).find(|f| f.is_absolute()) {
                     Some(path) => {
                         crate::tray::load_cover(self, ctx, &path);
                         match self.covers.get(&path) {
@@ -1532,7 +1537,7 @@ impl App {
         out
     }
 
-    fn zoom_controls(&mut self, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &drt_layout::Layout, bottom_left: egui::Pos2) {
+    fn zoom_controls(&mut self, ui: &mut Ui, p: &Pal, canvas: Rect, lay: &trip_layout::Layout, bottom_left: egui::Pos2) {
         let cover = 0.0;
         let i = self.sel;
         egui::Area::new(ui.scope_id().with("zoom")).order(egui::Order::Middle).pivot(Align2::LEFT_BOTTOM).fixed_pos(bottom_left).show(ui.ctx(), |ui| {
@@ -1580,13 +1585,13 @@ impl App {
 }
 
 /// The recipe's icon in the list: what its kind step reads.
-fn recipe_icon(r: &drt_engine::Recipe) -> &'static str {
+fn recipe_icon(r: &trip_engine::Recipe) -> &'static str {
     let kinds: Vec<&str> = r
         .root
         .steps()
         .into_iter()
         .filter_map(|n| match n {
-            drt_engine::Node::Step { step, .. } => Some(step.as_str()),
+            trip_engine::Node::Step { step, .. } => Some(step.as_str()),
             _ => None,
         })
         .collect();

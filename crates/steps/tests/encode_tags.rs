@@ -2,20 +2,20 @@
 //! decodes to exactly the rip (and one that doesn't fails), and each
 //! container's tags are where Picard reads them, read back from the file.
 //!
-//! Needs ffmpeg and ffprobe on the PATH (or `DRT_FFMPEG`); without them it
+//! Needs ffmpeg and ffprobe on the PATH (or `TRIP_FFMPEG`); without them it
 //! says so and passes.
 
-use drt_steps::real::encode::{Codec, Job, ALL};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use trip_steps::real::encode::{Codec, Job, ALL};
 
 fn have_ffmpeg() -> bool {
     std::process::Command::new("ffprobe").arg("-version").output().is_ok_and(|o| o.status.success())
-        && drt_steps::real::tool::command("ffmpeg").as_std().get_program().to_str().is_some_and(|p| std::process::Command::new(p).arg("-version").output().is_ok())
+        && trip_steps::real::tool::command("ffmpeg").as_std().get_program().to_str().is_some_and(|p| std::process::Command::new(p).arg("-version").output().is_ok())
 }
 
 fn base(name: &str) -> PathBuf {
-    let b = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+    let b = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
     let _ = std::fs::remove_dir_all(&b);
     std::fs::create_dir_all(&b).unwrap();
     b
@@ -92,7 +92,7 @@ async fn every_lossless_file_decodes_to_the_rip_and_the_tags_are_where_picard_re
     wav(&src);
     // A cover, as Cover art leaves one: every MP3 and M4A has it.
     let cover = b.join("cover.jpg");
-    let ff = drt_steps::real::tool::command("ffmpeg").as_std().get_program().to_owned();
+    let ff = trip_steps::real::tool::command("ffmpeg").as_std().get_program().to_owned();
     assert!(std::process::Command::new(&ff).args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=32x32", "-frames:v", "1"]).arg(&cover).status().unwrap().success());
     for c in ALL {
         let out = b.join(format!("01-{}.{}", c.kind(), c.ext()));
@@ -147,7 +147,7 @@ async fn every_lossless_file_decodes_to_the_rip_and_the_tags_are_where_picard_re
                     .into_owned()
             };
             let (before, tags_before) = (md5(&out), probe(&out));
-            drt_steps::real::encode::finish_tags(c, &out, &c.container_tags(&tags()).1, true).unwrap();
+            trip_steps::real::encode::finish_tags(c, &out, &c.container_tags(&tags()).1, true).unwrap();
             assert_eq!(md5(&out), before, "{c:?}: the audio is untouched by the tag pass");
             assert_eq!(probe(&out), tags_before, "{c:?}");
         }

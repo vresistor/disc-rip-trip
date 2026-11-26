@@ -10,11 +10,11 @@ use crate::makemkv::Readiness;
 use crate::model::{text_value, value_text};
 use crate::theme::{font, kind_icon, mix, state_icon, Pal};
 use crate::widgets::{pill, segmented, Btn, Look, Tone};
-use drt_engine::{Answer, Command, Context, Group, ItemState, ItemView, ParamKind, ParamSpec, QuestionShape, Scope, Setting, Snapshot, StepInfo, StepState, StepView, Subject};
-use drt_steps::real::{expand, mmss};
-use drt_steps::template::{self, Files};
 use egui::{pos2, vec2, Align, Color32, Layout as L, Rect, RichText, Sense, Stroke, Ui};
 use std::path::PathBuf;
+use trip_engine::{Answer, Command, Context, Group, ItemState, ItemView, ParamKind, ParamSpec, QuestionShape, Scope, Setting, Snapshot, StepInfo, StepState, StepView, Subject};
+use trip_steps::real::{expand, mmss};
+use trip_steps::template::{self, Files};
 
 /// A cover image, as far as it's got.
 pub enum Cover {
@@ -166,7 +166,7 @@ pub fn wants_wide(app: &App) -> bool {
 /// Whether a step's question is one of its own few answers (a Folder's
 /// *Replace them*, *Keep both*, *Skip*) rather than candidates it was
 /// offered: it never put candidates to you.
-fn own_answers(v: &StepView, options: &[drt_engine::Choice]) -> bool {
+fn own_answers(v: &StepView, options: &[trip_engine::Choice]) -> bool {
     !options.is_empty() && v.record.options.is_none()
 }
 
@@ -287,7 +287,7 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
         if let Some(url) = decision_card(ui, p, d, options.iter().find(|x| Some(&x.id) == d.chosen.as_ref())) {
             app.m.open_url(&url);
         }
-        let others: Vec<&drt_engine::Candidate> = options.iter().filter(|x| Some(&x.id) != d.chosen.as_ref()).collect();
+        let others: Vec<&trip_engine::Candidate> = options.iter().filter(|x| Some(&x.id) != d.chosen.as_ref()).collect();
         if !others.is_empty() {
             heading(ui, p, "The other options");
             for x in others {
@@ -299,7 +299,7 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     }
     // A lookup (or the disc's own text): what it offered, best first.
     if let Some(c) = &ctx {
-        let mut offered: Vec<&drt_engine::Candidate> = c.offered_by(id).collect();
+        let mut offered: Vec<&trip_engine::Candidate> = c.offered_by(id).collect();
         offered.sort_by(|a, b| b.score.total_cmp(&a.score));
         if !offered.is_empty() && v.record.decided.is_none() {
             heading(ui, p, if offered.len() == 1 { "Offered" } else { "Offered, best first" });
@@ -314,7 +314,7 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     // (An encoder's rows and a folder's each name their file; any other
     // step's rows stand for its files when there's one for each, or name
     // them.)
-    let in_rows = |f: &drt_engine::Made| {
+    let in_rows = |f: &trip_engine::Made| {
         let name = file_name(&f.path);
         v.items.iter().any(|it| it.label.contains(&name) || it.note.contains(&name))
     };
@@ -327,7 +327,7 @@ fn result(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: f64
     }
     // With nothing else to show, the facts it found.
     if let Some(c) = &ctx {
-        let facts: Vec<&drt_engine::Fact> = c.found_by(id).filter(|f| !matches!(f.key.as_str(), "cover" | "cover_release" | "cover_from")).collect();
+        let facts: Vec<&trip_engine::Fact> = c.found_by(id).filter(|f| !matches!(f.key.as_str(), "cover" | "cover_release" | "cover_from")).collect();
         if !facts.is_empty() && !has_items(id, &v, &info, Some(c)) && v.record.decided.is_none() && v.record.files.is_empty() {
             heading(ui, p, "Found");
             fact_table(ui, p, &facts);
@@ -430,7 +430,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                 icon: "folder".into(),
                 colour: p.kind("folder"),
                 name: "Working files".into(),
-                pill: Some((drt_steps::real::media::size(w.total), if w.kept.is_empty() { Tone::Plain } else { Tone::Warn }, None)),
+                pill: Some((trip_steps::real::media::size(w.total), if w.kept.is_empty() { Tone::Plain } else { Tone::Warn }, None)),
                 say: "Where each disc's rip and encodes wait until they're filed. They're deleted once everything is filed; a folder holding files that never were is kept, since it may be the only copy.".into(),
                 acts: vec![],
                 body: Body::App,
@@ -728,9 +728,9 @@ fn working_files(app: &mut App, ui: &mut Ui, p: &Pal) {
     }
     heading(ui, p, "Never filed");
     for k in kept {
-        let size = drt_steps::real::media::size(k.bytes);
+        let size = trip_steps::real::media::size(k.bytes);
         ui.add(egui::Label::new(RichText::new(&k.line).font(font(13.5, 500)).color(p.ink)).wrap());
-        ui.label(RichText::new(format!("{size} · {}", drt_steps::real::reach::shown(&k.path))).font(font(12.0, 400)).color(p.muted));
+        ui.label(RichText::new(format!("{size} · {}", trip_steps::real::reach::shown(&k.path))).font(font(12.0, 400)).color(p.muted));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if app.confirm_work_delete.as_ref() == Some(&k.path) {
@@ -769,7 +769,7 @@ fn makemkv_page(app: &mut App, ui: &mut Ui, p: &Pal, full: bool) {
     };
     let mk = &app.m.makemkv;
     if mk.hooks.from_env {
-        wrap(ui, "MakeMKV is run as DRT_MAKEMKVCON says, which you set yourself.", p.ink);
+        wrap(ui, "MakeMKV is run as TRIP_MAKEMKVCON says, which you set yourself.", p.ink);
         return;
     }
     let r = mk.readiness();
@@ -877,13 +877,13 @@ fn makemkv_page(app: &mut App, ui: &mut Ui, p: &Pal, full: bool) {
             app.m.set_makemkv_key_updates(!on);
         }
         ui.add_space(2.0);
-        wrap(ui, "MakeMKV needs a key, and its free beta key runs out every couple of months. When MakeMKV says it has, Disc Rip Trip fetches the current one from the MakeMKV forum and saves it in MakeMKV's settings. A key you bought is never changed. Off until you turn it on.", p.muted);
+        wrap(ui, "MakeMKV needs a key, and its free beta key runs out every couple of months. When MakeMKV says it has, Trip fetches the current one from the MakeMKV forum and saves it in MakeMKV's settings. A key you bought is never changed. Off until you turn it on.", p.muted);
     }
 }
 
 /// What tells candidates apart, from their own facts: *year, country and
 /// label*. Empty when nothing does, or there's only one.
-fn differences(cands: &[drt_engine::Candidate]) -> String {
+fn differences(cands: &[trip_engine::Candidate]) -> String {
     if cands.len() < 2 {
         return String::new();
     }
@@ -922,7 +922,7 @@ fn has_items(id: &str, v: &StepView, info: &StepInfo, ctx: Option<&Context>) -> 
 /// they came), as it put them to you. None before any reached it; a run
 /// kept from before Choose recorded them has every candidate offered in
 /// the run instead.
-fn options_of(v: &StepView, ctx: Option<&Context>) -> Vec<drt_engine::Candidate> {
+fn options_of(v: &StepView, ctx: Option<&Context>) -> Vec<trip_engine::Candidate> {
     let mut cands = match (&v.record.options, &v.record.decided) {
         (Some(o), _) => o.clone(),
         (None, Some(_)) => ctx.map(|c| c.candidates().to_vec()).unwrap_or_default(),
@@ -1006,7 +1006,7 @@ fn length(c: &Context, n: u32) -> Option<u32> {
 /// The folder a step's files actually went into: the deepest one that
 /// holds them all (*~/Music/FLAC/The White Stripes/The White Stripes*);
 /// before anything is filed, its base folder.
-pub fn filed_dir(files: &[drt_engine::Made], base: &str) -> PathBuf {
+pub fn filed_dir(files: &[trip_engine::Made], base: &str) -> PathBuf {
     let dirs: Vec<PathBuf> = files.iter().filter_map(|f| expand(&f.path).parent().map(|d| d.to_owned())).collect();
     let Some(first) = dirs.first() else { return expand(base) };
     let mut common: Vec<std::path::Component> = first.components().collect();
@@ -1967,7 +1967,7 @@ fn filter_row(app: &mut App, ui: &mut Ui, p: &Pal, options: &[(&str, usize)], de
 /// The file an item became, by its name.
 /// The encoders name each file by its track alone (`07.flac`), so the
 /// number is the match; never a title, which another track's may contain.
-fn file_for<'a>(files: &'a [drt_engine::Made], n: u32, _label: &str) -> Option<&'a drt_engine::Made> {
+fn file_for<'a>(files: &'a [trip_engine::Made], n: u32, _label: &str) -> Option<&'a trip_engine::Made> {
     let want = format!("{n:02}");
     files.iter().find(|f| std::path::Path::new(&f.path).file_stem().is_some_and(|s| s.to_string_lossy() == want))
 }
@@ -2390,7 +2390,7 @@ pub fn rip_verdict(state: ItemState, note: &str) -> (String, Tone, String, Optio
                 // runs said; unsure samples left, it isn't clean.
                 let rest = n.split_once(", ").map(|(_, r)| r.replace("unsettled", "uncertain")).unwrap_or_default();
                 (format!("Best of {reads}"), if n.starts_with('✓') { Tone::Ok } else { Tone::Warn }, rest, None)
-            } else if drt_steps::real::is_kept(n) {
+            } else if trip_steps::real::is_kept(n) {
                 ("Kept anyway".into(), Tone::Warn, "not verified".into(), None)
             } else {
                 ("Done".into(), Tone::Ok, n.trim_start_matches("✓").trim().to_owned(), None)
@@ -2405,9 +2405,9 @@ pub fn rip_verdict(state: ItemState, note: &str) -> (String, Tone, String, Optio
                 ("Doesn't match", "Other people's rips of this disc differ".into())
             } else if n.is_empty() {
                 ("Couldn't be read", "Nothing came back from the drive".into())
-            } else if n == drt_steps::real::TRAY_OPENED {
+            } else if n == trip_steps::real::TRAY_OPENED {
                 ("Stopped", n.to_owned())
-            } else if n == drt_steps::real::NO_DISC {
+            } else if n == trip_steps::real::NO_DISC {
                 ("Not read", n.to_owned())
             } else {
                 let mut c = n.chars();
@@ -2554,7 +2554,7 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
                             r.dest = Some((name, String::new()));
                             r.two_line = true;
                         }
-                        r.size = Some(drt_steps::real::media::size(f.size));
+                        r.size = Some(trip_steps::real::media::size(f.size));
                     }
                     let (pct, left) = progress(&it.note);
                     if it.state == ItemState::Busy {
@@ -2620,7 +2620,7 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
                         }
                     }
                     // A picture it saved opens at full size.
-                    if info.output == drt_engine::ItemKind::PictureFile && it.state == ItemState::Ok && picture_file(&v.record.files, &it.label).is_some() {
+                    if info.output == trip_engine::ItemKind::PictureFile && it.state == ItemState::Ok && picture_file(&v.record.files, &it.label).is_some() {
                         r.open = true;
                     }
                     r
@@ -2630,7 +2630,7 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
                 // Only a step that handles tracks, titles or files has a list
                 // to be empty; one that handles the disc as a whole (Choose,
                 // Notify, Next disc) says what it did above, or nothing.
-                use drt_engine::ItemKind;
+                use trip_engine::ItemKind;
                 if matches!(info.input, ItemKind::Track | ItemKind::Title | ItemKind::Dump) || info.input.is_file() {
                     empty(ru, p, "Nothing yet");
                 }
@@ -2661,7 +2661,7 @@ fn step_body(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, id: &str, t: 
 const OPEN: &str = "open-file";
 
 /// The picture file a row stands for, by its name.
-fn picture_file<'a>(files: &'a [drt_engine::Made], label: &str) -> Option<&'a drt_engine::Made> {
+fn picture_file<'a>(files: &'a [trip_engine::Made], label: &str) -> Option<&'a trip_engine::Made> {
     files.iter().find(|f| file_name(&f.path) == label && expand(&f.path).is_absolute())
 }
 
@@ -2864,7 +2864,7 @@ pub fn cap_pub(s: &str) -> String {
 /// What an item left undone says: *Stopped* when the run was stopped
 /// while it was being worked on, else *Skipped*.
 fn left_word(note: &str) -> &'static str {
-    if note.trim() == drt_engine::snapshot::STOPPED {
+    if note.trim() == trip_engine::snapshot::STOPPED {
         "Stopped"
     } else {
         "Skipped"
@@ -3174,7 +3174,7 @@ fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &Step
     let busy = v.items.iter().position(|i| i.state == ItemState::Busy);
     let read = v.items.iter().filter(|i| !matches!(i.state, ItemState::Waiting | ItemState::Busy)).count();
     let verified = v.items.iter().filter(|i| i.verified).count();
-    let kept = v.items.iter().filter(|i| i.state == ItemState::Ok && drt_steps::real::is_kept(&i.note)).count();
+    let kept = v.items.iter().filter(|i| i.state == ItemState::Ok && trip_steps::real::is_kept(&i.note)).count();
     let counted = v.items.iter().filter(|i| i.state != ItemState::Skipped).count();
     let reading = busy.is_some() || read < v.items.len();
     let (big, word) = if reading {
@@ -3203,7 +3203,7 @@ fn rip_head(app: &App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &Step
             };
             let needs = v.count(ItemState::Bad);
             // Tracks the tray stopped, or that found no disc, weren't read.
-            let unread = v.items.iter().filter(|i| i.state == ItemState::Bad && matches!(i.note.as_str(), drt_steps::real::TRAY_OPENED | drt_steps::real::NO_DISC)).count();
+            let unread = v.items.iter().filter(|i| i.state == ItemState::Bad && matches!(i.note.as_str(), trip_steps::real::TRAY_OPENED | trip_steps::real::NO_DISC)).count();
             if needs > 0 {
                 let head = if unread > 0 { format!("{} of {} read", v.items.len() - unread, v.items.len()) } else { format!("All {} read", v.items.len()) };
                 ring_headline(ui, p, &head);
@@ -3246,7 +3246,7 @@ pub fn dump_verdict(state: ItemState, note: &str) -> (String, String, Tone) {
         // (An older run's note says *came back wrong*.)
         ItemState::Ok if n.starts_with("read, but ") => (cap(&n.trim_start_matches("read, but ").replace("came back wrong", "read wrong")), "not clean".into(), Tone::Warn),
         ItemState::Ok => ("Read".into(), "read".into(), Tone::Ok),
-        ItemState::Bad if n == drt_steps::real::TRAY_OPENED || n == drt_steps::real::NO_DISC => (cap(n), "not read".into(), Tone::Bad),
+        ItemState::Bad if n == trip_steps::real::TRAY_OPENED || n == trip_steps::real::NO_DISC => (cap(n), "not read".into(), Tone::Bad),
         ItemState::Bad => {
             let unreadable = n.strip_suffix(" unreadable sectors").or_else(|| n.strip_suffix(" unreadable sector")).filter(|c| c.chars().all(|ch| ch.is_ascii_digit()));
             let head = match unreadable {
@@ -3382,17 +3382,17 @@ fn retries_of(log: &[&str]) -> Option<u32> {
 /// whether the image matches Redump, and what was put right later, are
 /// Check and fix's to say.
 #[allow(clippy::too_many_arguments)]
-fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, sectors_map: Option<&drt_steps::map::SectorMap>, t: f64) -> Vec<(String, String)> {
-    use drt_steps::map::Mark;
+fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &StepInfo, sectors_map: Option<&trip_steps::map::SectorMap>, t: f64) -> Vec<(String, String)> {
+    use trip_steps::map::Mark;
     let Some(it) = v.items.first().cloned() else {
         empty(ui, p, "Nothing read yet");
         return vec![];
     };
     let i = app.sel;
     let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
-    let passes = drt_steps::real::redumper::passes(log.iter().copied());
+    let passes = trip_steps::real::redumper::passes(log.iter().copied());
     let raw = app.m.shown_raw(i, id);
-    let live = raw.iter().rev().find_map(|l| drt_steps::real::redumper::parse_progress(l));
+    let live = raw.iter().rev().find_map(|l| trip_steps::real::redumper::parse_progress(l));
     let busy = it.state == ItemState::Busy;
     let (headline, word, tone) = dump_verdict(it.state, &it.note);
     let pct = progress(&it.note).0;
@@ -3408,7 +3408,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     };
     let size = (!v.status.is_empty() && v.status != "Skipped").then(|| v.status.clone());
     // What redumper is doing just now: where, which try, what's come back.
-    let now_live: Option<drt_steps::real::redumper::Live> = v.now.clone().and_then(|n| serde_json::from_value(n).ok()).filter(|_| busy);
+    let now_live: Option<trip_steps::real::redumper::Live> = v.now.clone().and_then(|n| serde_json::from_value(n).ok()).filter(|_| busy);
     let rereading = now_live.as_ref().filter(|l| l.rereading && l.of > 0);
     let crawling = now_live.as_ref().is_some_and(|l| l.crawling);
     // A re-read's own progress, not the disc's: in a bad patch it moves a
@@ -3435,9 +3435,9 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     // The disc from its start to its end round the ring, with where the
     // drive reported errors as it read, and where the test of every
     // sector found some wrong: as Rip logged them.
-    let map = drt_steps::real::redumper::disc_map(log.iter().copied());
+    let map = trip_steps::real::redumper::disc_map(log.iter().copied());
     let sectors = if map.sectors > 0 { map.sectors } else { crate::pace::sectors(&it.note).map_or(0, |s| s.1) };
-    let put_right = passes.iter().any(|p| p.kind == drt_steps::real::redumper::PassKind::Reread) && drt_steps::real::redumper::left_after(&passes, passes.len().saturating_sub(1)) == 0;
+    let put_right = passes.iter().any(|p| p.kind == trip_steps::real::redumper::PassKind::Reread) && trip_steps::real::redumper::left_after(&passes, passes.len().saturating_sub(1)) == 0;
     // With a map of every sector under it, the ring keeps to how far and
     // what it came to: where things went wrong is the map's to show.
     let ticks = if sectors_map.is_some() { vec![] } else { disc_ticks(p, &map, sectors, put_right && !busy) };
@@ -3461,7 +3461,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             }
             let mut back = l.recovered_text();
             if let Some(s) = l.left_secs {
-                back.push_str(&format!(" · {}", drt_steps::real::redumper::left_words(s)));
+                back.push_str(&format!(" · {}", trip_steps::real::redumper::left_words(s)));
             }
             working(ui, p, "Re-reading bad parts", pct, &[gone, cap(&back)], t);
         } else if busy {
@@ -3479,7 +3479,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
             working(ui, p, &doing, pct, &[at, times], t);
         } else {
             let head = match it.state {
-                ItemState::Skipped if it.note == drt_engine::snapshot::STOPPED => "Stopped".to_owned(),
+                ItemState::Skipped if it.note == trip_engine::snapshot::STOPPED => "Stopped".to_owned(),
                 ItemState::Skipped => "No image kept".to_owned(),
                 _ => headline.clone(),
             };
@@ -3498,7 +3498,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
         // Crawling: said once, under the rest. Stop is the window's.
         if crawling {
             ui.add_space(8.0);
-            ui.add(egui::Label::new(RichText::new(drt_steps::real::redumper::CRAWLING).font(font(13.5, 500)).color(p.warn)).wrap());
+            ui.add(egui::Label::new(RichText::new(trip_steps::real::redumper::CRAWLING).font(font(13.5, 500)).color(p.warn)).wrap());
         }
     });
     let mut clicked = vec![];
@@ -3506,7 +3506,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     if it.state == ItemState::Bad {
         let mut r = Row::new(None, it.label.clone());
         retries(&mut r, info);
-        let reason = drt_steps::real::data::failure_detail(&it.note) != cap(&it.note);
+        let reason = trip_steps::real::data::failure_detail(&it.note) != cap(&it.note);
         let why = reason.then_some("Clean the disc and re-read them, or make the image with them left blank, for Check and fix to try again.");
         if let Some(o) = needs_box(ui, p, why, &r.acts, &it.label) {
             clicked.push((it.id.clone(), o));
@@ -3522,7 +3522,7 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
     let later = |k: usize, kind| passes[k + 1..].iter().any(|q| q.kind == kind);
     let mut n = 0u32;
     for (k, ps) in passes.iter().enumerate() {
-        use drt_steps::real::redumper::{left_after, PassKind};
+        use trip_steps::real::redumper::{left_after, PassKind};
         // Writing the tracks again, made anyway: the first try, stopped on
         // what it couldn't read, is one row with the second.
         if ps.kind == PassKind::Tracks && later(k, PassKind::Tracks) {
@@ -3609,32 +3609,32 @@ fn dump_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: &
 /// (from its log). Only Rip's own: what Check and fix did after is on its
 /// own map. None when Rip made none (a run from before maps, a simulated
 /// step).
-fn sector_map(v: &StepView) -> Option<drt_steps::map::SectorMap> {
-    use drt_steps::map::SectorMap;
+fn sector_map(v: &StepView) -> Option<trip_steps::map::SectorMap> {
+    use trip_steps::map::SectorMap;
     let log: Vec<&str> = v.record.log.iter().map(|l| l.line.as_str()).collect();
-    let wrong: Vec<u64> = drt_steps::real::redumper::disc_map(log.iter().copied()).wrong.iter().flat_map(|w| w.from..=w.to).take(200_000).collect();
+    let wrong: Vec<u64> = trip_steps::real::redumper::disc_map(log.iter().copied()).wrong.iter().flat_map(|w| w.from..=w.to).take(200_000).collect();
     let rip = v.record.map.clone().and_then(|j| serde_json::from_value::<SectorMap>(j).ok());
-    drt_steps::map::combined(rip, &wrong, None)
+    trip_steps::map::combined(rip, &wrong, None)
 }
 
 /// The marks on a game or data disc's ring: where the drive reported
 /// errors as it read (orange; green once re-reading put them all right),
 /// then over them where the check of every sector found some wrong (red).
-fn disc_ticks(p: &Pal, map: &drt_steps::real::redumper::DiscMap, sectors: u64, put_right: bool) -> Vec<Tick> {
+fn disc_ticks(p: &Pal, map: &trip_steps::real::redumper::DiscMap, sectors: u64, put_right: bool) -> Vec<Tick> {
     if sectors == 0 {
         return vec![];
     }
     let at = |s: u64| s as f32 / sectors as f32;
     let read = if put_right { p.ok } else { p.warn };
-    let mark = |s: &drt_steps::real::redumper::Span, col, across| Tick { from: at(s.from), to: at(s.to + 1), weight: s.weight as f32, col, across };
+    let mark = |s: &trip_steps::real::redumper::Span, col, across| Tick { from: at(s.from), to: at(s.to + 1), weight: s.weight as f32, col, across };
     map.read.iter().map(|s| mark(s, read, false)).chain(map.wrong.iter().map(|s| mark(s, p.bad, true))).collect()
 }
 
 /// Where on the disc things went wrong, in a line: *25 bad sectors, most
 /// between 49% and 68%*; or, when the check found none, where the drive
 /// reported errors as it read.
-fn map_line(map: &drt_steps::real::redumper::DiscMap, sectors: u64, count: bool) -> Option<String> {
-    use drt_steps::real::redumper::most_between;
+fn map_line(map: &trip_steps::real::redumper::DiscMap, sectors: u64, count: bool) -> Option<String> {
+    use trip_steps::real::redumper::most_between;
     if sectors == 0 {
         return None;
     }
@@ -3670,7 +3670,7 @@ fn check_doing(status: &str) -> Option<(&'static str, &'static str)> {
     let s = status;
     if s == "Looking for bad sectors" {
         Some(("Read bad sectors again", "Looking"))
-    } else if s == drt_steps::real::game::REREADING || (s.starts_with("Re-reading ") && (s.ends_with(" bad sectors") || s.ends_with(" bad sector"))) {
+    } else if s == trip_steps::real::game::REREADING || (s.starts_with("Re-reading ") && (s.ends_with(" bad sectors") || s.ends_with(" bad sector"))) {
         Some(("Read bad sectors again", "Re-reading"))
     } else if (s.starts_with("Rip ") && s.contains(" of ")) || s.starts_with("Ripping again") {
         Some(("Rip again and combine", "Ripping"))
@@ -3702,10 +3702,10 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     let verified = it.verified || matches!(v.status.as_str(), "Verified" | "Matches Redump");
     let held = it.state == ItemState::Bad;
     // Reading bad sectors again: where, which try, what's come back.
-    let rereading: Option<drt_steps::real::fix::Rereading> = v.now.clone().and_then(|n| serde_json::from_value(n).ok()).filter(|_| busy);
+    let rereading: Option<trip_steps::real::fix::Rereading> = v.now.clone().and_then(|n| serde_json::from_value(n).ok()).filter(|_| busy);
     let pct = rereading.as_ref().map(|r| r.fraction()).or(progress(&it.note).0);
-    let size = m.as_ref().and_then(crate::compare::copy_bytes).map(drt_steps::real::media::size);
-    let stopped = it.state == ItemState::Skipped && it.note == drt_engine::snapshot::STOPPED;
+    let size = m.as_ref().and_then(crate::compare::copy_bytes).map(trip_steps::real::media::size);
+    let stopped = it.state == ItemState::Skipped && it.note == trip_engine::snapshot::STOPPED;
     let (cell, word) = match it.state {
         ItemState::Busy => (crate::card::Cell::Busy, "checking"),
         ItemState::Waiting => (crate::card::Cell::Wait, "waiting"),
@@ -3743,7 +3743,7 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
         if let Some(r) = &rereading {
             let mut lines = vec![cap(&r.place()), r.so_far(), cap(&r.left_text())];
             lines.extend(r.last_text());
-            working(ui, p, drt_steps::real::game::REREADING, pct, &lines, t);
+            working(ui, p, trip_steps::real::game::REREADING, pct, &lines, t);
             return;
         }
         if busy {
@@ -3768,7 +3768,7 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
         }
         // Reading bad sectors again stopped, getting nowhere: said plainly.
         if !verified && m.as_ref().and_then(|m| m.fixed.as_ref()).is_some_and(|f| f.given_up) {
-            ring_note(ui, p, drt_steps::real::fix::STOPPED);
+            ring_note(ui, p, trip_steps::real::fix::STOPPED);
         }
         if let Some(l) = took(v, "Done").filter(|_| !held) {
             ring_note(ui, p, &l);
@@ -3780,7 +3780,7 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     if held {
         // (Never hidden before it has run: asked, you can always rip again once.)
         let rips = m.as_ref().and_then(|m| m.combined.as_ref()).map(|c| c.rips.len());
-        let most = info.params.iter().find(|s| s.key == "extra_rips").and_then(|s| app.m.param(i, id, s).resolve(None)).and_then(|v| v.as_u64()).unwrap_or(drt_steps::real::game::EXTRA_RIPS as u64)
+        let most = info.params.iter().find(|s| s.key == "extra_rips").and_then(|s| app.m.param(i, id, s).resolve(None)).and_then(|v| v.as_u64()).unwrap_or(trip_steps::real::game::EXTRA_RIPS as u64)
             as usize
             + 1;
         let options: Vec<(String, String)> = it.options.iter().filter(|o| !(o.0 == "combine" && rips.is_some_and(|r| r >= most))).cloned().collect();
@@ -3794,7 +3794,7 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     // What it's done, in order: what came in from Rip, the first
     // comparison, each way it tried to put the copy right, the last.
     let mut list: Vec<Row> = vec![];
-    let blank = ctx.and_then(|c| c.get(Subject::Disc, drt_steps::real::data::UNREADABLE)).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+    let blank = ctx.and_then(|c| c.get(Subject::Disc, trip_steps::real::data::UNREADABLE)).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
     let mut from = Row::new(None, if blank > 0 { format!("From Rip: the image, {} blank", sectors_text(blank)) } else { "From Rip: the image".to_owned() });
     from.faint = true;
     list.push(from);
@@ -3892,7 +3892,7 @@ fn check_fix(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
     heading(ui, p, "What it's done");
     clicked.extend(rows(app, ui, p, &format!("{}/check", v.step), list, "", t));
     // Where on the disc: the sectors it took in as bad, and what came of each.
-    if let Some(map) = v.record.map.clone().and_then(|j| serde_json::from_value::<drt_steps::map::SectorMap>(j).ok()).filter(|m| !m.is_empty()) {
+    if let Some(map) = v.record.map.clone().and_then(|j| serde_json::from_value::<trip_steps::map::SectorMap>(j).ok()).filter(|m| !m.is_empty()) {
         ui.add_space(8.0);
         heading(ui, p, "Where on the disc");
         if let Some(v) = crate::sectormap::show(ui, p, &map, t, app.map_view, crate::sectormap::Whose::Check) {
@@ -3916,7 +3916,7 @@ fn title_verdict(state: ItemState, note: &str) -> (String, Tone, String, Option<
     let n = note.trim();
     match state {
         ItemState::Ok => ("Read".into(), Tone::Ok, n.trim_start_matches('✓').trim().rsplit_once(", ").map_or(String::new(), |(_, size)| size.to_owned()), None),
-        ItemState::Bad if n == drt_steps::real::TRAY_OPENED || n == drt_steps::real::NO_DISC => ("Not read".into(), Tone::Bad, String::new(), Some(cap(n))),
+        ItemState::Bad if n == trip_steps::real::TRAY_OPENED || n == trip_steps::real::NO_DISC => ("Not read".into(), Tone::Bad, String::new(), Some(cap(n))),
         ItemState::Bad => ("Not read".into(), Tone::Bad, String::new(), Some(cap(n.trim_start_matches("Couldn't copy the video: ")))),
         ItemState::Skipped => (left_word(n).into(), Tone::Plain, String::new(), None),
         ItemState::Busy => {
@@ -3981,7 +3981,7 @@ fn video_rip(app: &mut App, ui: &mut Ui, p: &Pal, id: &str, v: &StepView, info: 
             let n = number(it, k);
             let (word, tone, note, why) = title_verdict(it.state, &it.note);
             let mut r = Row::new(Some(n), it.label.clone());
-            r.len = ctx.and_then(|c| length(c, n)).map(drt_steps::real::video::hms);
+            r.len = ctx.and_then(|c| length(c, n)).map(trip_steps::real::video::hms);
             r.attn = why.is_some();
             r.why = why;
             r.item = Some(it.id.clone());
@@ -4180,7 +4180,7 @@ fn encoder_before<'a>(snap: &'a Snapshot, v: &'a StepView) -> Option<&'a str> {
 
 /// The extension an encoder's files get: AAC and ALAC are both `.m4a`.
 fn ext_of(kind: &str) -> &'static str {
-    drt_steps::real::encode::ALL.iter().find(|c| c.kind() == kind).map_or("", |c| c.ext())
+    trip_steps::real::encode::ALL.iter().find(|c| c.kind() == kind).map_or("", |c| c.ext())
 }
 
 /// A folder step's path template: a preset's name or one typed.
@@ -4195,7 +4195,7 @@ fn names_of(app: &App, i: usize, id: &str) -> String {
 }
 
 /// What a template can refer to for track `n`, from the run's context, as
-/// the real step builds it (`drt_steps::real::fields`).
+/// the real step builds it (`trip_steps::real::fields`).
 fn fields(ctx: Option<&Context>, n: u32, fallback_title: &str) -> template::Fields {
     let Some(c) = ctx else { return template::Fields { title: fallback_title.to_owned(), track: n, ..Default::default() } };
     let get = |s, k| c.get(s, k).unwrap_or("").to_owned();
@@ -4264,13 +4264,13 @@ fn video_samples() -> (template::VideoFields, template::VideoFields) {
 }
 
 /// What a dump's template can use, from the run's context, as the real
-/// step builds it (`drt_steps::real::data::dump_fields`).
+/// step builds it (`trip_steps::real::data::dump_fields`).
 fn dump_fields(c: &Context) -> template::DumpFields {
     let get = |k| c.get(Subject::Disc, k).unwrap_or("").to_owned();
     let label = get("label");
     let name = c.get(Subject::Disc, "name").map(str::to_owned).filter(|n| !n.is_empty()).unwrap_or_else(|| if label.is_empty() { "Disc".into() } else { label.clone() });
     let bytes: u64 = get("bytes").parse().unwrap_or(0);
-    template::DumpFields { name, label, system: get("system"), date: template::today(), size: if bytes > 0 { drt_steps::real::media::size(bytes) } else { String::new() } }
+    template::DumpFields { name, label, system: get("system"), date: template::today(), size: if bytes > 0 { trip_steps::real::media::size(bytes) } else { String::new() } }
 }
 
 /// A disc image to show an example folder with when there's none yet: a
@@ -4604,7 +4604,7 @@ fn choose(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, step: &str, t: f
         }
         // The picked one's tracks, against the disc (a release has them;
         // a game or a film doesn't).
-        let has_tracks = |c: &drt_engine::Candidate| c.facts.iter().any(|f| f.key == "title" && matches!(f.subject, Subject::Part(_)));
+        let has_tracks = |c: &trip_engine::Candidate| c.facts.iter().any(|f| f.key == "title" && matches!(f.subject, Subject::Part(_)));
         if let Some(c) = cands.get(pick).filter(|c| has_tracks(c)) {
             ui.vertical(|ui| {
                 let year = c.facts.iter().find(|f| f.key == "year").map(|f| f.value.clone()).unwrap_or_default();
@@ -4694,7 +4694,7 @@ fn choose(app: &mut App, ru: &mut Ui, p: &Pal, snap: &Snapshot, step: &str, t: f
 fn per_item(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
     let Some((_, q)) = &snap.question else { return };
     let QuestionShape::PerItem { items, options } = &q.shape else { return };
-    let mut order: Vec<&drt_engine::ItemChoice> = items.iter().collect();
+    let mut order: Vec<&trip_engine::ItemChoice> = items.iter().collect();
     order.sort_by_key(|it| it.preselected.is_some());
     let w = ui.available_width();
     let unplaced = items.iter().filter(|it| it.preselected.is_none()).count();
@@ -5041,7 +5041,7 @@ mod tests {
         let (w, t, d, _) = rip_verdict(ItemState::Ok, "best of 5 reads, 2 samples uncertain");
         assert_eq!((w.as_str(), t, d.as_str()), ("Best of 5", Tone::Warn, "2 samples uncertain"));
         assert_eq!(rip_verdict(ItemState::Ok, "combined from 3 reads, 4 samples unsettled").2, "4 samples uncertain");
-        assert_eq!(rip_verdict(ItemState::Ok, drt_steps::real::KEPT).0, "Kept anyway");
+        assert_eq!(rip_verdict(ItemState::Ok, trip_steps::real::KEPT).0, "Kept anyway");
         assert_eq!(rip_verdict(ItemState::Ok, "kept, unverified").1, Tone::Warn);
         let (w, t, _, why) = rip_verdict(ItemState::Bad, "439 samples differ, 0:17–0:43");
         assert_eq!((w.as_str(), t), ("Damaged", Tone::Bad));
@@ -5057,7 +5057,7 @@ mod tests {
     /// and that Check and fix will try them; never a tick.
     #[test]
     fn an_image_made_anyway_says_check_and_fix_will_try() {
-        let (head, _, tone) = dump_verdict(ItemState::Ok, &drt_steps::real::data::made_anyway_note(21));
+        let (head, _, tone) = dump_verdict(ItemState::Ok, &trip_steps::real::data::made_anyway_note(21));
         assert_eq!((head.as_str(), tone), ("21 sectors couldn't be read", Tone::Warn));
     }
 
@@ -5065,7 +5065,7 @@ mod tests {
     /// of it looks busy; one left out is skipped.
     #[test]
     fn an_item_stopped_part_way_says_stopped_not_reading() {
-        let stopped = drt_engine::snapshot::STOPPED;
+        let stopped = trip_engine::snapshot::STOPPED;
         assert_eq!(dump_verdict(ItemState::Skipped, stopped), ("Stopped".into(), "stopped".into(), Tone::Plain));
         assert_eq!(dump_verdict(ItemState::Skipped, "skipped").0, "Skipped");
         for (w, t, _, _) in [rip_verdict(ItemState::Skipped, stopped), item_verdict(ItemState::Skipped, stopped), title_verdict(ItemState::Skipped, stopped)] {
@@ -5075,7 +5075,7 @@ mod tests {
 
     #[test]
     fn what_an_image_came_to_from_each_note_image_makes() {
-        use drt_steps::real::data::image_note;
+        use trip_steps::real::data::image_note;
         let v = dump_verdict;
         assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, false, &[])), ("Read cleanly".into(), "read".into(), Tone::Ok));
         assert_eq!(v(ItemState::Ok, &image_note("682 MB", false, 0, true, &[])), ("Bad parts re-read".into(), "read".into(), Tone::Ok));
@@ -5162,7 +5162,7 @@ fn record_tabs(app: &App, i: usize, id: &str, v: &StepView, info: &StepInfo) -> 
 
 /// The decision: what was chosen and why, where from; a link to its
 /// entry, if it has a page. Gives the link if clicked.
-fn decision_card(ui: &mut Ui, p: &Pal, d: &drt_engine::Decision, c: Option<&drt_engine::Candidate>) -> Option<String> {
+fn decision_card(ui: &mut Ui, p: &Pal, d: &trip_engine::Decision, c: Option<&trip_engine::Candidate>) -> Option<String> {
     let mut open = None;
     egui::Frame::new().fill(p.raised).stroke(Stroke::new(2.0, p.action)).corner_radius(8).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -5196,7 +5196,7 @@ fn decision_card(ui: &mut Ui, p: &Pal, d: &drt_engine::Decision, c: Option<&drt_
 
 /// A candidate: title, detail, where from, how well it fits.
 /// Gives its entry's page if its link was clicked.
-fn candidate_row(ui: &mut Ui, p: &Pal, c: &drt_engine::Candidate, chosen: bool) -> Option<String> {
+fn candidate_row(ui: &mut Ui, p: &Pal, c: &trip_engine::Candidate, chosen: bool) -> Option<String> {
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     let name = format!("{}, {}, {}, {:.0}%{}", c.title, c.detail, c.source, c.score * 100.0, if chosen { ", chosen" } else { "" });
@@ -5235,7 +5235,7 @@ fn candidate_row(ui: &mut Ui, p: &Pal, c: &drt_engine::Candidate, chosen: bool) 
 
 /// The facts a step found as a table: the disc's row first, then one per
 /// track; a column per key.
-fn fact_table(ui: &mut Ui, p: &Pal, facts: &[&drt_engine::Fact]) {
+fn fact_table(ui: &mut Ui, p: &Pal, facts: &[&trip_engine::Fact]) {
     let mut keys: Vec<&str> = vec![];
     for f in facts {
         if !keys.contains(&f.key.as_str()) {
@@ -5299,9 +5299,9 @@ fn key_word(k: &str) -> String {
 
 /// The files a step wrote, by folder: name and size; a folder can be
 /// opened.
-fn files(app: &mut App, ui: &mut Ui, p: &Pal, list: &[drt_engine::Made]) {
-    let mut folders: Vec<(String, Vec<&drt_engine::Made>)> = vec![];
-    let mut list: Vec<&drt_engine::Made> = list.iter().collect();
+fn files(app: &mut App, ui: &mut Ui, p: &Pal, list: &[trip_engine::Made]) {
+    let mut folders: Vec<(String, Vec<&trip_engine::Made>)> = vec![];
+    let mut list: Vec<&trip_engine::Made> = list.iter().collect();
     list.sort_by(|a, b| a.path.cmp(&b.path));
     for f in list {
         let dir = std::path::Path::new(&f.path).parent().map(|d| d.display().to_string()).unwrap_or_default();
@@ -5326,7 +5326,7 @@ fn files(app: &mut App, ui: &mut Ui, p: &Pal, list: &[drt_engine::Made]) {
         for f in fs {
             let (r, resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::hover());
             let name = std::path::Path::new(&f.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| f.path.clone());
-            let size = drt_steps::real::media::size(f.size);
+            let size = trip_steps::real::media::size(f.size);
             let acc = format!("{name}, {size}");
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::ListItem, true, &acc));
             let pt = ui.painter();

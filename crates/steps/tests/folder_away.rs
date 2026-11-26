@@ -5,12 +5,12 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::snapshot::QuestionShape;
-use drt_engine::{Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Snapshot, Step, StepInfo, StepState, Subject};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Notify;
+use trip_engine::recipe::chain;
+use trip_engine::snapshot::QuestionShape;
+use trip_engine::{Answer, Command, Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Snapshot, Step, StepInfo, StepState, Subject};
 
 /// Two encoded tracks, made in the run's working folder as an encoder
 /// makes them; the second only once `gate` is let go.
@@ -62,21 +62,21 @@ fn bring_back(lib: &Path) {
 }
 
 /// Starts Gated → Folder on `lib`, looking again every few milliseconds.
-fn start(base: &Path, gate: Arc<Notify>, lib: &Path) -> (Engine, drt_engine::Run) {
-    let mut reg = drt_steps::real();
+fn start(base: &Path, gate: Arc<Notify>, lib: &Path) -> (Engine, trip_engine::Run) {
+    let mut reg = trip_steps::real();
     reg.add(Gated { gate });
     let mut e = Engine::new(reg);
     // Small, not 0: at 0 a wait only yields, and the Folder's looks would spin.
     e.time_scale = 0.001;
     e.work_root = base.join("runs");
     let recipe = Recipe { name: "Away".into(), root: chain([Node::step("src", "gated"), Node::step("lib", "folder").with("folder", lib.display().to_string().as_str())]) };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     let run = e.start(&recipe).unwrap();
     (e, run)
 }
 
 /// Waits for the run to come to a snapshot `f` likes.
-async fn until(run: &drt_engine::Run, what: &str, f: impl Fn(&Snapshot) -> bool) -> Snapshot {
+async fn until(run: &trip_engine::Run, what: &str, f: impl Fn(&Snapshot) -> bool) -> Snapshot {
     let mut rx = run.snapshot.clone();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {

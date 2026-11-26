@@ -7,7 +7,7 @@
 //! MakeMKV isn't bundled. Its EULA allows that, but it decrypts copy
 //! protection, and signing services refuse proprietary code
 //! (THIRD-PARTY.md). It's run only from where
-//! you said it may be ([`approve`]), or as `DRT_MAKEMKVCON` if you set
+//! you said it may be ([`approve`]), or as `TRIP_MAKEMKVCON` if you set
 //! that. The usual places are looked at for you to choose from, by
 //! checking that files exist; nothing is run until you've said yes. From
 //! inside this app's flatpak it's on the host, reached through
@@ -152,7 +152,7 @@ pub struct NotApproved;
 
 impl std::fmt::Display for NotApproved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MakeMKV isn't set up: choose where it is in Disc Rip Trip first")
+        write!(f, "MakeMKV isn't set up: choose where it is in Trip first")
     }
 }
 
@@ -422,7 +422,7 @@ pub fn select(titles: &[Title], kind: Kind) -> Vec<Title> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Launcher {
     /// A program and its first arguments, run as they are: an approved
-    /// install, or `DRT_MAKEMKVCON`.
+    /// install, or `TRIP_MAKEMKVCON`.
     Direct(Vec<String>),
     /// MakeMKV's own flatpak, which can only write where it's let: each run
     /// is let into the folder it writes to.
@@ -495,15 +495,15 @@ pub fn key_updates() -> bool {
     KEY_UPDATES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// `DRT_MAKEMKVCON`, a whole command line: set by you, so it counts as
+/// `TRIP_MAKEMKVCON`, a whole command line: set by you, so it counts as
 /// your OK.
 pub fn from_env() -> Option<Vec<String>> {
-    let line = std::env::var("DRT_MAKEMKVCON").ok()?;
+    let line = std::env::var("TRIP_MAKEMKVCON").ok()?;
     let parts: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
     (!parts.is_empty()).then_some(parts)
 }
 
-/// The only way to a [`Launcher`]: `DRT_MAKEMKVCON`, else where you said.
+/// The only way to a [`Launcher`]: `TRIP_MAKEMKVCON`, else where you said.
 /// `None` when you haven't said, and then MakeMKV is never run.
 pub fn launcher() -> Option<Launcher> {
     if let Some(parts) = from_env() {
@@ -1206,10 +1206,10 @@ MSG:5011,0,0,"Operation successfully completed","Operation successfully complete
         assert!(!host_allowed(""));
     }
 
-    /// Nothing approved and no DRT_MAKEMKVCON: no way to run it.
+    /// Nothing approved and no TRIP_MAKEMKVCON: no way to run it.
     #[test]
     fn with_no_ok_there_is_no_launcher() {
-        if std::env::var_os("DRT_MAKEMKVCON").is_none() {
+        if std::env::var_os("TRIP_MAKEMKVCON").is_none() {
             assert_eq!(approved(), None, "nothing in this crate's tests approves one");
             assert_eq!(launcher(), None);
         }

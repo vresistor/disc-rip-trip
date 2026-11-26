@@ -387,7 +387,7 @@ fn stale(path: &Path) -> bool {
     std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_none_or(|age| age > MAX_AGE)
 }
 
-/// One system's catalogue, from `cache` (`…/disc-rip-trip/cache/redump`)
+/// One system's catalogue, from `cache` (`…/trip/cache/redump`)
 /// when it's there and fresh, otherwise through `fetch`, which gives the
 /// datfile's XML. A failed fetch falls back to a stale copy. Parsed on a
 /// blocking thread.
@@ -525,7 +525,7 @@ pub(crate) mod tests {
     }
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+        let d = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -555,12 +555,12 @@ pub(crate) mod tests {
         assert!(unzip(b"<html>").is_err());
     }
 
-    /// Downloads one real datfile. `cargo test -p drt-steps real_datfile -- --ignored --nocapture`.
+    /// Downloads one real datfile. `cargo test -p trip-steps real_datfile -- --ignored --nocapture`.
     #[tokio::test]
     #[ignore]
     async fn real_datfile() {
         let cache = dir("redump-real");
-        let slug = std::env::var("DRT_SLUG").unwrap_or_else(|_| "pippin".into());
+        let slug = std::env::var("TRIP_SLUG").unwrap_or_else(|_| "pippin".into());
         let t = std::time::Instant::now();
         let c = catalogue(&cache, &slug, download).await.unwrap();
         println!("{slug}: {:?}", t.elapsed());

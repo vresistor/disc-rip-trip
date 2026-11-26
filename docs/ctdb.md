@@ -299,7 +299,7 @@ New notes, in the style of the table in `audio-accuracy.md`:
   disc against the entry's checksums, but it needs `net` to allow one
   plain-HTTP address, as Redump does. The README's network table gets a
   CTDB row; what's sent is the TOC, nothing else.
-- **Later:** a `drt ctdb <run folder>` that checks a finished rip, which
+- **Later:** a `tripr ctdb <run folder>` that checks a finished rip, which
   is also how to try it on real discs before Rip uses it.
 
 ### Submitting: not at first

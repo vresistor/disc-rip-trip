@@ -1,12 +1,12 @@
-//! The recipe on its canvas: drawn from drt-layout and the live snapshot,
+//! The recipe on its canvas: drawn from trip-layout and the live snapshot,
 //! with one transform (pan, zoom) applied to every coordinate and every
 //! size, text included, so zooming scales the whole picture uniformly.
 
 use crate::theme::{font, mix, Pal};
-use drt_engine::{Snapshot, Spot, StepState};
-use drt_layout::{Layout, PLUS_R, SIDE_R};
 use egui::epaint::{CubicBezierShape, PathShape, RectShape};
 use egui::{pos2, vec2, Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
+use trip_engine::{Snapshot, Spot, StepState};
+use trip_layout::{Layout, PLUS_R, SIDE_R};
 
 /// Where the board's (0, 0) sits from the canvas's top left at first, as
 /// the mockup's `.board { margin: 28px 32px }`.
@@ -37,7 +37,7 @@ impl View {
 
     /// Pans just enough that the layout rect `r` is inside `area` (from
     /// the canvas's top left), with a margin.
-    pub fn reveal(&mut self, r: drt_layout::Rect, area: Vec2) {
+    pub fn reveal(&mut self, r: trip_layout::Rect, area: Vec2) {
         let m = 24.0;
         let min = self.pan + vec2(r.x, r.y) * self.zoom;
         let max = min + vec2(r.w, r.h) * self.zoom;
@@ -98,7 +98,7 @@ pub struct Marks<'a> {
     /// The clock the animations run on, in seconds.
     pub t: f64,
     /// The recipe drawn, for what each + says.
-    pub root: &'a drt_engine::Node,
+    pub root: &'a trip_engine::Node,
 }
 
 /// What a card shows that isn't in its step's view.
@@ -392,7 +392,7 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
             // branches it follows.
             if !j.met || open || resp.hovered() {
                 let col = if j.met { mix(p.action, 0.7, p.surface) } else { mix(p.faint, 0.6, p.surface) };
-                for w in j.lines_in(drt_layout::Metrics::default().gap) {
+                for w in j.lines_in(trip_layout::Metrics::default().gap) {
                     let pts: Vec<Pos2> = w.points(24).into_iter().map(|(x, y)| at(x, y)).collect();
                     painter.extend(Shape::dashed_line(&pts, Stroke::new(2.0 * z, col), 6.0 * z, 6.0 * z));
                 }
@@ -460,24 +460,24 @@ pub fn show(ui: &mut Ui, rect: Rect, view: &mut View, lay: &Layout, snap: &Snaps
 
 /// The colour of a path for when a step fails (the failed colour) or
 /// needs you (the asking colour), softened.
-fn side_colour(p: &Pal, side: drt_engine::Side) -> Color32 {
+fn side_colour(p: &Pal, side: trip_engine::Side) -> Color32 {
     match side {
-        drt_engine::Side::Fails => mix(p.bad, 0.7, p.surface),
-        drt_engine::Side::NeedsYou => mix(p.warn, 0.75, p.surface),
+        trip_engine::Side::Fails => mix(p.bad, 0.7, p.surface),
+        trip_engine::Side::NeedsYou => mix(p.warn, 0.75, p.surface),
     }
 }
 
 /// A warning sign for *If it fails*, Notify's bell for *If it needs you*,
 /// `size` across, centred on `c`, drawn bold to read at a button's size.
-fn side_icon(side: drt_engine::Side, c: Pos2, size: f32, col: Color32) -> Vec<Shape> {
+fn side_icon(side: trip_engine::Side, c: Pos2, size: f32, col: Color32) -> Vec<Shape> {
     let h = size / 2.0;
     let st = Stroke::new(size * 0.15, col);
     match side {
-        drt_engine::Side::Fails => {
+        trip_engine::Side::Fails => {
             let (top, l, r) = (c + vec2(0.0, -h * 0.95), c + vec2(-h, h * 0.8), c + vec2(h, h * 0.8));
             vec![Shape::closed_line(vec![top, r, l], st), Shape::line_segment([c + vec2(0.0, -h * 0.3), c + vec2(0.0, h * 0.2)], st), Shape::circle_filled(c + vec2(0.0, h * 0.5), size * 0.08, col)]
         }
-        drt_engine::Side::NeedsYou => {
+        trip_engine::Side::NeedsYou => {
             // A bell: its dome, its rim, its clapper.
             let dome = vec![
                 c + vec2(-h * 0.6, h * 0.45),

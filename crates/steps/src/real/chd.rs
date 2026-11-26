@@ -179,7 +179,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::current_dir().unwrap().join("../../target/drt-test").join(name);
+        let d = std::env::current_dir().unwrap().join("../../target/trip-test").join(name);
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

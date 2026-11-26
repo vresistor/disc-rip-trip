@@ -971,7 +971,7 @@ impl StateScan {
 }
 
 /// What Rip is doing just now, while redumper reads or re-reads: for the
-/// card and the sidebar ([`drt_engine::StepView::now`]).
+/// card and the sidebar ([`trip_engine::StepView::now`]).
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Live {
     /// Re-reading what was bad (`refine`), not reading the disc through.
@@ -1025,7 +1025,7 @@ pub struct Live {
 pub const GIVE_UP_AFTER: u64 = 50;
 
 /// What Rip adds to redumper's output when it stopped a re-read itself.
-pub const GAVE_UP: &str = "drt: re-read stopped, nothing coming back";
+pub const GAVE_UP: &str = "trip: re-read stopped, nothing coming back";
 
 /// Whether the last re-read in a run's output was stopped as no use.
 pub fn gave_up(output: &str) -> bool {
@@ -1747,7 +1747,7 @@ mod tests {
 
     #[test]
     fn bad_sectors_from_the_state_file() {
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/state-file");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test/state-file");
         std::fs::create_dir_all(&dir).unwrap();
         // The lead-in unread (zeros), then 10 sectors: 3 and 4 unread a
         // few samples off, 7 with one C2 sample; the rest good (4).
@@ -1774,7 +1774,7 @@ mod tests {
     #[test]
     fn the_state_file_is_mapped_as_it_s_read_and_re_read() {
         use crate::map::Mark;
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test/state-scan");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test/state-scan");
         std::fs::create_dir_all(&dir).unwrap();
         let t = Target { dir: dir.clone(), name: "D".into() };
         // Written as far as 1,490, the drive at 1,500 of 2,000, at +103:
@@ -1814,15 +1814,15 @@ mod tests {
 
     /// A real `.state`: a damaged PlayStation disc read to about sector
     /// 199,210 of 269,159 at +103, then stopped. Not in the repository
-    /// (143 MB): `DRT_STATE_FIXTURE` names it, or it's looked for where
+    /// (143 MB): `TRIP_STATE_FIXTURE` names it, or it's looked for where
     /// the flatpak keeps its runs.
     #[test]
     #[ignore]
     fn a_real_state_file_shows_a_spot_once_per_turn() {
         use crate::map::Mark;
-        let path = std::env::var("DRT_STATE_FIXTURE").map(PathBuf::from).unwrap_or_else(|_| {
-            PathBuf::from(std::env::var("HOME").unwrap()).join(".var/app/io.github.vresistor.disc-rip-trip/cache/disc-rip-trip/runs/playstation-1795362157/image/KOUDELKA_4.state")
-        });
+        let path = std::env::var("TRIP_STATE_FIXTURE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap()).join(".var/app/io.github.vresistor.trip/cache/trip/runs/playstation-1795362157/image/KOUDELKA_4.state"));
         let t = Target { dir: path.parent().unwrap().to_owned(), name: path.file_stem().unwrap().to_string_lossy().into_owned() };
         let began = std::time::Instant::now();
         let mut s = StateScan::new(&t, 269_159, 103, true);
@@ -2140,7 +2140,7 @@ media errors:
 
     #[test]
     fn a_dumps_files_are_its_cue_its_tracks_and_its_log() {
-        let dir = std::env::current_dir().unwrap().join("../../target/drt-test-dumpfiles");
+        let dir = std::env::current_dir().unwrap().join("../../target/trip-test-dumpfiles");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("GAME.cue"), "FILE \"GAME (Track 1).bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\nFILE \"GAME (Track 2).bin\" BINARY\n  TRACK 02 AUDIO\n").unwrap();
         std::fs::write(dir.join("GAME.log"), "").unwrap();
@@ -2216,13 +2216,13 @@ media errors:
         assert_eq!(most_between(&[]), None);
     }
 
-    /// Runs the real redumper (`DRT_REDUMPER`) through `run`, as Image does,
+    /// Runs the real redumper (`TRIP_REDUMPER`) through `run`, as Image does,
     /// on a file made here, and checks its `hash` against ours.
-    /// `DRT_REDUMPER="flatpak run --die-with-parent --command=redumper io.github.vresistor.disc-rip-trip" cargo test -p drt-steps real_redumper -- --ignored`
+    /// `TRIP_REDUMPER="flatpak run --die-with-parent --command=redumper io.github.vresistor.trip" cargo test -p trip-steps real_redumper -- --ignored`
     #[tokio::test]
     #[ignore]
     async fn real_redumper() {
-        let dir = PathBuf::from(std::env::var("HOME").unwrap()).join(".cache/disc-rip-trip/test-redumper");
+        let dir = PathBuf::from(std::env::var("HOME").unwrap()).join(".cache/trip/test-redumper");
         std::fs::create_dir_all(&dir).unwrap();
         let t = Target { dir: dir.clone(), name: "probe".into() };
         std::fs::write(t.file("iso"), (0..512 * 2048).map(|i| (i % 249) as u8).collect::<Vec<u8>>()).unwrap();

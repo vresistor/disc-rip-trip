@@ -839,81 +839,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "drt"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "drt-engine",
- "drt-steps",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "drt-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "drt-engine",
- "drt-layout",
- "drt-steps",
- "eframe",
- "egui",
- "egui_kittest",
- "image",
- "opener",
- "rfd",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "drt-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "drt-layout"
-version = "0.1.0"
-dependencies = [
- "drt-engine",
- "drt-steps",
-]
-
-[[package]]
-name = "drt-steps"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "crc32fast",
- "drt-engine",
- "libc",
- "libchdman-rs",
- "lofty",
- "md-5",
- "quick-xml 0.42.0",
- "reqwest",
- "serde",
- "serde_json",
- "sha1",
- "tempfile",
- "tokio",
- "zip",
-]
-
-[[package]]
 name = "ecolor"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4052,6 +3977,81 @@ dependencies = [
  "memchr",
  "nom",
  "petgraph",
+]
+
+[[package]]
+name = "trip-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "eframe",
+ "egui",
+ "egui_kittest",
+ "image",
+ "opener",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "trip-engine",
+ "trip-layout",
+ "trip-steps",
+]
+
+[[package]]
+name = "trip-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "trip-layout"
+version = "0.1.0"
+dependencies = [
+ "trip-engine",
+ "trip-steps",
+]
+
+[[package]]
+name = "trip-steps"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "crc32fast",
+ "libc",
+ "libchdman-rs",
+ "lofty",
+ "md-5",
+ "quick-xml 0.42.0",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tempfile",
+ "tokio",
+ "trip-engine",
+ "zip",
+]
+
+[[package]]
+name = "tripr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "trip-engine",
+ "trip-steps",
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
 //! Running the bundled tools.
 //!
-//! A tool is found as `DRT_<NAME>` if that's set (a whole command line, so
+//! A tool is found as `TRIP_<NAME>` if that's set (a whole command line, so
 //! development on the host can say `flatpak run --command=cyanrip
-//! io.github.vresistor.disc-rip-trip`), and otherwise by name on the PATH, which in the
+//! io.github.vresistor.trip`), and otherwise by name on the PATH, which in the
 //! flatpak is where the bundled ones are.
 //!
 //! Output is read through a pseudo-terminal. cyanrip writes through stdio,
@@ -21,9 +21,9 @@ use tokio::sync::mpsc;
 /// isn't one: its card says how to get it.
 pub const BUNDLED: [&str; 4] = ["cyanrip", "redumper", "ffmpeg", "ffprobe"];
 
-/// The command line a tool runs as: `DRT_<NAME>` if set, else its name.
+/// The command line a tool runs as: `TRIP_<NAME>` if set, else its name.
 fn line(name: &str) -> String {
-    std::env::var(format!("DRT_{}", name.to_uppercase().replace('-', "_"))).unwrap_or_else(|_| name.to_owned())
+    std::env::var(format!("TRIP_{}", name.to_uppercase().replace('-', "_"))).unwrap_or_else(|_| name.to_owned())
 }
 
 /// Which of `names` can't be found: as a path if the command has a `/`,
@@ -107,7 +107,7 @@ pub async fn run(mut cmd: tokio::process::Command, cwd: &Path, stop: impl std::f
             line = rx.recv() => match line {
                 Some(l) => {
                     // Kept in the step's record, as it printed it.
-                    drt_engine::raw_here(&l);
+                    trip_engine::raw_here(&l);
                     on_line(&l);
                     transcript.push_str(&l);
                     transcript.push('\n');
@@ -184,10 +184,10 @@ mod tests {
 
     #[test]
     fn a_tool_is_missing_only_when_neither_path_nor_its_variable_finds_it() {
-        assert_eq!(missing(&["sh", "drt-no-such-tool"]), ["drt-no-such-tool"]);
+        assert_eq!(missing(&["sh", "trip-no-such-tool"]), ["trip-no-such-tool"]);
         // A whole command line: only its first word has to exist.
-        std::env::set_var("DRT_DRT_STAND_IN", "/bin/sh -c true");
-        std::env::set_var("DRT_DRT_GONE", "/no/such/dir/tool --flag");
-        assert_eq!(missing(&["drt-stand-in", "drt-gone"]), ["drt-gone"]);
+        std::env::set_var("TRIP_TRIP_STAND_IN", "/bin/sh -c true");
+        std::env::set_var("TRIP_TRIP_GONE", "/no/such/dir/tool --flag");
+        assert_eq!(missing(&["trip-stand-in", "trip-gone"]), ["trip-gone"]);
     }
 }

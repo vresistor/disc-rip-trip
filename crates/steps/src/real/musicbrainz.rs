@@ -5,9 +5,9 @@
 //! and carries a descriptive User-Agent.
 
 use anyhow::{anyhow, Result};
-use drt_engine::{Candidate, Fact, Subject};
 use serde::Deserialize;
 use std::time::Duration;
+use trip_engine::{Candidate, Fact, Subject};
 
 pub const API: &str = "https://musicbrainz.org/ws/2";
 pub const AGENT: &str = super::net::AGENT;

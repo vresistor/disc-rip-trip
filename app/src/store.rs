@@ -2,8 +2,8 @@
 //! belong to drives, as JSON in one folder.
 
 use anyhow::{Context as _, Result};
-use drt_engine::{Recipe, Settings};
 use std::path::{Path, PathBuf};
+use trip_engine::{Recipe, Settings};
 
 pub struct Store {
     pub dir: PathBuf,
@@ -20,13 +20,9 @@ impl Store {
         Store { dir: dir.into(), recipes_unreadable: None, settings_unreadable: None }
     }
 
-    /// `$XDG_CONFIG_HOME/disc-rip-trip`, or `~/.config/disc-rip-trip`.
+    /// `$XDG_CONFIG_HOME/trip`, or `~/.config/trip`.
     pub fn default_dir() -> PathBuf {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("disc-rip-trip")
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))).unwrap_or_else(|| PathBuf::from(".")).join("trip")
     }
 
     pub fn recipes_path(&self) -> PathBuf {
@@ -39,7 +35,7 @@ impl Store {
 
     /// Copies `recipes.json` and `settings.json` from `from` when this
     /// folder has no recipes yet. Inside the flatpak that's the ones a build
-    /// from source kept in `~/.config/disc-rip-trip`. Copied, not moved, so
+    /// from source kept in `~/.config/trip`. Copied, not moved, so
     /// that build keeps its own. Gives what it copied.
     pub fn adopt(&self, from: &Path) -> Vec<PathBuf> {
         if from == self.dir || self.recipes_path().exists() || !from.join("recipes.json").is_file() {
@@ -211,8 +207,8 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
 /// what its tools printed (the last few hundred lines of each).
 #[derive(Clone, Debug, Default)]
 pub struct Kept {
-    pub snap: drt_engine::Snapshot,
-    pub context: drt_engine::Context,
+    pub snap: trip_engine::Snapshot,
+    pub context: trip_engine::Context,
     pub raw: std::collections::BTreeMap<String, Vec<String>>,
 }
 

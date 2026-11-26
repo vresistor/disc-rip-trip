@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the flatpak bundle: dist/disc-rip-trip-<version>-x86_64.flatpak.
+# Builds the flatpak bundle: dist/trip-<version>-x86_64.flatpak.
 #
 #   scripts/build-flatpak.sh [--install]
 #
@@ -12,8 +12,8 @@
 # binaries need no newer glibc than the runtime has:
 #   1. scripts/fetch-tools.sh: ffmpeg, ffprobe, redumper, cyanrip, into
 #      target/flatpak/tools (once; delete that folder to fetch them again).
-#   2. cargo build --release of disc-rip-trip and drt, into target/flatpak.
-#   3. flatpak-builder packages the lot (packaging/flatpak/io.github.vresistor.disc-rip-trip.yml).
+#   2. cargo build --release of trip and tripr, into target/flatpak.
+#   3. flatpak-builder packages the lot (packaging/flatpak/io.github.vresistor.trip.yml).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -22,14 +22,14 @@ ROOT="$PWD"
 INSTALL=no
 [ "${1:-}" = "--install" ] && INSTALL=yes
 
-APP_ID=io.github.vresistor.disc-rip-trip
+APP_ID=io.github.vresistor.trip
 RUNTIME_VERSION=50
 # The freedesktop base that GNOME $RUNTIME_VERSION is built on, for the Rust extension.
 BASE_VERSION=25.08
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -1)
 OUT="$ROOT/target/flatpak"
 PAYLOAD="packaging/flatpak/payload"
-BUNDLE="dist/disc-rip-trip-$VERSION-x86_64.flatpak"
+BUNDLE="dist/trip-$VERSION-x86_64.flatpak"
 
 command -v flatpak >/dev/null || { echo "error: flatpak is not installed" >&2; exit 1; }
 
@@ -54,15 +54,15 @@ if [ ! -f "$OUT/tools/PROVENANCE.txt" ]; then
   in_sdk scripts/fetch-tools.sh "$OUT/tools"
 fi
 
-echo "==> Building disc-rip-trip and drt (in the SDK)"
+echo "==> Building trip and tripr (in the SDK)"
 # LIBCHDMAN_CPU=portable: without it the CHD code is built for AVX2 and
 # crashes on CPUs older than Haswell.
-in_sdk cargo build --release --locked -p drt-app -p drt
+in_sdk cargo build --release --locked -p trip-app -p tripr
 
 echo "==> Packaging"
 rm -rf "$PAYLOAD"
 mkdir -p "$PAYLOAD"
-cp "$OUT/release/disc-rip-trip" "$OUT/release/drt" "$OUT"/tools/* "$PAYLOAD/"
+cp "$OUT/release/trip" "$OUT/release/tripr" "$OUT"/tools/* "$PAYLOAD/"
 cp packaging/flatpak/$APP_ID.desktop packaging/flatpak/icons/*.png "$PAYLOAD/"
 sed "s/@VERSION@/$VERSION/; s/@DATE@/$(date +%F)/" packaging/flatpak/$APP_ID.metainfo.xml >"$PAYLOAD/$APP_ID.metainfo.xml"
 

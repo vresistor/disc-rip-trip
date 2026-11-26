@@ -167,8 +167,8 @@ pub fn frame(ctx: &egui::Context, p: &Pal) {
 /// recipe you're on.
 pub fn title(recipe: &str) -> String {
     if recipe.is_empty() {
-        "Disc Rip Trip".into()
+        "Trip".into()
     } else {
-        format!("Disc Rip Trip — {recipe}")
+        format!("Trip — {recipe}")
     }
 }

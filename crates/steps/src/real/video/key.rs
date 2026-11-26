@@ -20,7 +20,7 @@ const BETA_KEY_THREAD: &str = "https://forum.makemkv.com/forum/viewtopic.php?f=5
 /// What a run says when MakeMKV wants a key and you haven't let the app
 /// fetch one.
 pub const TURNED_OFF: &str =
-    "MakeMKV says it isn't registered: its free beta key has probably run out. Enter a key in MakeMKV, or turn on “Keep MakeMKV's beta key up to date” in Disc Rip Trip's MakeMKV settings.";
+    "MakeMKV says it isn't registered: its free beta key has probably run out. Enter a key in MakeMKV, or turn on “Keep MakeMKV's beta key up to date” in Trip's MakeMKV settings.";
 
 /// Beta keys start with this; purchased ones don't, which is the only way
 /// to tell them apart.
@@ -28,9 +28,9 @@ const BETA_PREFIX: &str = "T-";
 
 /// MakeMKV's settings file. `None` where it isn't a file we can see
 /// (Windows keeps the key in the registry), which means *don't touch*.
-/// `DRT_MAKEMKV_SETTINGS` points it elsewhere, for tests.
+/// `TRIP_MAKEMKV_SETTINGS` points it elsewhere, for tests.
 pub fn settings_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("DRT_MAKEMKV_SETTINGS") {
+    if let Some(p) = std::env::var_os("TRIP_MAKEMKV_SETTINGS") {
         return Some(PathBuf::from(p));
     }
     let home = PathBuf::from(std::env::var_os("HOME")?);
@@ -117,7 +117,7 @@ pub async fn refresh() -> Result<String> {
     let r = super::super::net::client(std::time::Duration::from_secs(20))?
         .get(BETA_KEY_THREAD)
         // The forum serves nothing to clients that don't say who they are.
-        .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (X11; Linux x86_64) disc-rip-trip")
+        .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (X11; Linux x86_64) Trip")
         .send()
         .await
         .and_then(|r| r.error_for_status())
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn a_purchased_key_or_unseen_settings_are_left_alone() {
-        let dir = std::env::temp_dir().join(format!("drt-key-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trip-key-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("settings.conf");
         std::fs::write(&p, "app_Key = \"M-paid-for\"\n").unwrap();

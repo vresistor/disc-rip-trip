@@ -1,11 +1,11 @@
 //! Every built-in recipe can be made in the editor: from its first step
 //! alone, one + at a time, each step one the + at that spot offers, placed
 //! the way a click there places it. The window's + menu lists exactly
-//! these offers (`drt_engine::offers`), so this can't drift from it.
+//! these offers (`trip_engine::offers`), so this can't drift from it.
 
-use drt_engine::recipe::{branches, chain};
-use drt_engine::{check, offers, Node, Recipe, Registry, Spot};
-use drt_steps::{real, recipes, simulated};
+use trip_engine::recipe::{branches, chain};
+use trip_engine::{check, offers, Node, Recipe, Registry, Spot};
+use trip_steps::{real, recipes, simulated};
 
 fn registries() -> [(&'static str, Registry); 2] {
     [("simulated", simulated(None)), ("real", real())]

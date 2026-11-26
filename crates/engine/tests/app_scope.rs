@@ -3,10 +3,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::chain;
-use drt_engine::setting::ParamKind;
-use drt_engine::{Cx, Engine, Group, Inlet, ItemKind, Node, Outlet, ParamSpec, Recipe, Registry, Setting, Step, StepInfo};
 use serde_json::Value;
+use trip_engine::recipe::chain;
+use trip_engine::setting::ParamKind;
+use trip_engine::{Cx, Engine, Group, Inlet, ItemKind, Node, Outlet, ParamSpec, Recipe, Registry, Setting, Step, StepInfo};
 
 struct Lookup;
 
@@ -35,7 +35,7 @@ async fn an_app_wide_setting_is_asked_for_once_and_shared_by_every_recipe() {
     reg.add(Lookup);
     let mut e = Engine::new(reg);
     e.time_scale = 0.0;
-    e.work_root = std::env::temp_dir().join(format!("drt-app-scope-{}", std::process::id()));
+    e.work_root = std::env::temp_dir().join(format!("trip-app-scope-{}", std::process::id()));
 
     let missing = e.missing(&recipe("a"));
     assert_eq!(missing.len(), 1);

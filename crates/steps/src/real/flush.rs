@@ -221,14 +221,14 @@ mod tests {
     }
 
     /// Clears the cache on the drive with whatever disc is in, read-only.
-    /// Run by hand: `DRT_TOC='1 2 …' cargo test -p drt-steps real_flush --
+    /// Run by hand: `TRIP_TOC='1 2 …' cargo test -p trip-steps real_flush --
     /// --ignored --nocapture`.
     #[test]
     #[ignore]
     fn real_flush() {
-        let dev = std::env::var("DRT_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
-        let toc = std::env::var("DRT_TOC").expect("DRT_TOC, the disc's MusicBrainz TOC");
-        let t: u32 = std::env::var("DRT_TRACK").ok().and_then(|t| t.parse().ok()).unwrap_or(1);
+        let dev = std::env::var("TRIP_DEVICE").unwrap_or_else(|_| "/dev/sr0".into());
+        let toc = std::env::var("TRIP_TOC").expect("TRIP_TOC, the disc's MusicBrainz TOC");
+        let t: u32 = std::env::var("TRIP_TRACK").ok().and_then(|t| t.parse().ok()).unwrap_or(1);
         let w = window(&toc, t).expect("somewhere to read");
         let at = std::time::Instant::now();
         let r = read_sectors(&dev, w.lba, w.count);

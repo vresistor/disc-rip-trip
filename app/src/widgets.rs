@@ -197,8 +197,8 @@ impl Tone {
         }
     }
 
-    pub fn of(state: drt_engine::StepState) -> Tone {
-        use drt_engine::StepState::*;
+    pub fn of(state: trip_engine::StepState) -> Tone {
+        use trip_engine::StepState::*;
         match state {
             Ok => Tone::Ok,
             Bad => Tone::Bad,
@@ -210,7 +210,7 @@ impl Tone {
 }
 
 /// A state pill: the tile's state icon, small, and a few words.
-pub fn pill(ui: &mut Ui, p: &Pal, text: &str, tone: Tone, state: Option<drt_engine::StepState>, t: f64) -> Response {
+pub fn pill(ui: &mut Ui, p: &Pal, text: &str, tone: Tone, state: Option<trip_engine::StepState>, t: f64) -> Response {
     let (fg, bg) = tone.colours(p);
     let f = crate::theme::font(12.0, 500);
     let g = ui.painter().layout_no_wrap(text.to_owned(), f, fg);

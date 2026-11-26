@@ -1,8 +1,8 @@
 //! Measuring again, when a drive's offset is already known.
 
-use drt_engine::{Engine, Setting};
-use drt_steps::{recipes, simulated};
 use serde_json::Value;
+use trip_engine::{Engine, Setting};
+use trip_steps::{recipes, simulated};
 
 #[tokio::test]
 async fn measuring_again_replaces_a_known_offset() {
@@ -29,21 +29,21 @@ fn a_data_disc_recipe_doesnt_need_the_read_offset() {
 
 #[test]
 fn a_recipe_saved_with_library_steps_still_checks() {
-    use drt_engine::recipe::chain;
-    use drt_engine::Node;
+    use trip_engine::recipe::chain;
+    use trip_engine::Node;
     let reg = simulated(None);
     let old = chain([Node::step("d", "drive"), Node::step("cd", "audio-cd"), Node::step("rip", "rip"), Node::step("f", "flac"), Node::step("l", "library")]);
-    drt_engine::check(&old, &reg).unwrap();
+    trip_engine::check(&old, &reg).unwrap();
     assert_eq!(reg.info("library").unwrap().kind, "folder");
-    assert!(!drt_engine::fits(drt_engine::ItemKind::AudioFile, &reg).iter().any(|i| i.kind == "library"), "not offered as a second step");
+    assert!(!trip_engine::fits(trip_engine::ItemKind::AudioFile, &reg).iter().any(|i| i.kind == "library"), "not offered as a second step");
 }
 
 #[tokio::test]
 async fn a_clean_run_leaves_nothing_in_its_working_folder() {
-    use drt_engine::{Answer, Command};
+    use trip_engine::{Answer, Command};
     let mut e = Engine::new(simulated(None));
     e.time_scale = 0.0;
-    let dir = std::env::temp_dir().join(format!("drt-tidy-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("trip-tidy-{}", std::process::id()));
     e.work_root = dir.clone();
     e.settings.lock().unwrap().set_drive(recipes::BLU_RAY, "offset", Setting::chosen(Value::from(103)));
     // A recipe with no question or hold, that writes into its working folder.

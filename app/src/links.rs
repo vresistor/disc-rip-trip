@@ -2,7 +2,7 @@
 //! exactly one entry: a MusicBrainz release's MBID, a Discogs release's
 //! number, a TMDb film or season. Anything else gets no link.
 
-use drt_engine::{Candidate, Context, Subject};
+use trip_engine::{Candidate, Context, Subject};
 
 /// A MusicBrainz id: 36 characters, hex in 8-4-4-4-12.
 pub fn is_mbid(s: &str) -> bool {

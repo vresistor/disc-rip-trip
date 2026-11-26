@@ -1,15 +1,15 @@
 //! Films and TV, end to end on the simulated steps: the real parser,
 //! matching, TMDb scoring and Jellyfin naming on canned answers.
 
-use drt_engine::recipe::chain;
-use drt_engine::snapshot::QuestionShape;
-use drt_engine::{check, fits_flow, flow_after, Answer, Command, Engine, ItemKind, ItemState, Node, Question, Recipe, Setting, Snapshot};
-use drt_steps::real::video::sim::{self, SimDisc};
-use drt_steps::{recipes, simulated};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use trip_engine::recipe::chain;
+use trip_engine::snapshot::QuestionShape;
+use trip_engine::{check, fits_flow, flow_after, Answer, Command, Engine, ItemKind, ItemState, Node, Question, Recipe, Setting, Snapshot};
+use trip_steps::real::video::sim::{self, SimDisc};
+use trip_steps::{recipes, simulated};
 
-fn registry(disc: SimDisc) -> drt_engine::Registry {
+fn registry(disc: SimDisc) -> trip_engine::Registry {
     let mut r = simulated(None);
     sim::register(&mut r, disc);
     r
@@ -18,7 +18,7 @@ fn registry(disc: SimDisc) -> drt_engine::Registry {
 fn engine(disc: SimDisc) -> Engine {
     let mut e = Engine::new(registry(disc));
     e.time_scale = 0.0;
-    e.work_root = std::env::temp_dir().join(format!("drt-video-{}", std::process::id()));
+    e.work_root = std::env::temp_dir().join(format!("trip-video-{}", std::process::id()));
     e.settings.lock().unwrap().set_app("tmdb", "api_key", Setting::chosen(Value::from("test-key")));
     e
 }
@@ -55,7 +55,7 @@ fn the_recipe_checks_and_its_steps_follow_from_one_another() {
     let reg = registry(SimDisc::Film);
     let r = recipes::video().root;
     assert_eq!(check(&r, &reg).unwrap(), ItemKind::Any);
-    check(&r, &drt_steps::real()).expect("and with the real steps");
+    check(&r, &trip_steps::real()).expect("and with the real steps");
     let names = |id: &str| fits_flow(&flow_after(&r, id, &reg).unwrap(), &reg).iter().map(|i| (i.name, i.kind)).collect::<Vec<_>>();
     let has = |v: &[(&str, &str)], k: &str| v.iter().any(|(_, kind)| *kind == k);
     let after_drive = names("v_drive");
@@ -109,7 +109,7 @@ async fn a_film_runs_to_the_end_without_a_question() {
 }
 
 /// The season disc: TMDb has no runtime for episode 4, so Choose asks.
-fn season_question(q: &Question) -> (&[drt_engine::ItemChoice], &[drt_engine::Choice]) {
+fn season_question(q: &Question) -> (&[trip_engine::ItemChoice], &[trip_engine::Choice]) {
     match &q.shape {
         QuestionShape::PerItem { items, options } => (items, options),
         other => panic!("not a per-title question: {other:?}"),

@@ -16,17 +16,17 @@
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
-use drt_engine::setting::ParamKind;
-use drt_engine::{Context, Cx, Group, Inlet, Item, ItemKind, Outlet, ParamSpec, Step, StepInfo, StepState, Subject};
 use std::collections::BTreeMap;
 use std::time::Duration;
+use trip_engine::setting::ParamKind;
+use trip_engine::{Context, Cx, Group, Inlet, Item, ItemKind, Outlet, ParamSpec, Step, StepInfo, StepState, Subject};
 
 pub const WHEN: &[&str] = &["Always", "Only when something needs you", "Never"];
 /// What the removed *As soon as something needs you* was saved as: it is
 /// *After every disc* now, and a path for when a step needs you says so
 /// at once.
 pub const OLD_AS_SOON: &str = "As soon as something needs you";
-const APP: &str = "Disc Rip Trip";
+const APP: &str = "Trip";
 
 pub fn info() -> StepInfo {
     StepInfo::new("tell", "Notify", Group::Tell, ItemKind::Any, ItemKind::Nothing)
@@ -97,7 +97,7 @@ pub fn made_up_topic() -> String {
     format!("rip-{}-{}-{}", ADJECTIVES[(r & 63) as usize], NOUNS[(r >> 6 & 63) as usize], 1000 + (r >> 12) % 9000)
 }
 
-pub const TEST_TITLE: &str = "Disc Rip Trip test";
+pub const TEST_TITLE: &str = "Trip test";
 pub const TEST_BODY: &str = "If you can read this, alerts work.";
 
 /// Sends a test through each way that's on: this computer if `desktop`,
@@ -437,7 +437,7 @@ pub fn command(route: Route, id: &str, title: &str, body: &str) -> (&'static str
 
 /// Puts the notification up by the first route that works. Gives which.
 pub async fn send(title: &str, body: &str) -> Result<Route> {
-    let id = format!("disc-{}", drt_engine::setting::now());
+    let id = format!("disc-{}", trip_engine::setting::now());
     let mut why = vec![];
     for route in routes(std::path::Path::new("/.flatpak-info").exists()) {
         let (program, args) = command(route, &id, title, body);
@@ -463,7 +463,7 @@ async fn deliver(cx: &Cx, title: &str, ntfy_title: &str, body: &str, urgent: boo
         }
     }
     if !topic.trim().is_empty() {
-        let _net = cx.lane(drt_engine::LaneKind::Network("ntfy".into())).await;
+        let _net = cx.lane(trip_engine::LaneKind::Network("ntfy".into())).await;
         if let Err(e) = send_ntfy(&cx.text("ntfy_server"), &topic, ntfy_title, body, urgent).await {
             failed.push(format!("ntfy: {e}"));
         }
@@ -687,6 +687,6 @@ mod tests {
         assert_eq!(p, "gdbus");
         assert_eq!(a.last().unwrap(), r"{'title': <'Bob\'s album'>, 'body': <'17 tracks filed'>}");
         let (_, a) = command(Route::Freedesktop, "x", "T", "B");
-        assert_eq!(a[8..], ["'Disc Rip Trip'", "0", "'media-optical'", "'T'", "'B'", "[]", "{}", "-1"]);
+        assert_eq!(a[8..], ["'Trip'", "0", "'media-optical'", "'T'", "'B'", "[]", "{}", "-1"]);
     }
 }

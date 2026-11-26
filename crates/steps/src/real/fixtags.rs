@@ -1,4 +1,4 @@
-//! `drt fix-tags`: mends the two tagging mistakes in files filed before
+//! `tripr fix-tags`: mends the two tagging mistakes in files filed before
 //! the audio audit of 20 November 2026, and nothing else.
 //!
 //! 1. cyanrip put its name in every WAV it wrote (`comment=cyanrip

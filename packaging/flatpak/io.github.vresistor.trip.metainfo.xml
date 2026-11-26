@@ -4,10 +4,10 @@
      nothing in `flatpak list`. scripts/build-flatpak.sh fills in @VERSION@
      (from app/Cargo.toml) and the date, so this file stays static. -->
 <component type="desktop-application">
-  <id>io.github.vresistor.disc-rip-trip</id>
+  <id>io.github.vresistor.trip</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>Disc Rip Trip</name>
+  <name>Trip</name>
   <summary>Put a disc in, get properly named files in your library</summary>
   <description>
     <p>
@@ -22,9 +22,9 @@
       against Redump and converted to CHD.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.vresistor.disc-rip-trip.desktop</launchable>
-  <url type="homepage">https://github.com/vresistor/disc-rip-trip</url>
-  <url type="bugtracker">https://github.com/vresistor/disc-rip-trip/issues</url>
+  <launchable type="desktop-id">io.github.vresistor.trip.desktop</launchable>
+  <url type="homepage">https://github.com/vresistor/trip</url>
+  <url type="bugtracker">https://github.com/vresistor/trip/issues</url>
   <developer id="io.github.vresistor">
     <name>vresistor</name>
   </developer>

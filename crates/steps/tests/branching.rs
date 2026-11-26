@@ -1,9 +1,9 @@
 //! A + in the middle of a line offers what fits beside what follows, too:
 //! after Rip → FLAC → Library, another encoder goes on a branch from Rip.
 
-use drt_engine::recipe::chain;
-use drt_engine::{check, Node};
-use drt_steps::{real, simulated};
+use trip_engine::recipe::chain;
+use trip_engine::{check, Node};
+use trip_steps::{real, simulated};
 
 fn rip_into_flac() -> Node {
     chain([
@@ -50,7 +50,7 @@ fn a_branch_after_the_end_of_a_nested_line_goes_beside_what_follows() {
         Node::step("r", "rip"),
         Node::step("f", "flac"),
         chain([Node::step("h", "hold"), Node::step("l", "folder")]),
-        drt_engine::recipe::branches([Node::step("t", "tell"), Node::step("x", "folder")]),
+        trip_engine::recipe::branches([Node::step("t", "tell"), Node::step("x", "folder")]),
     ]);
     assert_eq!(root, want);
     // Last of all: it simply follows.

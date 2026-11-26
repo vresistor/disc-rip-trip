@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Disc Rip Trip mockups</title>
+<title>Trip mockups</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -379,7 +379,7 @@ const rowOf = ([t, s], i) => {
   return `<tr><td class="n">${n}</td><td>${t}</td><td class="len">${mmss(s)}</td><td><span class="chip ok">${TICK} ${104 - (n % 2)}</span></td><td></td></tr>`;
 };
 D.inside = drawer('read', 'rip', 'Rip', '15 of 17 verified',
-  `<label class="setting">First read <select><option>fast</option><option>careful</option></select></label><label class="setting">AccurateRip <select><option>on</option><option>off</option></select></label>${fl('Working','~/Videos/Disc Rip Trip/staging/music/j9XP3dgj')}`,
+  `<label class="setting">First read <select><option>fast</option><option>careful</option></select></label><label class="setting">AccurateRip <select><option>on</option><option>off</option></select></label>${fl('Working','~/Videos/Trip/staging/music/j9XP3dgj')}`,
   `<div class="twocol"><table class="items">${tracks.slice(0, 9).map((t, i) => rowOf(t, i)).join('')}</table><table class="items">${tracks.slice(9).map((t, i) => rowOf(t, i + 9)).join('')}</table></div>`);
 const grp = (h, c, xs) => `<div><h4>${h}</h4><div class="pick">${xs.map(x => `<button class="c-${c}">${sic(x)}${x}</button>`).join('')}</div></div>`;
 D.edit = drawer('read', 'plus', 'Add after Audio CD', '', '',
@@ -435,7 +435,7 @@ function show(state) {
     top = `<span class="title">Box set</span><span class="meta">new</span>`; acts = `<button class="btn primary">${ic('done')}Done</button>`; }
   const dr = D[state === 'complex' || state === 'running' ? '' : state] || '';
   win.innerHTML = sideHTML(state) + `<section class="main ${editing ? 'editing' : ''}"><div class="top">${top}${state === 'complex' ? '<span class="chip busy">about 3 min left</span>' : status}
-      <span class="acts">${state === 'new' ? '' : fl('Working','~/Videos/Disc Rip Trip/staging/music/j9XP3dgj')}${acts}</span></div>
+      <span class="acts">${state === 'new' ? '' : fl('Working','~/Videos/Trip/staging/music/j9XP3dgj')}${acts}</span></div>
     <div class="stage"><div class="canvas">${boardHTML(recipe)}</div>${dr}<div class="zoom"><button aria-label="Zoom out">−</button><span>100%</span><button aria-label="Zoom in">+</button><button>${ic('fit')}Fit</button></div></div></section>`;
   if (state === 'edit') document.getElementById('plus-cd').classList.add('on');
   requestAnimationFrame(() => {

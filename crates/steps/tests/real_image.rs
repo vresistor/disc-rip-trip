@@ -5,10 +5,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use drt_engine::recipe::{branches, chain};
-use drt_engine::{Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Step, StepInfo, StepState, Subject};
-use drt_steps::real::data::DUMP;
 use std::path::{Path, PathBuf};
+use trip_engine::recipe::{branches, chain};
+use trip_engine::{Cx, Engine, Group, Inlet, Item, ItemKind, ItemState, Node, Outlet, Recipe, Step, StepInfo, StepState, Subject};
+use trip_steps::real::data::DUMP;
 
 /// Gives the dump at `main`, as Image would, with what Data disc found.
 struct Dumped {
@@ -49,14 +49,14 @@ fn dump(dir: &Path) -> PathBuf {
     cue
 }
 
-async fn run(base: &Path, known: bool) -> drt_engine::Snapshot {
+async fn run(base: &Path, known: bool) -> trip_engine::Snapshot {
     let _ = std::fs::remove_dir_all(base);
     let main = dump(&base.join("dump"));
     // Redump's PC catalogue, fresh in the cache beside the runs, naming the
     // dump by its tracks' real hashes (or by others, when it's not known).
     let tracks = [main.with_file_name("MYSTRIVEN (Track 1).bin"), main.with_file_name("MYSTRIVEN (Track 2).bin")];
     let refs: Vec<&Path> = tracks.iter().map(PathBuf::as_path).collect();
-    let roms = drt_steps::real::hash::hash_files(&refs, |_| {}, || false).unwrap();
+    let roms = trip_steps::real::hash::hash_files(&refs, |_| {}, || false).unwrap();
     let sha = |i: usize| if known { roms[i].sha1.clone() } else { format!("{:040}", i) };
     let dat = format!(
         r#"<?xml version="1.0"?><datafile><header><version>test</version></header>
@@ -71,7 +71,7 @@ async fn run(base: &Path, known: bool) -> drt_engine::Snapshot {
     std::fs::create_dir_all(base.join("cache/redump")).unwrap();
     std::fs::write(base.join("cache/redump/pc.dat"), dat).unwrap();
 
-    let mut reg = drt_steps::real();
+    let mut reg = trip_steps::real();
     reg.add(Dumped { main });
     let mut e = Engine::new(reg);
     e.work_root = base.join("runs");
@@ -88,12 +88,12 @@ async fn run(base: &Path, known: bool) -> drt_engine::Snapshot {
             ]),
         ]),
     };
-    drt_engine::check(&recipe.root, &e.registry).unwrap();
+    trip_engine::check(&recipe.root, &e.registry).unwrap();
     e.start(&recipe).unwrap().finished().await
 }
 
 fn base(name: &str) -> PathBuf {
-    std::env::current_dir().unwrap().join("../../target/drt-test").join(name)
+    std::env::current_dir().unwrap().join("../../target/trip-test").join(name)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -117,7 +117,7 @@ async fn a_dump_redump_knows_is_checked_made_into_a_chd_and_filed() {
     names.sort();
     assert_eq!(names, ["Myst & Riven (Europe) (Track 1).bin", "Myst & Riven (Europe) (Track 2).bin", "Myst & Riven (Europe).cue", "Myst & Riven (Europe).log"]);
     let cue = std::fs::read_to_string(kept.join("Myst & Riven (Europe).cue")).unwrap();
-    assert_eq!(drt_steps::real::redumper::cue_files(&cue), ["Myst & Riven (Europe) (Track 1).bin", "Myst & Riven (Europe) (Track 2).bin"]);
+    assert_eq!(trip_steps::real::redumper::cue_files(&cue), ["Myst & Riven (Europe) (Track 1).bin", "Myst & Riven (Europe) (Track 2).bin"]);
     std::fs::remove_dir_all(b).unwrap();
 }
 

@@ -21,5 +21,5 @@ Trip write outside the folder you chose, run something, crash, or send your
 keys, token, email address or ntfy topic anywhere but their own service.
 
 The flatpak's permissions are broad on purpose, and why is written in
-`packaging/flatpak/io.github.vresistor.disc-rip-trip.yml`. The bundled tools (cyanrip,
+`packaging/flatpak/io.github.vresistor.trip.yml`. The bundled tools (cyanrip,
 redumper, ffmpeg) are other projects: please report their bugs upstream too.
