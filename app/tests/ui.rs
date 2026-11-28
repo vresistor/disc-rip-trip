@@ -5482,11 +5482,12 @@ fn the_disc_before_stays_on_the_canvas_until_the_next_goes_in() {
     assert_eq!(a.m.snapshot(0).steps["rip"].items.len(), a.m.newest(0).unwrap().snap.steps["rip"].items.len());
 }
 
-/// System, Light or Dark, picked at the bottom of the recipes and kept.
+/// System, Light or Dark, picked in the app's settings and kept.
 #[test]
 fn the_appearance_is_picked_and_remembered() {
     let e = env();
     let mut h = window(&e, None, true, 0.0);
+    click(&mut h, "App settings");
     h.get_by_label("Appearance: Dark").click();
     h.run_steps(2);
     assert!(app(&h).dark);
@@ -6124,12 +6125,11 @@ fn a_video_recipe_waits_for_your_ok_to_run_makemkv_and_runs_it_once_when_given()
     assert!(saved.contains("/usr/bin/makemkvcon") && saved.contains("MakeMKV v1.18.2"), "{saved}");
     assert!(!h.get_by_label("Start").accesskit_node().is_disabled());
     assert_eq!(snap(&h).steps["v_disc"].state, StepState::Idle);
-    // Its page at the foot of the list: what's used, and its version;
-    // the key switch is off until turned on.
-    app_mut(&mut h).open_page(trip_app::Page::MakeMkv);
+    // Its part of the app's settings: what's used, and its version; the
+    // key switch is off until turned on.
+    app_mut(&mut h).open_page(trip_app::Page::Settings);
     h.run_steps(3);
     h.get_by_label("MakeMKV v1.18.2");
-    h.get_by_label("MakeMKV, v1.18.2");
     let switch = h.get_by_label("Keep MakeMKV's beta key up to date");
     assert_eq!(switch.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
     assert!(!app(&h).m.makemkv.key_updates && !trip_steps::real::video::makemkv::key_updates());
@@ -6234,9 +6234,10 @@ fn working_files_never_filed_are_kept_listed_and_deleted_only_when_you_say() {
     }
     assert!(!filed.exists() && !raw.exists(), "filed, and raw a day old: gone");
     assert!(unfiled.join("flac/01.flac").exists() && cut_off.join("mp3/01.mp3").exists() && fresh_raw.exists());
-    h.get_by_label("Working files, 2 never filed");
-    app_mut(&mut h).open_page(trip_app::Page::WorkingFiles);
+    // Never filed is a badge on the gear, and its own part of the settings.
+    h.get_by_label("App settings, 2 never filed").click();
     h.run_steps(3);
+    assert_eq!(app(&h).tray, Some(Tray::App(trip_app::Page::Settings)));
     h.get_by_label("Tortoise – TNT: 3 tracks, never filed");
     assert!(app(&h).m.work.kept.iter().any(|k| k.line.starts_with("A disc from ") && k.line.ends_with(": 1 track, never filed")), "{:?}", app(&h).m.work.kept);
     shot(&mut h, "working-files");
@@ -6351,4 +6352,148 @@ fn a_run_stopped_mid_encode_keeps_its_encodes_and_lists_them() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(w.join("flac/01 - Track.flac").exists());
+}
+
+// ---- The recipe list folds to a rail ----------------------------------------------------------
+
+/// Where the pointer rests on the rail, a little below New recipe.
+fn rest_on_rail(h: &mut Harness<Window>) {
+    let r = h.get_by_label("New recipe").rect();
+    h.event(egui::Event::PointerMoved(egui::pos2(r.center().x, 400.0)));
+    // A moment, as a person's pointer rests: a step is a quarter second.
+    h.run_steps(3);
+}
+
+fn pointer_to_canvas(h: &mut Harness<Window>) {
+    let c = app(h).canvas_rect();
+    h.event(egui::Event::PointerMoved(egui::pos2(c.right() - 40.0, c.bottom() - 120.0)));
+    h.run_steps(4);
+}
+
+/// Open until a recipe is chosen; then a rail of icons, each with its
+/// state, so the workflow gets the room. Resting on it opens the list over
+/// the workflow (which stays where it is), and it folds again once the
+/// pointer has gone; the keyboard opens it too. An icon chooses its recipe
+/// with a click, without waiting for it to open.
+#[test]
+fn the_recipe_list_folds_to_a_rail_once_a_recipe_is_chosen() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    assert_eq!(app(&h).list_w, trip_app::app::LIST_W);
+    h.get_by_label("Recipes");
+    let wide = app(&h).canvas_rect();
+    h.get_by_label_contains("Data discs, Ready").click();
+    h.run_steps(3);
+    pointer_to_canvas(&mut h);
+    assert_eq!(app(&h).sel, 2);
+    assert!(app(&h).list_folded && !app(&h).list_over);
+    assert_eq!(app(&h).list_w, trip_app::app::RAIL_W);
+    assert!(h.query_by_label("Recipes").is_none(), "folded: no title, just icons");
+    let canvas = app(&h).canvas_rect();
+    assert!(canvas.left() < wide.left() - 150.0, "the workflow has the room: {canvas:?}");
+    // Each recipe is still there by name and state, and New recipe and the gear.
+    let icon = h.get_by_label_contains("CDs, Ready").rect();
+    assert!(icon.right() <= trip_app::app::RAIL_W, "{icon:?}");
+    h.get_by_label("New recipe");
+    h.get_by_label("App settings");
+    shot(&mut h, "list-rail");
+
+    // Resting on the rail opens it over the workflow; nothing moves under it.
+    rest_on_rail(&mut h);
+    assert!(app(&h).list_over);
+    h.get_by_label("Recipes");
+    assert_eq!(app(&h).canvas_rect(), canvas, "the workflow doesn't move");
+    assert!(h.get_by_label_contains("Archive everything, Ready").rect().right() > 150.0);
+    shot(&mut h, "list-over");
+    // The pointer gone, it folds again a moment later.
+    pointer_to_canvas(&mut h);
+    assert!(!app(&h).list_over);
+
+    // An icon is chosen with a click, there and then.
+    h.get_by_label_contains("Games, Ready").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(app(&h).sel, 3);
+    assert!(!app(&h).list_over);
+    // Choosing from the open list folds it straight away.
+    rest_on_rail(&mut h);
+    assert!(app(&h).list_over);
+    h.get_by_label_contains("CDs, Ready").click();
+    h.run_steps(2);
+    assert_eq!(app(&h).sel, 0);
+    assert!(!app(&h).list_over, "folded once chosen, though the pointer's still there");
+
+    // The keyboard: the focus on an icon opens the list.
+    pointer_to_canvas(&mut h);
+    h.key_press(egui::Key::Tab);
+    h.get_by_label_contains("Games, Ready").focus();
+    h.run_steps(3);
+    assert!(app(&h).list_over, "the keyboard's in the list");
+    h.get_by_label("Recipes");
+}
+
+/// Kept open with the pin: beside the workflow, whatever's chosen, and
+/// still so next time.
+#[test]
+fn the_recipe_list_can_be_kept_open_and_it_is_remembered() {
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    h.get_by_label_contains("Games, Ready").click();
+    h.run_steps(3);
+    rest_on_rail(&mut h);
+    let pin = h.get_by_label("Keep the list open");
+    assert_eq!(pin.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    pin.click();
+    h.run_steps(3);
+    pointer_to_canvas(&mut h);
+    assert!(app(&h).list_pinned && !app(&h).list_over);
+    assert_eq!(app(&h).list_w, trip_app::app::LIST_W);
+    assert_eq!(h.get_by_label("Keep the list open").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(std::fs::read_to_string(e.dir.path().join("config/recipe-list")).unwrap(), "open");
+    h.get_by_label_contains("CDs, Ready").click();
+    h.run_steps(3);
+    assert_eq!(app(&h).list_w, trip_app::app::LIST_W, "kept open after a choice");
+    shot(&mut h, "list-pinned");
+    drop(h);
+    // Next time: open still.
+    let mut h = window(&e, None, true, 0.0);
+    assert!(app(&h).list_pinned);
+    h.get_by_label_contains("Data discs, Ready").click();
+    h.run_steps(3);
+    assert_eq!(app(&h).list_w, trip_app::app::LIST_W);
+    // Let go of: it folds there and then.
+    h.get_by_label("Keep the list open").click();
+    h.run_steps(3);
+    assert_eq!(app(&h).list_w, trip_app::app::RAIL_W);
+    assert_eq!(std::fs::read_to_string(e.dir.path().join("config/recipe-list")).unwrap(), "folds");
+}
+
+/// The gear at the foot of the list: the app's settings in the sidebar,
+/// how it looks, the working files and MakeMKV; what was never filed is a
+/// badge on it.
+#[test]
+fn the_app_s_settings_are_one_page_from_the_gear() {
+    use trip_app::workfiles::{Class, Mark};
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let mut e = env();
+    e.makemkv = makemkv_hooks(false, true, ran);
+    work_folder(&e, "cds-1", &["flac/01.flac", "flac/02.flac"], Some(Mark { class: Class::Unfiled, title: "Tortoise – TNT".into() }));
+    let mut h = makemkv_window(&e);
+    app(&h).m.sweep_work();
+    until(&mut h, "the sweep", |a| a.m.work.kept.len() == 1);
+    h.get_by_label("App settings, 1 never filed").click();
+    h.run_steps(3);
+    assert_eq!(app(&h).tray, Some(Tray::App(trip_app::Page::Settings)));
+    for part in ["Appearance", "Working files", "MakeMKV"] {
+        h.get_by_label(part);
+    }
+    h.get_by_label("Appearance: Light");
+    h.get_by_label("Tortoise – TNT: 2 tracks, never filed");
+    h.get_by_label("Use this: /usr/bin/makemkvcon");
+    assert!(h.query_by_label("Follow").is_some(), "Follow stays at the foot of the workflow");
+    pointer_to_canvas(&mut h);
+    shot(&mut h, "settings");
+    // The gear again closes it.
+    h.get_by_label("App settings, 1 never filed").click();
+    h.run_steps(3);
+    assert!(app(&h).tray.is_none());
 }

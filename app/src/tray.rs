@@ -119,8 +119,7 @@ pub fn show(app: &mut App, ui: &mut Ui, p: &Pal, snap: &Snapshot) {
             (Tray::Question { step }, Body::Choose) => choose(app, ui, p, snap, step, t),
             (Tray::Question { step }, Body::Answers) => answers(app, ui, p, snap, step),
             (Tray::Question { step }, Body::Pictures) => pictures(app, ui, p, snap, step),
-            (Tray::App(Page::MakeMkv), _) => makemkv_page(app, ui, p, true),
-            (Tray::App(Page::WorkingFiles), _) => working_files(app, ui, p),
+            (Tray::App(Page::Settings), _) => settings_page(app, ui, p, t),
             (Tray::Step { id, focus }, body) => {
                 // A step that runs MakeMKV, while it isn't set up: that first.
                 if snap.steps.get(id).is_some_and(|v| crate::makemkv::runs_makemkv(&v.step)) && app.m.makemkv_blocks(app.sel).is_some() && !app.m.ripping(app.sel) {
@@ -426,37 +425,14 @@ fn room(ui: &Ui) -> f32 {
 fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
     let i = app.sel;
     match tray {
-        Tray::App(Page::WorkingFiles) => {
+        Tray::App(Page::Settings) => {
             let p = Pal::get(app.dark);
-            let w = &app.m.work;
             Some(Plan {
-                icon: "folder".into(),
-                colour: p.kind("folder"),
-                name: "Working files".into(),
-                pill: Some((trip_steps::real::media::size(w.total), if w.kept.is_empty() { Tone::Plain } else { Tone::Warn }, None)),
-                say: "Where each disc's rip and encodes wait until they're filed. They're deleted once everything is filed; a folder holding files that never were is kept, since it may be the only copy.".into(),
-                acts: vec![],
-                body: Body::App,
-                rename: None,
-                remove: false,
-                corner: None,
-                note: String::new(),
-            })
-        }
-        Tray::App(Page::MakeMkv) => {
-            let p = Pal::get(app.dark);
-            let r = app.m.makemkv.readiness();
-            Some(Plan {
-                icon: "rip-video".into(),
-                colour: p.kind("rip-video"),
-                name: "MakeMKV".into(),
-                pill: Some(match r {
-                    Readiness::Ready => ("Ready".into(), Tone::Ok, Some(StepState::Ok)),
-                    Readiness::Checking => ("Checking".into(), Tone::Busy, Some(StepState::Busy)),
-                    Readiness::NotChosen => ("Not set up".into(), Tone::Warn, Some(StepState::Needs)),
-                    Readiness::NeedsPermission => ("Can't be started".into(), Tone::Warn, Some(StepState::Needs)),
-                }),
-                say: "Reads video discs, for Video disc and Rip.".into(),
+                icon: "gear".into(),
+                colour: p.muted,
+                name: "Settings".into(),
+                pill: None,
+                say: String::new(),
                 acts: vec![],
                 body: Body::App,
                 rename: None,
@@ -731,6 +707,59 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
     }
 }
 
+// ---- The app's settings ----------------------------------------------------------------------
+
+/// A part of the settings page: a line above it (but the first), and its
+/// name, with a pill after it if it has one.
+fn section(ui: &mut Ui, p: &Pal, name: &str, pill_: Option<(String, Tone, Option<StepState>)>, first: bool, t: f64) {
+    if !first {
+        ui.add_space(18.0);
+        ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, p.line_soft));
+        ui.add_space(16.0);
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(RichText::new(name).font(font(14.5, 600)).color(p.ink));
+        if let Some((text, tone, state)) = pill_ {
+            pill(ui, p, &text, tone, state, t);
+        }
+    });
+    ui.add_space(6.0);
+}
+
+/// The app's own settings: how it looks, the working files, and MakeMKV
+/// when a recipe can use it.
+fn settings_page(app: &mut App, ui: &mut Ui, p: &Pal, t: f64) {
+    let wrap = |ui: &mut Ui, text: &str, col: Color32| {
+        ui.add(egui::Label::new(RichText::new(text).font(font(13.0, 400)).color(col)).wrap());
+    };
+    section(ui, p, "Appearance", None, true, t);
+    app.appearance_control(ui, p);
+
+    let w = &app.m.work;
+    let size = (trip_steps::real::media::size(w.total), if w.kept.is_empty() { Tone::Plain } else { Tone::Warn }, None);
+    section(ui, p, "Working files", Some(size), false, t);
+    wrap(
+        ui,
+        "Where each disc's rip and encodes wait until they're filed. They're deleted once everything is filed; a folder holding files that never were is kept, since it may be the only copy.",
+        p.muted,
+    );
+    working_files(app, ui, p);
+
+    if app.m.makemkv.hooks.required {
+        let pill_ = match app.m.makemkv.readiness() {
+            Readiness::Ready => ("Ready".into(), Tone::Ok, Some(StepState::Ok)),
+            Readiness::Checking => ("Checking".into(), Tone::Busy, Some(StepState::Busy)),
+            Readiness::NotChosen => ("Not set up".into(), Tone::Warn, Some(StepState::Needs)),
+            Readiness::NeedsPermission => ("Can't be started".into(), Tone::Warn, Some(StepState::Needs)),
+        };
+        section(ui, p, "MakeMKV", Some(pill_), false, t);
+        wrap(ui, "Reads video discs, for Video disc and Rip.", p.muted);
+        ui.add_space(6.0);
+        makemkv_page(app, ui, p, true);
+    }
+}
+
 // ---- Working files ----------------------------------------------------------------------------
 
 /// The working folders kept because they hold files never filed: each
@@ -738,7 +767,8 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
 fn working_files(app: &mut App, ui: &mut Ui, p: &Pal) {
     let kept = app.m.work.kept.clone();
     if kept.is_empty() {
-        empty(ui, p, "Nothing waiting to be filed.");
+        ui.add_space(6.0);
+        ui.label(RichText::new("Nothing waiting to be filed.").font(font(13.0, 400)).color(p.subtle));
         return;
     }
     heading(ui, p, "Never filed");

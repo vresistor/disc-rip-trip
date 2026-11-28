@@ -55,7 +55,7 @@ runs it until you say where it is: a recipe that reads video discs
 waits at its Video disc and Rip steps, which list the MakeMKVs found on
 your computer with **Use this**, or let you **Choose…** the program.
 Only then is it run, once, to show its version. You can change or
-revoke this under **MakeMKV** at the foot of the recipe list, where
+revoke this under **MakeMKV** in Settings (the gear at the foot of the recipe list), where
 there's also a switch, off unless you turn it on, to fetch MakeMKV's
 free beta key from the MakeMKV forum when it runs out.
 
@@ -280,7 +280,7 @@ uses it, and every recipe shares it.
 | What | Where |
 |---|---|
 | Recipes and settings | `~/.config/trip/` (`recipes.json`, `settings.json`). `--simulate` uses a `simulate/` folder inside it. |
-| A run's working files | `~/.cache/trip/runs/`. Once everything a run made is filed, its folder is deleted (when the next disc replaces it, if the run still offers a retry). One stopped before anything was encoded goes once replaced, or at start-up after a day. One holding encoded files that were never filed (say the network share was down) is never deleted by itself: **Working files**, at the foot of the recipe list, lists it to open or delete. The small `runs/*.json` records stay. |
+| A run's working files | `~/.cache/trip/runs/`. Once everything a run made is filed, its folder is deleted (when the next disc replaces it, if the run still offers a retry). One stopped before anything was encoded goes once replaced, or at start-up after a day. One holding encoded files that were never filed (say the network share was down) is never deleted by itself: **Working files**, in Settings (the gear at the foot of the recipe list), lists it to open or delete, and the gear shows how many are waiting. The small `runs/*.json` records stay. |
 | Downloaded lists (drive offsets, Redump) | `~/.cache/trip/cache/` |
 
 These follow `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` if you set them.

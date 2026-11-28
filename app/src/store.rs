@@ -134,6 +134,18 @@ impl Store {
         Ok(())
     }
 
+    /// Whether the recipe list stays open: "open", else it folds to a rail
+    /// once a recipe is chosen.
+    pub fn load_list_pinned(&self) -> bool {
+        std::fs::read_to_string(self.dir.join("recipe-list")).is_ok_and(|s| s.trim() == "open")
+    }
+
+    pub fn save_list_pinned(&self, on: bool) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join("recipe-list"), if on { "open" } else { "folds" })?;
+        Ok(())
+    }
+
     /// Which view of a disc's map: "disc" or "sectors".
     pub fn load_map_view(&self) -> Option<String> {
         std::fs::read_to_string(self.dir.join("map-view")).ok().map(|s| s.trim().to_owned())

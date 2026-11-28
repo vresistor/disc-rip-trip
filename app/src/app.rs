@@ -26,16 +26,25 @@ pub enum Tray {
     /// A tile's parameters and items. `focus` is a parameter to put the
     /// cursor in: the one setup needs.
     Step { id: String, focus: Option<String> },
-    /// One of the app's own settings, from the foot of the recipe list.
+    /// The app's own settings, from the gear at the foot of the list.
     App(Page),
 }
 
-/// The app's own settings, each a page of the sidebar.
+/// The app's own settings: one page of the sidebar, from the gear at the
+/// foot of the recipe list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
-    MakeMkv,
-    WorkingFiles,
+    Settings,
 }
+
+/// The recipe list's width when open, and as a rail of icons.
+pub const LIST_W: f32 = 232.0;
+pub const RAIL_W: f32 = 56.0;
+/// How long the pointer rests on the rail before the list opens over the
+/// workflow (a quick click on an icon just chooses it), and how long it
+/// stays open once the pointer has left.
+const OPEN_AFTER: f64 = 0.25;
+const SHUT_AFTER: f64 = 0.3;
 
 /// The sidebar's least width, and its most: about a third of the window
 /// between (448 at 1280, 672 at 1920).
@@ -111,6 +120,27 @@ pub struct App {
     /// Follow: the canvas keeps the step where something last happened in
     /// view. Remembered; a drag or a zoom by hand turns it off.
     pub follow: bool,
+    /// The recipe list kept open, beside the workflow; else, once a recipe
+    /// is chosen, it folds to a rail of icons and opens over the workflow
+    /// while the pointer rests on it. Remembered.
+    pub list_pinned: bool,
+    /// A recipe has been chosen since the window opened.
+    pub list_folded: bool,
+    /// The folded list is open over the workflow just now.
+    pub list_over: bool,
+    /// The list's width this frame.
+    pub list_w: f32,
+    /// When the pointer came onto the rail, and when it left the open list.
+    list_hover_at: Option<f64>,
+    list_left_at: Option<f64>,
+    /// Just chosen: the list stays a rail until the pointer leaves it (or,
+    /// from the keyboard, the focus moves on from what had it then).
+    list_hold: Option<Option<egui::Id>>,
+    /// Where the rail and the open list were last frame, and what in them
+    /// takes the focus.
+    rail_rect: Rect,
+    over_rect: Rect,
+    list_ids: Vec<egui::Id>,
     /// The view of a disc's map: drawn to scale, or every sector. Remembered.
     pub map_view: crate::sectormap::MapView,
     /// The step that last began, finished or began to ask, and when.
@@ -215,6 +245,7 @@ impl App {
 
     pub fn new(m: Model, dark: bool) -> App {
         let follow = m.store.load_follow().unwrap_or(false);
+        let list_pinned = m.store.load_list_pinned();
         let map_view = m.store.load_map_view().and_then(|v| crate::sectormap::MapView::parse(&v)).unwrap_or_default();
         App {
             m,
@@ -253,6 +284,16 @@ impl App {
             cue_seen: HashMap::new(),
             cues: HashMap::new(),
             follow,
+            list_pinned,
+            list_folded: false,
+            list_over: false,
+            list_w: LIST_W,
+            list_hover_at: None,
+            list_left_at: None,
+            list_hold: None,
+            rail_rect: Rect::NOTHING,
+            over_rect: Rect::NOTHING,
+            list_ids: Vec::new(),
             map_view,
             follow_last: None,
             follow_moved: f64::NEG_INFINITY,
@@ -745,11 +786,34 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
         }
-        egui::Panel::left("recipes")
-            .exact_size(232.0)
+        // The recipe list: open beside the workflow, or a rail that opens
+        // over it.
+        let docked = self.list_pinned || !self.list_folded;
+        let glide = if crate::motion::on() { 0.18 } else { 0.0 };
+        self.list_w = ctx.animate_value_with_time(egui::Id::NULL.with("list-width"), if docked { LIST_W } else { RAIL_W }, glide).round();
+        let folded = !docked && self.list_w <= RAIL_W + 0.5;
+        self.list_over = folded && self.wants_list_over(&ctx);
+        self.list_ids.clear();
+        let rail = egui::Panel::left("recipes")
+            .exact_size(self.list_w)
             .resizable(false)
             .frame(egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.line)).corner_radius(egui::CornerRadius { nw: r, sw: r, ne: 0, se: 0 }))
-            .show(ui, |ui| self.sidebar(ui, &p, t));
+            .show(ui, |ui| {
+                if self.list_over {
+                    // Drawn over it, below: here, only the band to move the window.
+                    let top = Rect::from_min_size(ui.max_rect().min, vec2(ui.max_rect().width(), 50.0));
+                    chrome::drag_area(ui, top, ui.scope_id().with("drag-sidebar"));
+                    self.band.push(top);
+                } else {
+                    self.list(ui, &p, t, folded);
+                }
+            });
+        self.rail_rect = rail.response.rect;
+        if self.list_over {
+            self.list_overlay(&ctx, &p, t);
+        } else {
+            self.over_rect = Rect::NOTHING;
+        }
         self.title_field = None;
         let header = egui::Panel::top("header")
             .frame(egui::Frame::new().fill(p.surface).inner_margin(Margin { left: 18, right: 8, top: 8, bottom: 8 }).corner_radius(egui::CornerRadius { ne: r, ..Default::default() }))
@@ -781,9 +845,9 @@ impl App {
         // that compares two lists wider.
         let win = ctx.content_rect().width();
         // A small window keeps 320 of canvas, the sidebar at least 360.
-        let mut full = (win * 0.35).clamp(SIDE_W, SIDE_MAX).min(win - 232.0 - 320.0).max(360.0);
+        let mut full = (win * 0.35).clamp(SIDE_W, SIDE_MAX).min(win - self.list_w - 320.0).max(360.0);
         if crate::tray::wants_wide(self) {
-            full = full.max(SIDE_WIDE.min(win - 232.0 - 420.0));
+            full = full.max(SIDE_WIDE.min(win - self.list_w - 420.0));
         }
         self.side_target = full;
         let glide = crate::motion::on() && self.side_w >= 1.0;
@@ -853,7 +917,88 @@ impl App {
         (0..self.m.recipes.len()).find(|&j| self.m.ripping(j))
     }
 
-    fn sidebar(&mut self, ui: &mut Ui, p: &Pal, t: f64) {
+    /// Whether the folded list should be open over the workflow: the
+    /// pointer has rested on the rail a moment, or is on the open list (or
+    /// only just left it), or the keyboard is in it, or a new recipe is
+    /// being named. Not straight after a choice.
+    fn wants_list_over(&mut self, ctx: &egui::Context) -> bool {
+        let (pos, now) = ctx.input(|i| (i.pointer.hover_pos(), i.time));
+        let on_rail = pos.is_some_and(|at| self.rail_rect.contains(at));
+        let on_list = self.list_over && pos.is_some_and(|at| self.over_rect.contains(at));
+        let focused = ctx.memory(|m| m.focused());
+        let keys = crate::widgets::kb_focus(ctx);
+        let kb = keys && focused.is_some_and(|f| self.list_ids.contains(&f));
+        if self.naming.is_some() {
+            self.list_hold = None;
+            return true;
+        }
+        if let Some(held) = self.list_hold {
+            let moved_on = !keys || focused != held;
+            if on_rail || on_list || !moved_on {
+                self.list_hover_at = None;
+                self.list_left_at = None;
+                return false;
+            }
+            self.list_hold = None;
+        }
+        if !on_rail {
+            self.list_hover_at = None;
+        }
+        let rested = on_rail && {
+            let since = *self.list_hover_at.get_or_insert(now);
+            let left = OPEN_AFTER - (now - since);
+            if left > 0.0 {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+            }
+            left <= 0.0
+        };
+        if on_list || rested || kb {
+            self.list_left_at = None;
+            return true;
+        }
+        if self.list_over {
+            let left = SHUT_AFTER - (now - *self.list_left_at.get_or_insert(now));
+            if left > 0.0 {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+                return true;
+            }
+        }
+        self.list_left_at = None;
+        false
+    }
+
+    /// The folded list, open over the workflow: the whole list, from the
+    /// window's left edge, with a shadow; the workflow stays where it is.
+    fn list_overlay(&mut self, ctx: &egui::Context, p: &Pal, t: f64) {
+        let full = ctx.content_rect();
+        let k = crate::motion::tween(ctx, egui::Id::NULL.with("list-over"), true, 0.14, crate::motion::cubic_out);
+        let w = (RAIL_W + (LIST_W - RAIL_W) * k).round();
+        let rect = Rect::from_min_size(full.min, vec2(w, full.height()));
+        self.over_rect = Rect::from_min_size(full.min, vec2(LIST_W, full.height()));
+        let r = self.round as u8;
+        egui::Area::new(egui::Id::NULL.with("list-over-area")).order(egui::Order::Middle).fixed_pos(rect.min).constrain(false).show(ctx, |ui| {
+            let frame = egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.line)).corner_radius(egui::CornerRadius { nw: r, sw: r, ne: 8, se: 8 }).shadow(egui::Shadow {
+                offset: [6, 0],
+                blur: 24,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(if p.dark { 110 } else { 34 }),
+            });
+            frame.show(ui, |ui| {
+                ui.set_min_size(rect.size());
+                ui.set_max_size(rect.size());
+                // Laid out at its full width, and shown as far as it's opened.
+                ui.set_clip_rect(rect);
+                let inner = Rect::from_min_size(rect.min, vec2(LIST_W, rect.height()));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(L::top_down(Align::Min)), |ui| self.list(ui, p, t, false));
+            });
+        });
+    }
+
+    /// The recipe list: at the top its title, Keep open and New recipe;
+    /// each recipe; at the foot the gear for the app's settings. `rail`,
+    /// only each recipe's icon with its state, and New recipe and the gear,
+    /// each where it is in the open list.
+    fn list(&mut self, ui: &mut Ui, p: &Pal, t: f64, rail: bool) {
         // Its top row, beside the canvas header, moves the window too.
         let top = Rect::from_min_size(ui.max_rect().min, vec2(ui.max_rect().width(), 50.0));
         chrome::drag_area(ui, top, ui.scope_id().with("drag-sidebar"));
@@ -862,95 +1007,147 @@ impl App {
         ui.style_mut().interaction.selectable_labels = false;
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.add_space(16.0);
-            ui.label(RichText::new("Recipes").font(font(15.0, 700)));
-            ui.with_layout(L::right_to_left(Align::Center), |ui| {
-                ui.add_space(10.0);
-                if Btn::new("plus", "").name("New recipe").pad(vec2(6.0, 6.0)).show(ui, p).clicked() && self.naming.is_none() {
+            ui.set_min_height(28.0);
+            if rail {
+                ui.add_space((RAIL_W - 30.0) / 2.0);
+            } else {
+                ui.add_space(16.0);
+                ui.label(RichText::new("Recipes").font(font(15.0, 700)));
+            }
+            let mut tools = |ui: &mut Ui| {
+                let new = ui.scope_builder(egui::UiBuilder::new().scope_id(egui::Id::NULL.with("list-new")), |ui| Btn::new("plus", "").name("New recipe").pad(vec2(6.0, 6.0)).show(ui, p)).inner;
+                self.list_ids.push(new.id);
+                if new.on_hover_text("New recipe").clicked() && self.naming.is_none() {
                     self.naming = Some(String::new());
                 }
+                if !rail {
+                    let pinned = self.list_pinned;
+                    let pin = ui.scope_builder(egui::UiBuilder::new().scope_id(egui::Id::NULL.with("list-pin")), |ui| pin_button(ui, p, pinned)).inner;
+                    self.list_ids.push(pin.id);
+                    let tip = if pinned { "Fold the list away once a recipe is chosen" } else { "Keep the list open beside the workflow" };
+                    if pin.on_hover_text(tip).clicked() {
+                        self.set_list_pinned(!pinned);
+                    }
+                }
+            };
+            if rail {
+                tools(ui);
+            } else {
+                ui.with_layout(L::right_to_left(Align::Center), |ui| {
+                    ui.add_space(10.0);
+                    tools(ui);
+                });
+            }
+        });
+        ui.add_space(8.0);
+        // The foot: the gear, with what needs you there as a badge.
+        let foot = 52.0;
+        let list_h = (ui.available_height() - foot).max(40.0);
+        egui::ScrollArea::vertical()
+            .id_salt("recipe-list")
+            .max_height(list_h)
+            .auto_shrink([false, true])
+            .scroll_bar_visibility(if rail { egui::scroll_area::ScrollBarVisibility::AlwaysHidden } else { Default::default() })
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                // Checked each time round: a row can delete or add a recipe.
+                let mut i = 0;
+                while i < self.m.recipes.len() {
+                    self.recipe_row(ui, p, t, i, rail);
+                    i += 1;
+                }
+                if self.naming.is_some() && !rail {
+                    self.naming_row(ui, p);
+                }
             });
-        });
-        ui.add_space(6.0);
-        egui::ScrollArea::vertical().id_salt("recipe-list").show(ui, |ui| {
-            // Checked each time round: a row can delete or add a recipe.
-            let mut i = 0;
-            while i < self.m.recipes.len() {
-                self.recipe_row(ui, p, t, i);
-                i += 1;
-            }
-            if self.naming.is_some() {
-                self.naming_row(ui, p);
-            }
-        });
         ui.with_layout(L::bottom_up(Align::Min), |ui| {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                self.appearance_control(ui, p);
+                ui.add_space(if rail { (RAIL_W - 34.0) / 2.0 } else { 12.0 });
+                self.settings_button(ui, p);
             });
-            ui.add_space(6.0);
-            // The app's own settings, one line each, above it.
-            let w = &self.m.work;
-            let (value, col) = match w.kept.len() {
-                0 if w.total == 0 => ("None".to_owned(), p.subtle),
-                0 => (trip_steps::real::media::size(w.total), p.subtle),
-                n => (format!("{n} never filed"), p.warn),
-            };
-            if self.setting_row(ui, p, "Working files", &value, col, Page::WorkingFiles) {
-                self.open_page(Page::WorkingFiles);
-            }
-            let mk = &self.m.makemkv;
-            if mk.hooks.required {
-                let (summary, tone) = (mk.summary(), if mk.readiness() == crate::makemkv::Readiness::Ready { p.subtle } else { p.warn });
-                if self.setting_row(ui, p, "MakeMKV", &summary, tone, crate::app::Page::MakeMkv) {
-                    self.open_page(crate::app::Page::MakeMkv);
-                }
-            }
         });
+    }
+
+    /// Keeps the list open, or lets it fold away, and remembers it.
+    pub fn set_list_pinned(&mut self, on: bool) {
+        self.list_pinned = on;
+        // Let go of, it folds now (a recipe is chosen: there's one shown).
+        if !on {
+            self.list_folded = true;
+            self.list_hold = Some(None);
+        }
+        if let Err(e) = self.m.store.save_list_pinned(on) {
+            eprintln!("couldn't save whether the list stays open: {e:#}");
+        }
+    }
+
+    /// The gear at the foot of the list: the app's settings, in the
+    /// sidebar. What there needs you (working files never filed) is a
+    /// badge on it.
+    fn settings_button(&mut self, ui: &mut Ui, p: &Pal) {
+        let never = self.m.work.kept.len();
+        let on = self.tray == Some(Tray::App(Page::Settings));
+        let name = match never {
+            0 => "App settings".to_owned(),
+            n => format!("App settings, {n} never filed"),
+        };
+        let resp = ui
+            .scope_builder(egui::UiBuilder::new().scope_id(egui::Id::NULL.with("list-settings")), |ui| {
+                let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Button, true, on, &name));
+                let hov = crate::motion::tween(ui.ctx(), resp.id.with("hover"), resp.hovered(), 0.09, crate::motion::cubic_out);
+                let pt = ui.painter();
+                if on {
+                    pt.rect(rect, 8.0, p.raised, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
+                } else if resp.is_pointer_button_down_on() {
+                    pt.rect_filled(rect, 8.0, mix(p.ink, 0.10, p.raised));
+                } else if hov > 0.0 {
+                    pt.rect_filled(rect, 8.0, mix(p.bg, hov, p.bg.gamma_multiply(0.0)));
+                }
+                pt.extend(kind_icon("gear", rect.center() - vec2(9.0, 9.0), 18.0, if on { p.ink } else { p.muted }));
+                if never > 0 {
+                    // A small count at its corner, in the colour of what needs you.
+                    let g = pt.layout_no_wrap(never.to_string(), font(10.5, 700), p.raised);
+                    let bw = (g.size().x + 8.0).max(16.0);
+                    let badge = Rect::from_center_size(pos2(rect.right() - 6.0, rect.top() + 7.0), vec2(bw, 16.0));
+                    pt.rect(badge, 8.0, p.warn, Stroke::new(2.0, p.surface), egui::StrokeKind::Outside);
+                    pt.galley(badge.center() - g.size() / 2.0, g, p.raised);
+                }
+                crate::widgets::focus_ring(ui, &resp, rect, 8.0, p);
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                resp
+            })
+            .inner;
+        self.list_ids.push(resp.id);
+        let tip = if never > 0 { format!("Settings: {never} never filed") } else { "Settings".to_owned() };
+        if resp.on_hover_text(tip).clicked() {
+            if on {
+                self.close_tray();
+            } else {
+                self.open_page(Page::Settings);
+            }
+        }
     }
 
     /// Opens one of the app's own settings in the sidebar.
     pub fn open_page(&mut self, page: Page) {
         match page {
-            Page::MakeMkv => self.m.look_for_makemkv(),
-            Page::WorkingFiles => self.m.rescan_work(),
+            Page::Settings => {
+                self.m.rescan_work();
+                if self.m.makemkv.hooks.required {
+                    self.m.look_for_makemkv();
+                }
+            }
         }
         self.confirm_work_delete = None;
         self.open(Tray::App(page));
     }
 
-    /// A line in the settings at the list's foot: its name, and what it's
-    /// set to. Clicked, it opens its page.
-    fn setting_row(&mut self, ui: &mut Ui, p: &Pal, name: &str, value: &str, col: egui::Color32, page: Page) -> bool {
-        let on = self.tray == Some(Tray::App(page));
-        let mut clicked = false;
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            let (rect, resp) = ui.allocate_exact_size(vec2(216.0, 28.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Button, true, on, format!("{name}, {value}")));
-            let pt = ui.painter();
-            if on {
-                pt.rect(rect, 6.0, p.raised, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
-            } else if resp.hovered() {
-                pt.rect_filled(rect, 6.0, p.bg);
-            }
-            let ng = pt.layout_no_wrap(name.to_owned(), font(13.0, 500), p.ink);
-            let mut job = egui::text::LayoutJob::single_section(value.to_owned(), egui::TextFormat::simple(font(12.5, 400), col));
-            job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - ng.size().x - 32.0);
-            let vg = pt.layout_job(job);
-            pt.galley(pos2(rect.left() + 10.0, rect.center().y - ng.size().y / 2.0), ng, p.ink);
-            pt.galley(pos2(rect.right() - 10.0 - vg.size().x, rect.center().y - vg.size().y / 2.0), vg, col);
-            crate::widgets::focus_ring(ui, &resp, rect, 6.0, p);
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            clicked = resp.clicked();
-        });
-        clicked
-    }
-
-    fn appearance_control(&mut self, ui: &mut Ui, p: &Pal) {
+    /// System, Light or Dark: in the app's settings.
+    pub(crate) fn appearance_control(&mut self, ui: &mut Ui, p: &Pal) {
         let all = [Appearance::System, Appearance::Light, Appearance::Dark];
         let at = Some(match self.appearance {
             Appearance::System => 0,
@@ -962,7 +1159,18 @@ impl App {
         }
     }
 
-    fn recipe_row(&mut self, ui: &mut Ui, p: &Pal, t: f64, i: usize) {
+    /// A recipe chosen from the list: shown, and the list folds away.
+    /// `from` is what was clicked: from the keyboard, the list stays a
+    /// rail until the focus moves on from it.
+    fn choose(&mut self, i: usize, run: Option<u64>, from: egui::Id) {
+        self.delete_refused = None;
+        self.select(i);
+        self.show_run(i, run);
+        self.list_folded = true;
+        self.list_hold = Some(Some(from));
+    }
+
+    fn recipe_row(&mut self, ui: &mut Ui, p: &Pal, t: f64, i: usize, rail: bool) {
         let on = i == self.sel;
         let r = &self.m.recipes[i];
         let name = r.name.clone();
@@ -978,10 +1186,11 @@ impl App {
             StepState::Idle => p.muted,
         };
         let icon = recipe_icon(r);
-        // As the mockup's `.ri`: 8 px above and below the three lines, 10 px
+        // As the mockup's `.ri`: 9 px above and below the three lines, 10 px
         // in from the sides; the lines stacked by their real heights.
-        const PAD: egui::Vec2 = vec2(10.0, 8.0);
-        let w = 216.0 - PAD.x - 26.0 - 26.0;
+        const PAD: egui::Vec2 = vec2(10.0, 9.0);
+        let full_w = LIST_W - 16.0;
+        let w = full_w - PAD.x - 26.0 - 26.0;
         let drive_text = if drive.is_empty() { "no drive".to_owned() } else { drive.clone() };
         let lines = [(name.clone(), font(14.5, 600), p.ink), (status.clone(), font(13.0, 400), col), (drive_text, font(12.0, 400), p.subtle)];
         // What it waits for you to do may take a second line.
@@ -998,40 +1207,69 @@ impl App {
         // Each line in a box of the mockup's line-height (1.45).
         let boxes = [14.5 * 1.45, 13.0 * 1.45 * galleys[1].rows.len().max(1) as f32, 12.0 * 1.45];
         let height = boxes.iter().sum::<f32>() + 2.0 * PAD.y;
+        let width = if rail { RAIL_W - 16.0 } else { full_w };
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            let (rect, resp) = ui.allocate_exact_size(vec2(216.0, height), Sense::click());
+            let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            // The same id open or folded: the keyboard's focus stays on it.
+            let resp = ui.interact(rect, egui::Id::NULL.with(("recipe", i)), Sense::click());
+            self.list_ids.push(resp.id);
             let label = [name.as_str(), status.as_str(), drive.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(", ");
             resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::ListItem, true, on, &label));
+            let hov = crate::motion::tween(ui.ctx(), resp.id.with("hover"), resp.hovered() && !on, 0.09, crate::motion::cubic_out);
+            let x = rect.left() + PAD.x;
+            let icon_at = pos2(x + if rail { (width - 2.0 * PAD.x - 17.0) / 2.0 } else { 0.0 }, rect.top() + PAD.y + (boxes[0] - 17.0) / 2.0);
+            // Folded, what's marked is the icon's own square; open, the row.
+            let mark = if rail { Rect::from_center_size(icon_at + vec2(8.5, 8.5), vec2(width, 36.0)) } else { rect };
             let pt = ui.painter();
             if on {
-                pt.rect(rect, 8.0, p.raised, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
-            } else if resp.hovered() {
-                pt.rect_filled(rect, 8.0, p.bg);
+                pt.rect(mark, 8.0, p.raised, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
+                // A bar of the action colour at its left edge, as a tab is marked.
+                let bar = Rect::from_min_max(pos2(mark.left() - 5.0, mark.top() + 10.0), pos2(mark.left() - 2.0, mark.bottom() - 10.0));
+                pt.rect_filled(bar, 1.5, p.action);
+            } else if resp.is_pointer_button_down_on() {
+                pt.rect_filled(mark, 8.0, mix(p.ink, 0.08, p.surface));
+            } else if hov > 0.0 {
+                pt.rect_filled(mark, 8.0, mix(p.bg, hov * 0.7, p.surface));
             }
-            let x = rect.left() + PAD.x;
-            pt.extend(kind_icon(icon, pos2(x, rect.top() + PAD.y + (boxes[0] - 17.0) / 2.0), 17.0, if on { p.ink } else { p.muted }));
-            let tx = x + 26.0;
-            let mut y = rect.top() + PAD.y;
-            for (g, b) in galleys.into_iter().zip(boxes) {
-                let h = g.size().y;
-                pt.galley(pos2(tx, y + (b - h) / 2.0), g, p.ink);
-                y += b;
+            pt.extend(kind_icon(icon, icon_at, 17.0, if on { p.ink } else { p.muted }));
+            if rail {
+                // Its state, small, at the icon's corner: nothing while it's
+                // just ready.
+                if state != StepState::Idle {
+                    let c = icon_at + vec2(17.0, 15.0);
+                    pt.circle_filled(c, 6.0, if on { p.raised } else { p.surface });
+                    pt.extend(state_icon(p, state, c, 0.62, t));
+                }
+            } else {
+                let tx = x + 26.0;
+                let mut y = rect.top() + PAD.y;
+                for (g, b) in galleys.into_iter().zip(boxes) {
+                    let h = g.size().y;
+                    pt.galley(pos2(tx, y + (b - h) / 2.0), g, p.ink);
+                    y += b;
+                }
+                pt.extend(state_icon(p, state, pos2(rect.right() - 18.0, rect.center().y), 1.0, t));
             }
-            pt.extend(state_icon(p, state, pos2(rect.right() - 18.0, rect.center().y), 1.0, t));
+            crate::widgets::focus_ring(ui, &resp, mark, 8.0, p);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if rail {
+                // Folded, its name on hover: what's beside the icon when open.
+                resp.clone().on_hover_text(format!("{name}: {status}"));
+            }
             if resp.clicked() {
-                self.delete_refused = None;
-                self.select(i);
-                self.show_run(i, None);
+                self.choose(i, None, resp.id);
             }
         });
-        ui.add_space(2.0);
-        self.earlier_rows(ui, p, t, i);
+        ui.add_space(4.0);
+        self.earlier_rows(ui, p, t, i, rail);
     }
 
     /// Earlier discs of a recipe still encoding or holding: one line each
-    /// under its row, the album and what it's doing.
-    fn earlier_rows(&mut self, ui: &mut Ui, p: &Pal, t: f64, i: usize) {
+    /// under its row, the album and what it's doing; folded, just its state.
+    fn earlier_rows(&mut self, ui: &mut Ui, p: &Pal, t: f64, i: usize, rail: bool) {
         let rows: Vec<(u64, String, String, StepState)> = self
             .m
             .earlier(i)
@@ -1051,33 +1289,43 @@ impl App {
             };
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                let (rect, resp) = ui.allocate_exact_size(vec2(216.0, 24.0), Sense::click());
+                let width = if rail { RAIL_W - 16.0 } else { LIST_W - 16.0 };
+                let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+                let resp = ui.interact(rect, egui::Id::NULL.with(("earlier", i, id)), Sense::click());
+                self.list_ids.push(resp.id);
                 let on = shown == Some(id);
                 resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::ListItem, true, on, format!("{album}, {line}")));
+                let hov = crate::motion::tween(ui.ctx(), resp.id.with("hover"), resp.hovered() && !on, 0.09, crate::motion::cubic_out);
                 let pt = ui.painter();
                 if on {
                     pt.rect(rect, 6.0, p.raised, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
-                } else if resp.hovered() {
-                    pt.rect_filled(rect, 6.0, p.bg);
+                } else if hov > 0.0 {
+                    pt.rect_filled(rect, 6.0, mix(p.bg, hov * 0.7, p.surface));
                 }
                 // Under the recipe's name, with a small state icon.
-                pt.extend(state_icon(p, state, pos2(rect.left() + 18.0, rect.center().y), 0.75, t));
-                // The status in full on the right; the album cut short
-                // before it if need be.
-                let x = rect.left() + 36.0;
-                let st = pt.layout_no_wrap(line.clone(), font(12.5, 400), col);
-                let sx = rect.right() - 8.0 - st.size().x;
-                let mut job = egui::text::LayoutJob::single_section(album.clone(), egui::TextFormat::simple(font(12.5, 500), p.ink));
-                job.wrap = egui::text::TextWrapping::truncate_at_width((sx - 8.0 - x).max(20.0));
-                let g = pt.layout_job(job);
-                pt.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, p.ink);
-                pt.galley(pos2(sx, rect.center().y - st.size().y / 2.0), st, col);
+                let ix = if rail { rect.center().x } else { rect.left() + 18.0 };
+                pt.extend(state_icon(p, state, pos2(ix, rect.center().y), 0.75, t));
+                if !rail {
+                    // The status in full on the right; the album cut short
+                    // before it if need be.
+                    let x = rect.left() + 36.0;
+                    let st = pt.layout_no_wrap(line.clone(), font(12.5, 400), col);
+                    let sx = rect.right() - 8.0 - st.size().x;
+                    let mut job = egui::text::LayoutJob::single_section(album.clone(), egui::TextFormat::simple(font(12.5, 500), p.ink));
+                    job.wrap = egui::text::TextWrapping::truncate_at_width((sx - 8.0 - x).max(20.0));
+                    let g = pt.layout_job(job);
+                    pt.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, p.ink);
+                    pt.galley(pos2(sx, rect.center().y - st.size().y / 2.0), st, col);
+                }
+                crate::widgets::focus_ring(ui, &resp, rect, 6.0, p);
+                if rail {
+                    resp.clone().on_hover_text(format!("{album}: {line}"));
+                }
                 if resp.clicked() {
-                    self.select(i);
-                    self.show_run(i, Some(id));
+                    self.choose(i, Some(id), resp.id);
                 }
             });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
         }
     }
 
@@ -1145,6 +1393,7 @@ impl App {
                 let name = self.naming.take().unwrap();
                 let i = self.m.new_recipe(&name);
                 self.select(i);
+                self.list_folded = true;
                 self.begin_edit();
                 self.open(Tray::Step { id: "drive".into(), focus: Some("drive".into()) });
             }
@@ -1585,6 +1834,27 @@ impl App {
 }
 
 /// The recipe's icon in the list: what its kind step reads.
+/// Keep open: a pin, filled in while it's on.
+fn pin_button(ui: &mut Ui, p: &Pal, on: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Switch, true, on, "Keep the list open"));
+    let hov = crate::motion::tween(ui.ctx(), resp.id.with("hover"), resp.hovered(), 0.09, crate::motion::cubic_out);
+    let pt = ui.painter();
+    if on {
+        pt.rect_filled(rect, 6.0, mix(p.action, 0.14, p.surface));
+    } else if resp.is_pointer_button_down_on() {
+        pt.rect_filled(rect, 6.0, mix(p.ink, 0.10, p.raised));
+    } else if hov > 0.0 {
+        pt.rect_filled(rect, 6.0, mix(p.bg, hov, p.bg.gamma_multiply(0.0)));
+    }
+    pt.extend(kind_icon("pin", rect.center() - vec2(8.0, 8.0), 16.0, if on { p.action } else { p.muted }));
+    crate::widgets::focus_ring(ui, &resp, rect, 6.0, p);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
 fn recipe_icon(r: &trip_engine::Recipe) -> &'static str {
     let kinds: Vec<&str> = r
         .root
