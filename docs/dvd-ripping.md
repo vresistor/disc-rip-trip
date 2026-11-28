@@ -16,6 +16,13 @@
 
 Section 2 sets out what that decision means.
 
+The decision came part way through the research. Two questions from the
+brief were dropped as a result, not answered:
+- how the user would fetch libdvdcss on each OS (RPM Fusion, `libdvd-pkg`, VideoLAN's DLL, Homebrew, VLC's copy), and whether the app could download it on their OK;
+- whether a Flathub extension provides it.
+
+Only 0.4 (the sandbox can see the host's `/usr`) was checked before that.
+
 This builds on `cross-platform.md` (MakeMKV in §5, signing in §6.1) and
 `portability.md` (§5, "is there an open alternative?"). It doesn't repeat them.
 
@@ -33,7 +40,7 @@ Five findings change the starting point. Three of them correct what earlier docs
 **0.1 The flatpak already ships libdvdcss, inside ffmpeg.**
 - The bundled ffmpeg (BtbN `autobuild-2026-10-31`, `N-128227-g4811625b5f`) contains libdvdcss's own messages: "cracking title key at block %i", "failed to crack the disc key", "Error cracking CSS key" *(ran: `strings`)*.
 - Run on a test image with `DVDCSS_VERBOSE=2`, it prints `libdvdcss debug: … cracking title key at block 318 … unencrypted title` *(ran)*. So the code isn't only present; it runs.
-- **Why:** BtbN's GPL builds compile libdvdcss as a static library and build libdvdread with `-Dlibdvdcss=enabled`, for every non-LGPL variant on Linux and Windows. See [`scripts.d/50-dvd/30-libdvdcss.sh`](https://github.com/BtbN/FFmpeg-Builds/blob/master/scripts.d/50-dvd/30-libdvdcss.sh) and [`40-libdvdread.sh`](https://github.com/BtbN/FFmpeg-Builds/blob/master/scripts.d/50-dvd/40-libdvdread.sh). They were added together in commit [7e6ac5adfa](https://github.com/BtbN/FFmpeg-Builds/commit/7e6ac5adfa19bd64e25bfb15a13a440f2390e38f), 3 March 2024 *(read)*.
+- **Why:** BtbN's GPL builds compile libdvdcss as a static library and build libdvdread with `-Dlibdvdcss=enabled`, for every non-LGPL variant on Linux and Windows. See [`scripts.d/50-dvd/30-libdvdcss.sh`](https://github.com/BtbN/FFmpeg-Builds/blob/242c59f7f0/scripts.d/50-dvd/30-libdvdcss.sh) and [`40-libdvdread.sh`](https://github.com/BtbN/FFmpeg-Builds/blob/242c59f7f0/scripts.d/50-dvd/40-libdvdread.sh). (Pinned to 242c59f7f0, the last commit that touched them.) They were added together in commit [7e6ac5adfa](https://github.com/BtbN/FFmpeg-Builds/commit/7e6ac5adfa19bd64e25bfb15a13a440f2390e38f), 3 March 2024 *(read)*.
 - **Why nobody noticed:**
   - `ldd` shows no libdvdcss because it's linked in.
   - CI's check matches file names (`find … -iname '*dvdcss*'`, `.github/workflows/build.yml`), and a static library has no file of its own.
@@ -87,7 +94,7 @@ Five findings change the starting point. Three of them correct what earlier docs
 |---|---|---|
 | [`dvdread-rs`](https://github.com/theflanman/dvdread-rs) 0.2.0 | bindgen against the system libdvdread. GPL-3.0, one star, last pushed December 2024 | Too thin and unmaintained to depend on. Its approach (bindgen on `dvdread/ifo_read.h`) is the one to copy |
 | [`oxideav-dvd`](https://github.com/OxideAV/oxideav-dvd) 0.0.5 | Pure Rust ISO 9660 + UDF + IFO parsing (titles, PGCs, cells, colour table, stream attributes). MIT. "No CSS yet" | Interesting, but 0.0.x with one star. It can't read a CSS drive, since that needs authentication first. Not for now |
-| [`libfreemkv`](https://github.com/freemkv/libfreemkv) | Rust drive access with CSS, and AACS with keys you supply. MIT on GitHub; crates.io lists 1.1.0 as AGPL-3.0-only | Unaudited, not on crates.io as a library, and it would replace libdvdcss with something less proven. No |
+| [`libfreemkv`](https://github.com/freemkv/libfreemkv) | Rust drive access with CSS, and AACS with keys you supply. The GitHub README says MIT and "consumed by git tag", but crates.io has a `libfreemkv` 1.1.0 under AGPL-3.0-only. The two don't agree, and it isn't clear they're the same project | Unaudited by its own account, its licence is unclear, and it would replace libdvdcss with something less proven. No |
 | [`dvdcss`](https://crates.io/crates/dvdcss) 0.1.2 | Bindings to libdvdcss, from 2021 | Not needed: libdvdread drives libdvdcss itself |
 
 **Plan:** a small `dvd-sys` module in `crates/steps`, as `libchdman-rs` builds MAME's C.
@@ -125,7 +132,7 @@ Nothing is re-encoded. **Smaller video** (Transcode) and **Original video** (Rem
 | Project | Ships libdvdcss? | Source |
 |---|---|---|
 | VLC (Flathub, Windows, macOS) | Yes | Flathub manifest above *(read)*. Windows and macOS builds: checked by the coordinator, not re-read here. VideoLAN says libdvdcss "can find and guess keys from a DVD", and that a 2008 Conseil d'État decision on interoperability authorises it in France, "the only one [law] to be applicable to VideoLAN", which "is NOT a US-based organization" ([videolan.org/legal](https://www.videolan.org/legal.html), read) |
-| HandBrake | **No, since 22 March 2008** | Commit [ecc54675dd](https://github.com/HandBrake/HandBrake/commit/ecc54675dddb56825215ce0c11358f81fc72f660) (svn r1354): "Banishes libdvdcss, removing DVD decryption from HandBrake's binaries". The Mac build then loaded VLC's copy if present. Its subject line is a quotation about being hanged by six honest lines, which says the reason was legal exposure without saying it outright *(read)*. Its docs today: "HandBrake also does not defeat or circumvent copy protection of any kind", and they point to MakeMKV instead ([about.markdown](https://github.com/HandBrake/handbrake-docs/blob/master/source/docs/en/latest/introduction/about.markdown), read). Its Flathub manifest has no libdvdcss ([fr.handbrake.ghb at 7b5d323](https://github.com/flathub/fr.handbrake.ghb/blob/7b5d323dd037d69089b5dea5eb4bb78334b5d181/fr.handbrake.ghb.json), read) |
+| HandBrake | **No, since 22 March 2008** | Commit [ecc54675dd](https://github.com/HandBrake/HandBrake/commit/ecc54675dddb56825215ce0c11358f81fc72f660) (svn r1354): "Banishes libdvdcss, removing DVD decryption from HandBrake's binaries". The Mac build then loaded VLC's copy if present *(read)*. The commit gives no reason. Its subject line is a quotation about being hanged by six honest lines, which suggests legal exposure (our inference, not their words). Its docs today: "HandBrake also does not defeat or circumvent copy protection of any kind", and they point to MakeMKV instead ([about.markdown](https://github.com/HandBrake/handbrake-docs/blob/master/source/docs/en/latest/introduction/about.markdown), read). Its Flathub manifest has no libdvdcss ([fr.handbrake.ghb at 7b5d323](https://github.com/flathub/fr.handbrake.ghb/blob/7b5d323dd037d69089b5dea5eb4bb78334b5d181/fr.handbrake.ghb.json), read) |
 | BtbN's ffmpeg builds | Yes, statically, since March 2024 | 0.1 *(read)* |
 | ffmpeg itself | No. Its docs say the demuxer "does NOT have decryption code of any kind" | ffmpeg-formats *(read)* |
 
@@ -135,7 +142,12 @@ Nothing is re-encoded. **Smaller video** (Transcode) and **Original video** (Rem
 - It's a crime to deal in a device "primarily designed, produced, or adapted for the purpose of enabling or facilitating the circumvention of effective technological measures". Dealing means making it for sale, importing it (other than for private use), or selling, offering or distributing it in the course of a business.
 - It's also a crime to distribute such a device "otherwise than in the course of a business to such an extent as to affect prejudicially the copyright owner".
 - Penalties run to two years' prison on indictment.
-- **What applies to Trip:** it's not a business, so the second limb is the one that matters. A free download distributes libdvdcss. Whether that "affects prejudicially" a film studio, for a library they can already get from VLC, has no case law we found (**to find out**, if the owner wants a lawyer's view).
+
+**UK, CDPA s.296ZD, the civil side** ([legislation.gov.uk](https://www.legislation.gov.uk/ukpga/1988/48/section/296ZD), read):
+- Whoever "manufactures, imports, distributes, sells or lets for hire" a device "primarily designed … for the purpose of enabling or facilitating the circumvention" can be sued. That includes the film's copyright owner, whoever issues it to the public, and the owner of the protection itself.
+- **Here "distributes" needs no business and no harm to the copyright owner.** So the civil route reaches a free download more plainly than the criminal one does.
+- The court can grant what it would for copyright infringement, including delivery-up of the devices.
+- **What applies to Trip, criminally:** it's not a business, so the second limb is the one that matters. A free download distributes libdvdcss. Whether that "affects prejudicially" a film studio, for a library they can already get from VLC, is a question for a lawyer. We didn't search for case law (**to find out**, if the owner wants a view).
 - One caveat about the wording: the device test is about libdvdcss, not Trip. Trip as a whole isn't primarily designed to get round CSS, but the library inside it is.
 
 **US, 17 U.S.C. §1201(a)(2)** ([Cornell LII](https://www.law.cornell.edu/uscode/text/17/1201), read):
@@ -146,7 +158,7 @@ Nothing is re-encoded. **Smaller video** (Transcode) and **Original video** (Rem
   - 321 Studios was barred from selling DVD X Copy in 2004 and shut down.
   - ([Corley](https://en.wikipedia.org/wiki/Universal_City_Studios,_Inc._v._Corley), [321 Studios](https://en.wikipedia.org/wiki/321_Studios), read: summaries, not the judgments.)
 - **The realistic risk is a takedown, not a prosecution.** GitHub accepts §1201 claims through a form that must describe the measure and "how the accused project is designed to circumvent" it ([GitHub guide](https://docs.github.com/en/site-policy/content-removal-policies/guide-to-submitting-a-dmca-takedown-notice), read).
-  - libdvdcss itself has been public on VideoLAN's servers since 2001 without that happening.
+  - libdvdcss itself has been on VideoLAN's servers for many years (since 2001, from general knowledge, not checked) without that happening, as far as we know.
   - A claim would more likely land on Trip's releases than on its source, since the source only names a tarball.
 
 **Why the earlier stance was "the user fetches it":**
@@ -165,7 +177,7 @@ Nothing is re-encoded. **Smaller video** (Transcode) and **Original video** (Rem
 | | Linux flatpak (GitHub Releases) | Flathub | Windows | macOS |
 |---|---|---|---|---|
 | ffmpeg's libdvdcss | Already inside BtbN's ffmpeg (0.1) | Flathub builds from source and allows no binaries in a submission ([requirements](https://docs.flathub.org/docs/for-app-authors/requirements), read), and the runtime's ffmpeg has no `dvdvideo` (0.3). So the manifest builds libdvdcss 1.6.0, libdvdread, libdvdnav and an ffmpeg with `--enable-libdvdread --enable-libdvdnav` as modules, as VLC does | Already inside BtbN `win64-gpl`: the same scripts run for `win*` targets *(read)*. **To find out:** check it with `strings` as in 0.1 | Our own ffmpeg build (cross-platform §4.1) adds the three VideoLAN libraries, all meson since libdvdcss 1.5.0 *(read: NEWS)* |
-| Trip's own (the scan, 1.2) | `build.rs` from the same pinned tarballs, static | The same, as a module | The same. libdvdcss has Windows `DeviceIoControl` SCSI pass-through and opens `D:` *(read: `src/ioctl.c`)* | The same. libdvdcss has an IOKit path (`DARWIN_DVD_IOCTL`) *(read)* |
+| Trip's own (the scan, 1.2) | `build.rs` from the same pinned tarballs, static | The same, as a module | The same. libdvdcss has Windows `DeviceIoControl` SCSI pass-through *(read: `src/ioctl.c`)*. That it opens a drive given as `D:` is **to find out** | The same. libdvdcss has an IOKit path (`DARWIN_DVD_IOCTL`) *(read)* |
 | Tarball | [download.videolan.org/pub/libdvdcss/1.6.0](https://download.videolan.org/pub/libdvdcss/1.6.0/): source only, with `.sha256` and `.asc` *(ran: listing; checksum `7ea556c8…0977c` matches)*. VideoLAN publishes no binaries for any recent version *(ran: listing)* | | | |
 
 **Two copies of libdvdcss** (in ffmpeg and in Trip) are acceptable.
@@ -184,9 +196,12 @@ Nothing is re-encoded. **Smaller video** (Transcode) and **Original video** (Rem
 
 ### 2.5 Small things the bundling brings
 
-- **Key cache.** Trip sets `DVDCSS_CACHE` to `<cache>/trip/dvdcss` for ffmpeg and for itself. Otherwise libdvdcss writes `~/.dvdcss` on the host (0.6), or `%APPDATA%\dvdcss` on Windows *(read: `libdvdcss.c`)*. Working files then stay in one place, which the Working files page already shows.
+- **Key cache.** Trip sets `DVDCSS_CACHE` to `<cache>/trip/dvdcss` for ffmpeg and for itself. Otherwise libdvdcss writes `~/.dvdcss` on the host (0.6), or a folder under `CSIDL_APPDATA` on Windows *(read: `libdvdcss.c` calls `SHGetFolderPathA` with it; the exact folder name wasn't read)*. Working files then stay in one place, which the Working files page already shows.
 - **Logging.** `DVDCSS_VERBOSE=1` while Trip reads, so the run record says when a title key couldn't be found.
-- **What the user sees when a key can't be found.** libdvdread then reads the sectors as they are, scrambled *(read: `dvd_input.c` falls back to plain reads)*. ffmpeg doesn't fail; it writes noise. The whole-title check passes because the length is right. So the Rip step must also check that the picture decodes:
+- **What the user sees when a key can't be found.** There are two cases *(read: libdvdcss 1.6.0 `css.c` and `libdvdcss.c`)*:
+  - **The key search fails outright.** libdvdcss logs "fatal error in Video Title Set (VTS) Content Scrambling System (CSS) key", and `dvdcss_seek` returns -1, so the read fails. ffmpeg then stops with a read error, which Rip already reports.
+  - **libdvdcss decides the title isn't scrambled.** It logs "unencrypted title" and uses a zero key, as in 0.5. If it decided that wrongly from the blocks it sampled, the sectors pass through still scrambled, and ffmpeg writes noise. The whole-title check passes because the length is right. Whether this happens on real discs is **to find out**.
+  - For the second case, the Rip step also checks that the picture decodes:
   - decode a few seconds at three points with ffmpeg;
   - count decode errors;
   - fail the title with *"The picture didn't come out: this disc may be protected in a way Trip can't read"*.
@@ -223,8 +238,11 @@ Nothing is re-encoded. **Smaller video** (Transcode) and **Original video** (Rem
 - **HandBrake** (`hb_dvdnav_main_feature`, *read*):
   1. Finds the longest title as a fallback.
   2. Runs the disc's own program the way a player would: first-play, then the root menu, then the title menu. It follows buttons (`try_menu`, `try_button`) to see which title actually plays.
-  3. Keeps what the menus lead to unless the longest title is more than 1.43 times as long (the code tests `longest × 0.7 > found`).
-  4. Even then it only takes the longest when more than ten titles are over 30 minutes and their average is far from what the menus found.
+  3. Keeps what the menus lead to, unless all three hold:
+     - the longest title is more than 1.43 times as long (the code tests `longest × 0.7 > found`);
+     - what the menus found is under 30 minutes;
+     - more than ten titles are over 30 minutes, and their average is far from what the menus found.
+  4. Only then does it take the longest.
   - In short: **trust what a player would play, and fall back to the longest only on discs full of long titles.** That last case is the Disney 99-title one.
 - **ffmpeg** doesn't pick: title 1 unless told (1.1).
 - **lsdvd** reports the "Longest track" (general knowledge; not read here).
@@ -313,7 +331,7 @@ The rule from `steps-know-only-their-wires`: Video disc *offers* candidates and 
    - **On every Video disc tile's sidebar**, under its settings, a quiet row shows *MakeMKV 2.0.0, for Blu-ray* · *Change…* · *Don't use MakeMKV*, as `makemkv_page` shows it now. It's shown on each tile and chosen once, like TMDb's app-wide API key (`ParamSpec::app_wide`).
    - **The beta key** row sits under it: *Keep the free beta key up to date* (today's `key_updates`). Under that, the key's state: *Registered*, *Beta key, valid until end of November 2026*, or *Beta key expired*. These come from what MakeMKV says and from `key.rs` reading its settings. They're only read after the approval.
 4. **Before any Blu-ray, and while MakeMKV isn't set up,** the Video disc sidebar shows only one quiet line: *Blu-ray discs need MakeMKV, which you'd choose when one goes in.* It has no buttons and nothing to scan for.
-5. **The app-level MakeMKV page** (`Page::MakeMkv`) stays as a way to reach the same controls from the app menu. It isn't required anywhere.
+5. **The app-level MakeMKV page** (`Page::MakeMkv`) goes. The owner asked for the tile rather than an app setting, and the tile's row (3) shows the same controls. Revoking is *Don't use MakeMKV* on any Video disc tile.
 6. **Rip** follows what Video disc found. It runs `media == "Blu-ray"` through MakeMKV, and a DVD through the built-in reader unless the user picked *Read with MakeMKV* for that title.
 
 **The facts the tiles pass:**
@@ -388,8 +406,15 @@ Afterwards, on any Video disc tile's Settings:
 
 The wording of `WHY` changes. Today it says MakeMKV "gets round copy
 protection" as the reason it isn't bundled, but Trip now bundles a library
-that does the same for DVDs. The honest reason is that MakeMKV isn't free
-software and can't be built into a GPL app. That's what's left.
+that does the same for DVDs. Its EULA does allow redistribution, and a
+separate program beside a GPL app is allowed too (cross-platform §5.1).
+The reasons left are these:
+- **It's proprietary.** SignPath refuses "any proprietary, non open-source component", and Flathub builds from source.
+- **It adds Blu-ray circumvention** (AACS, BD+) on top of DVD's.
+- **Its beta key runs out** in step with MakeMKV's own releases, not ours.
+
+So `WHY` says: *Blu-ray discs are read by MakeMKV, which doesn't come
+with this app because it isn't free software. Trip only runs it if you say so.*
 
 ---
 
@@ -436,8 +461,8 @@ Both drives here (MATSHITA UJ240AS, Lite-On eHAU324) read DVDs.
 
 | Phase | What | Done when |
 |---|---|---|
-| **D0** Say what ships | `THIRD-PARTY.md` names libdvdcss (in ffmpeg now, and in Trip later), its licence and source. The CI check becomes 2.4's two checks. `PROVENANCE.txt` records BtbN's libdvdcss commit. `WHY`'s wording (5.3) | CI fails a bundle with a stray `makemkvcon` string, and passes the current one with libdvdcss listed |
-| **D1** Rip a DVD title with ffmpeg | Rip uses `-f dvdvideo -title N` on a DVD, with `DVDCSS_CACHE` and the picture check (2.5). MakeMKV isn't touched. The scan still uses MakeMKV for listing, as a bridge | A test ISO title rips to MKV in CI, and one real CSS DVD rips on Linux with no MakeMKV run |
+| **D0** Say what ships | `THIRD-PARTY.md` names libdvdcss (in ffmpeg now, and in Trip later), its licence and source, and its "MakeMKV is not shipped" reasons are rewritten as in 5.3. The same goes for `portability.md` §5 ("no libdvdcss … user-supplied"), `cross-platform.md` §5.1 and C1, and the comments at the top of `video/makemkv.rs` and `app/src/makemkv.rs`. The CI check becomes 2.4's two checks. `PROVENANCE.txt` records BtbN's libdvdcss commit. `WHY`'s wording (5.3) | CI fails a bundle with a stray `makemkvcon` string, and passes the current one with libdvdcss listed |
+| **D1** Rip a DVD title with ffmpeg | For a DVD, Video disc lists titles by probing `-f dvdvideo -title 1, 2, …` with ffprobe until "Stream not found" (proven in 0.5). That gives each title's length, streams and chapters, and its DVD title number for Rip. Rip uses `-f dvdvideo -title N`, with `DVDCSS_CACHE` and the picture check (2.5). MakeMKV isn't touched. This is a bridge until D2: it has no cells, so duplicates fall back to today's length-and-size test | A test ISO title rips to MKV in CI, and one real CSS DVD rips on Linux with no MakeMKV run |
 | **D2** The scan in-process | `dvd-sys` (1.2): titles, cells, streams, `plays_first`. Duplicates by cells. Video disc records them | Video disc lists a real DVD with the same titles as MakeMKV, on both drives, and Choose picks the same film on discs 1–3 of section 7 |
 | **D3** MakeMKV only for Blu-ray, on the tile | 5.2's steps 1–6: no Start block, the *Needs* tile on a Blu-ray, the quiet line, the app-wide row on each tile, the key state. Tests with a stand-in MakeMKV check no process starts before *Use this* | A DVD recipe runs start to finish with MakeMKV never set up, and a Blu-ray in the same recipe asks on the tile and carries on after approval |
 | **D4** Bad discs | *Copy it first, then rip*, the sector map, *Read with MakeMKV* when set up. dm-error tests | Discs 4 and 6 of section 7 either rip, or fail with words that say what happened |
