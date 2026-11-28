@@ -9,7 +9,7 @@ is an obligation, not a courtesy, for the GPL components below.
 | Component | Licence | Shipped? |
 |---|---|---|
 | Trip itself | GPL-3.0-or-later | yes — this repository |
-| ffmpeg, ffprobe | GPL-3.0 as built | yes — in the flatpak's `/app/bin` |
+| ffmpeg, ffprobe (with libdvdread, libdvdnav and libdvdcss inside) | GPL-3.0 as built; libdvdcss GPL-2.0-or-later | yes — in the flatpak's `/app/bin` |
 | cyanrip (as built, with libcdio) | GPL-3.0-or-later | yes — in the flatpak's `/app/bin` |
 | redumper | GPL-3.0 | yes — in the flatpak's `/app/bin` |
 | MAME's CHD core, via libchdman-rs | BSD-3-Clause | yes — linked |
@@ -43,16 +43,23 @@ says exactly which source corresponds to it.
 and we will provide the complete corresponding source for any binary we have
 published, for at least three years from the date of that release.
 
-### What the bundled ffmpeg does not contain
+### libdvdcss, inside the bundled ffmpeg
 
-It is built with `libdvdread` and `libdvdnav`, which read DVD structure —
-titles, chapters, playlists. Neither decrypts anything.
+It is built with `libdvdread` and `libdvdnav`, which read a DVD's structure
+(titles, chapters, playlists), **and with libdvdcss** (GPL-2.0-or-later,
+[VideoLAN](https://www.videolan.org/developers/libdvdcss.html)), which
+decrypts CSS-protected DVDs. BtbN's build links all three statically, so
+`ldd` shows nothing, but the binary carries libdvdcss's own messages
+("Attempting to retrieve all CSS keys", "Error cracking CSS key for …") and
+runs its key recovery on an encrypted disc. An earlier version of this file
+said libdvdcss wasn't shipped; that was wrong.
 
-Grepping the binary does turn up strings like `DVDCSS_METHOD` and `DVDCSS_CACHE`.
-Those are libdvdread's *optional runtime* interface: if a system `libdvdcss` is
-already installed, libdvdread will use it. We do not ship one, nothing is linked
-against one (`ldd` confirms), and the build carries no `--enable-libdvdcss`. The
-strings are an interface to something absent.
+Trip ships libdvdcss on purpose, so DVDs rip with nothing extra to install,
+as VLC does (Flathub's `org.videolan.VLC` builds it in). Its source is part
+of the corresponding source above: BtbN's build scripts pin it, and each
+release's source archive will include its tarball. See
+[`docs/dvd-ripping.md`](docs/dvd-ripping.md) for the plan to build it
+ourselves on every OS.
 
 ## cyanrip: corresponding source
 
