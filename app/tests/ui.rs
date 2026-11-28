@@ -3314,14 +3314,19 @@ fn a_folder_that_isnt_there_stops_start_until_it_is() {
     app_mut(&mut h).m.set_param(0, "lib1", "folder", Value::from(flac.display().to_string())).unwrap();
     until(&mut h, "the look", |a| !a.m.unreachable(0).is_empty());
     let why = app(&h).m.cant_start(0).unwrap();
-    assert!(why.starts_with("Can't make the folder ") && why.ends_with("FLAC"), "{why}");
+    assert_eq!(why, "Can't reach FLAC. Check the folder still exists.");
     assert!(h.get_by_label("Start").accesskit_node().is_disabled());
     let v = &snap(&h).steps["lib1"];
-    assert_eq!((v.state, v.status.as_str()), (StepState::Needs, "Can't make the folder"));
-    h.get_by_label_contains("CDs, Library folder unavailable");
-    app_mut(&mut h).select_tile("lib1".into());
+    assert_eq!((v.state, v.status.as_str(), v.detail.as_str()), (StepState::Needs, "Can't reach FLAC", "Check the folder still exists."));
+    h.get_by_label_contains("CDs, Can't reach FLAC");
+    // The sidebar: the same, with the whole path under it.
+    app_mut(&mut h).open(Tray::Step { id: "lib1".into(), focus: None });
     h.run_steps(4);
+    h.get_by_label("Can't reach FLAC. Check the folder still exists.");
+    h.get_by_label(&flac.display().to_string());
     shot(&mut h, "folder-unavailable");
+    app_mut(&mut h).close_tray();
+    h.run_steps(2);
     // Start, pressed anyway, looks again and says the same.
     assert_eq!(app_mut(&mut h).m.start(0).unwrap_err().to_string(), why);
 
@@ -3371,15 +3376,15 @@ fn not_enough_room_is_said_with_the_sizes() {
     let why = app(&h).m.cant_start(0).unwrap();
     assert!(why.starts_with("Not enough room in ") && why.contains(" GB needed, 0.4 GB free"), "{why}");
     // After a disc, the list says so as well as the card.
-    h.get_by_label_contains("Data discs, No room in Library");
-    assert!(app(&h).m.cant_start(2).unwrap().starts_with("Not enough room"));
-    assert_eq!(snap(&h).steps["d_lib"].status, "Not enough room");
+    h.get_by_label_contains("Data discs, Not enough room in images");
+    assert!(app(&h).m.cant_start(2).unwrap().starts_with("Not enough room in images: "));
+    assert_eq!(snap(&h).steps["d_lib"].status, "Not enough room in images");
     app_mut(&mut h).select(0);
     h.run_steps(2);
     let v = &snap(&h).steps["review"];
-    assert_eq!((v.status.as_str(), v.state), ("Not enough room", StepState::Needs));
+    assert_eq!((v.status.as_str(), v.state), ("Not enough room in review", StepState::Needs));
     assert!(v.detail.ends_with("needed, 0.4 GB free"), "{}", v.detail);
-    h.get_by_label_contains("CDs, No room in Review");
+    h.get_by_label_contains("CDs, Not enough room in review");
     app_mut(&mut h).select_tile("lib1".into());
     h.run_steps(4);
     shot(&mut h, "folder-full");
@@ -3390,6 +3395,54 @@ fn not_enough_room_is_said_with_the_sizes() {
     app(&h).m.look_again();
     until(&mut h, "room", |a| a.m.unreachable(0).is_empty() && a.m.unreachable(1).is_empty() && a.m.unreachable(2).is_empty());
     assert!(app(&h).m.cant_start(0).is_none());
+}
+
+/// A drive unplugged, a share that's off and one that doesn't answer
+/// are one thing to you: the card, the list, Start and the sidebar all say
+/// *Can't reach FLAC*, with what to check; the log keeps them apart.
+#[test]
+fn a_folder_out_of_reach_is_said_one_way_whatever_the_reason() {
+    use trip_steps::real::reach::Unreachable;
+    let e = env();
+    let mut h = window(&e, None, true, 0.0);
+    let flac = PathBuf::from("/run/user/1000/gvfs/smb-share:server=nas,share=music/FLAC");
+    app_mut(&mut h).m.set_param(0, "lib1", "folder", Value::from(flac.display().to_string())).unwrap();
+    let reasons = [
+        Unreachable::Unplugged { drive: "/run/media/backup".into() },
+        Unreachable::CantReach { path: flac.clone(), network: true },
+        Unreachable::NotAnswering { path: flac.clone() },
+        Unreachable::CantWrite { path: flac.clone(), missing: true },
+    ];
+    let mut seen = vec![];
+    for why in reasons {
+        let (w, at) = (why.clone(), flac.clone());
+        app_mut(&mut h).m.set_reach(Arc::new(move |p: &Path, _| if p == at { Err(w.clone()) } else { Ok(()) }));
+        app_mut(&mut h).m.look_at(0);
+        until(&mut h, "the look", |a| a.m.unreachable(0).first().is_some_and(|(_, u)| *u == why));
+        let v = &snap(&h).steps["lib1"];
+        assert_eq!((v.state, v.status.as_str()), (StepState::Needs, "Can't reach FLAC"), "{why:?}");
+        h.get_by_label_contains("CDs, Can't reach FLAC");
+        let start = app(&h).m.cant_start(0).unwrap();
+        assert!(start.starts_with("Can't reach FLAC. "), "{start}");
+        seen.push(why.sentence());
+    }
+    seen.dedup();
+    assert_eq!(seen.len(), 4, "the log tells them apart: {seen:?}");
+    // On a network share, what to check is the share; the sidebar says so,
+    // and where the folder is, under it.
+    assert_eq!(app(&h).m.cant_start(0).unwrap(), "Can't reach FLAC. Check the network folder is on and connected.");
+    let w = Unreachable::NotAnswering { path: flac.clone() };
+    let at = flac.clone();
+    app_mut(&mut h).m.set_reach(Arc::new(move |p: &Path, _| if p == at { Err(w.clone()) } else { Ok(()) }));
+    app_mut(&mut h).m.look_at(0);
+    until(&mut h, "the look", |a| matches!(a.m.unreachable(0).first(), Some((_, Unreachable::NotAnswering { .. }))));
+    assert_eq!(snap(&h).steps["lib1"].detail, "Check the network folder is on and connected.");
+    app_mut(&mut h).open(Tray::Step { id: "lib1".into(), focus: None });
+    h.run_steps(4);
+    h.get_by_label("Can't reach FLAC. Check the network folder is on and connected.");
+    h.get_by_label(&flac.display().to_string());
+    assert!(h.query_by_label_contains("answering").is_none() && h.query_by_label_contains("make the folder").is_none());
+    shot(&mut h, "folder-out-of-reach");
 }
 
 #[test]

@@ -46,6 +46,17 @@ pub struct Needed {
     pub need: u64,
 }
 
+impl Needed {
+    /// The folder as the window names it: its last part, or the working
+    /// folder.
+    pub fn name(&self) -> String {
+        match self.step {
+            Some(_) => trip_steps::real::reach::name_of(&self.path),
+            None => "the working folder".into(),
+        }
+    }
+}
+
 /// A folder's last look, by path and room needed.
 type Looked = HashMap<(PathBuf, u64), std::result::Result<(), Unreachable>>;
 type LookedOne = ((PathBuf, u64), std::result::Result<(), Unreachable>);
@@ -1059,8 +1070,8 @@ impl Model {
             }
         }
         for (n, why) in self.unreachable(i) {
+            let (status, detail) = why.card(&n.name());
             let Some(v) = n.step.and_then(|id| snap.steps.get_mut(&id)) else { continue };
-            let (status, detail) = why.card();
             v.state = StepState::Needs;
             v.status = status;
             v.qualifier.clear();
@@ -1166,11 +1177,7 @@ impl Model {
             return Some(r.sentence());
         }
         if let Some((n, why)) = self.unreachable(i).first() {
-            return Some(match &n.step {
-                None if why.full() => why.sentence().replacen("Not enough room in", "Not enough room to rip in", 1),
-                None => format!("The working folder: {}", why.sentence()),
-                Some(_) => why.sentence(),
-            });
+            return Some(why.said(&n.name()));
         }
         if let Some(id) = self.misfit(i) {
             return Some(format!("{} doesn't fit where it is", self.tile_name(i, &id)));
@@ -1326,19 +1333,7 @@ impl Model {
             return (r.card().0, if r == crate::makemkv::Readiness::Checking { StepState::Busy } else { StepState::Needs });
         }
         if let Some((n, why)) = self.unreachable(i).first().filter(|_| !self.ripping(i) && self.engine.missing(&self.recipes[i]).is_empty() && self.check_word(i).is_none()) {
-            let line = match &n.step {
-                None => "No room to rip".to_owned(),
-                Some(id) => {
-                    let name = self.tile_name(i, id);
-                    let plain = name.eq_ignore_ascii_case("folder");
-                    match (why.full(), plain) {
-                        (true, true) => "No room in the folder".to_owned(),
-                        (true, false) => format!("No room in {name}"),
-                        (false, true) => "Folder unavailable".to_owned(),
-                        (false, false) => format!("{name} folder unavailable"),
-                    }
-                }
-            };
+            let line = why.title(&n.name());
             return (line, StepState::Needs);
         }
         if let Some(r) = self.newest(i) {

@@ -26,6 +26,8 @@ pub enum Unreachable {
     NotAnswering { path: PathBuf },
     /// There, or makeable, but nothing can be written in it.
     CantWrite { path: PathBuf, missing: bool },
+    /// A file where the folder, or one on the way to it, should be.
+    NotAFolder { path: PathBuf },
     /// Not enough free space: bytes needed, bytes free.
     NoRoom { path: PathBuf, need: u64, free: u64 },
 }
@@ -38,11 +40,14 @@ impl Unreachable {
             | Unreachable::CantReach { path, .. }
             | Unreachable::NotAnswering { path }
             | Unreachable::CantWrite { path, .. }
+            | Unreachable::NotAFolder { path }
             | Unreachable::NoRoom { path, .. } => path,
         }
     }
 
-    /// One sentence, with the folder: Start's reason, the log.
+    /// One sentence, with the folder and what exactly went wrong: for the
+    /// log. The window says it as [`Unreachable::title`] and
+    /// [`Unreachable::hint`].
     pub fn sentence(&self) -> String {
         match self {
             Unreachable::Unplugged { drive } => format!("The drive {} isn't plugged in", shown(drive)),
@@ -51,27 +56,93 @@ impl Unreachable {
             Unreachable::NotAnswering { path } => format!("The folder {} isn't answering", shown(path)),
             Unreachable::CantWrite { path, missing: true } => format!("Can't make the folder {}", shown(path)),
             Unreachable::CantWrite { path, missing: false } => format!("Can't write to the folder {}", shown(path)),
+            Unreachable::NotAFolder { path } => format!("A file is where the folder {} should be", shown(path)),
             Unreachable::NoRoom { path, need, free } => format!("Not enough room in {}: {} needed, {} free", shown(path), gb(*need), gb(*free)),
         }
     }
 
-    /// For a card: a few words, and a detail line.
-    pub fn card(&self) -> (String, String) {
+    /// What you can do about it, which is all the window tells apart.
+    pub fn trouble(&self) -> Trouble {
         match self {
-            Unreachable::Unplugged { drive } => ("Drive not plugged in".into(), shown(drive)),
-            Unreachable::CantReach { network: true, .. } => ("Can't reach the network folder".into(), String::new()),
-            Unreachable::CantReach { .. } => ("Can't reach the folder".into(), String::new()),
-            Unreachable::NotAnswering { .. } => ("Folder not answering".into(), String::new()),
-            Unreachable::CantWrite { missing: true, .. } => ("Can't make the folder".into(), String::new()),
-            Unreachable::CantWrite { .. } => ("Can't write here".into(), String::new()),
-            Unreachable::NoRoom { need, free, .. } => ("Not enough room".into(), format!("{} needed, {} free", gb(*need), gb(*free))),
+            // A folder that can't be made is, nearly always, one on a share
+            // or a drive that isn't mounted: its mount point is there, and
+            // nothing can be written in it.
+            Unreachable::Unplugged { .. } | Unreachable::CantReach { .. } | Unreachable::NotAnswering { .. } | Unreachable::CantWrite { missing: true, .. } | Unreachable::NotAFolder { .. } => {
+                Trouble::OutOfReach
+            }
+            Unreachable::CantWrite { missing: false, .. } => Trouble::NotAllowed,
+            Unreachable::NoRoom { .. } => Trouble::NoRoom,
         }
+    }
+
+    /// A few words, the folder called `name` (its last part, from
+    /// [`name_of`]): *Can't reach FLAC*. The same on a card, in Start's
+    /// reason, in the list and in the sidebar.
+    pub fn title(&self, name: &str) -> String {
+        match self.trouble() {
+            Trouble::OutOfReach => format!("Can't reach {name}"),
+            Trouble::NoRoom => format!("Not enough room in {name}"),
+            Trouble::NotAllowed => format!("Not allowed to save in {name}"),
+        }
+    }
+
+    /// One short line under the title: what to check, or the numbers.
+    pub fn hint(&self) -> String {
+        match self {
+            Unreachable::NoRoom { need, free, .. } => format!("{} needed, {} free", gb(*need), gb(*free)),
+            Unreachable::CantWrite { missing: false, .. } => "Check Trip may save in it, or choose another folder.".into(),
+            Unreachable::CantReach { network: true, .. } => check_for(super::mounts::Kind::Network).into(),
+            _ => check_for(super::mounts::kind_of(self.path())).into(),
+        }
+    }
+
+    /// The title and the hint as one sentence: why Start can't.
+    pub fn said(&self, name: &str) -> String {
+        match self.trouble() {
+            Trouble::NoRoom => format!("{}: {}", self.title(name), self.hint()),
+            _ => format!("{}. {}", self.title(name), self.hint()),
+        }
+    }
+
+    /// For a card: the title, and the hint as its detail line.
+    pub fn card(&self, name: &str) -> (String, String) {
+        (self.title(name), self.hint())
     }
 
     /// Whether it's only short of room: the folder itself is fine.
     pub fn full(&self) -> bool {
         matches!(self, Unreachable::NoRoom { .. })
     }
+}
+
+/// Why a folder can't take a disc, as far as you're concerned: each asks
+/// something different of you.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trouble {
+    /// A share off or offline, a drive unplugged, a folder not answering or not
+    /// mounted: bring it back.
+    OutOfReach,
+    /// There, and full: make room.
+    NoRoom,
+    /// There, and saving in it isn't allowed.
+    NotAllowed,
+}
+
+/// What to check when a folder is out of reach, by what kind of place
+/// it's on; neutral where that can't be told.
+pub fn check_for(kind: super::mounts::Kind) -> &'static str {
+    use super::mounts::Kind;
+    match kind {
+        Kind::Network => "Check the network folder is on and connected.",
+        Kind::Drive => "Check the drive is plugged in.",
+        Kind::Unknown => "Check the folder still exists.",
+    }
+}
+
+/// A folder by name, as the window says it: its last part (*FLAC*), or
+/// the whole path when it has none.
+pub fn name_of(p: &Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| shown(p))
 }
 
 /// Sizes as a CD ripper reads them: *2.1 GB*, *0.4 GB*, *650 MB*.
@@ -152,13 +223,13 @@ pub fn look(path: &Path, need: u64, free: FreeFn) -> Result<(), Unreachable> {
     loop {
         match std::fs::metadata(&there) {
             Ok(m) if m.is_dir() => break,
-            Ok(_) => return Err(Unreachable::CantWrite { path: path.into(), missing: there != path }),
+            Ok(_) => return Err(Unreachable::NotAFolder { path: path.into() }),
             Err(e) if e.kind() == io::ErrorKind::NotFound => match there.parent() {
                 Some(up) => there = up.to_path_buf(),
                 None => return Err(Unreachable::CantReach { path: path.into(), network: network(path) }),
             },
             // A file on the way: nothing can be made under it.
-            Err(e) if e.raw_os_error() == Some(libc::ENOTDIR) => return Err(Unreachable::CantWrite { path: path.into(), missing: true }),
+            Err(e) if e.raw_os_error() == Some(libc::ENOTDIR) => return Err(Unreachable::NotAFolder { path: path.into() }),
             Err(_) => return Err(Unreachable::CantReach { path: path.into(), network: network(path) }),
         }
     }
@@ -365,16 +436,21 @@ mod tests {
         set_mode(&ro, 0o555);
         let r = look(&ro, 1_000, plenty);
         set_mode(&ro, 0o755);
-        assert_eq!(r, Err(Unreachable::CantWrite { path: ro, missing: false }));
+        assert_eq!(r, Err(Unreachable::CantWrite { path: ro.clone(), missing: false }));
+        let r = r.unwrap_err();
+        assert_eq!(r.trouble(), Trouble::NotAllowed);
+        assert_eq!(r.title("ro"), "Not allowed to save in ro");
     }
 
     #[test]
-    fn a_file_where_the_folder_should_be_cant_be_written_to() {
+    fn a_file_where_the_folder_should_be_is_said_so() {
         let t = tempfile::tempdir().unwrap();
         let f = t.path().join("FLAC");
         std::fs::write(&f, "").unwrap();
-        assert!(matches!(look(&f, 1, plenty), Err(Unreachable::CantWrite { .. })));
-        assert!(matches!(look(&f.join("x"), 1, plenty), Err(Unreachable::CantWrite { missing: true, .. })));
+        assert_eq!(look(&f, 1, plenty), Err(Unreachable::NotAFolder { path: f.clone() }));
+        assert_eq!(look(&f.join("x"), 1, plenty), Err(Unreachable::NotAFolder { path: f.join("x") }));
+        // As a folder gone: not a matter of being allowed.
+        assert_eq!(look(&f, 1, plenty).unwrap_err().title("FLAC"), "Can't reach FLAC");
     }
 
     #[test]
@@ -382,7 +458,8 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let r = look(t.path(), 2_100_000_000, little).unwrap_err();
         assert_eq!(r, Unreachable::NoRoom { path: t.path().into(), need: 2_100_000_000, free: 400_000_000 });
-        assert_eq!(r.card(), ("Not enough room".into(), "2.1 GB needed, 0.4 GB free".into()));
+        assert_eq!(r.card("FLAC"), ("Not enough room in FLAC".into(), "2.1 GB needed, 0.4 GB free".into()));
+        assert_eq!(r.said("FLAC"), "Not enough room in FLAC: 2.1 GB needed, 0.4 GB free");
         assert!(r.sentence().ends_with(": 2.1 GB needed, 0.4 GB free"), "{}", r.sentence());
         // Enough is fine; a filesystem that can't say isn't counted against.
         assert_eq!(look(t.path(), 300_000_000, little), Ok(()));
@@ -428,6 +505,38 @@ mod tests {
         let r = Unreachable::CantReach { path: "/run/user/1000/gvfs/smb-share:server=nas,share=music/FLAC".into(), network: true };
         assert_eq!(r.sentence(), "Can't reach the network folder /run/…/FLAC");
         assert!(network(r.path()));
+    }
+
+    #[test]
+    fn what_you_see_is_grouped_by_what_you_can_do_about_it() {
+        let flac = PathBuf::from("/mnt/nas/FLAC");
+        let smb = PathBuf::from("/run/user/1000/gvfs/smb-share:server=nas,share=music/FLAC");
+        // Unplugged, the network down, not answering, and not makeable
+        // under a share's empty mount point: one title.
+        let away = [
+            Unreachable::Unplugged { drive: "/run/media/alice/backup".into() },
+            Unreachable::CantReach { path: smb.clone(), network: true },
+            Unreachable::CantReach { path: flac.clone(), network: false },
+            Unreachable::NotAnswering { path: flac.clone() },
+            Unreachable::CantWrite { path: flac.clone(), missing: true },
+        ];
+        for why in &away {
+            assert_eq!(why.trouble(), Trouble::OutOfReach, "{why:?}");
+            assert_eq!(why.title(&name_of(&flac)), "Can't reach FLAC", "{why:?}");
+        }
+        // The log keeps them apart.
+        let said: std::collections::HashSet<String> = away.iter().map(Unreachable::sentence).collect();
+        assert_eq!(said.len(), away.len());
+        // What to check, by where the folder is.
+        assert_eq!(away[0].hint(), "Check the drive is plugged in.");
+        assert_eq!(away[1].hint(), "Check the network folder is on and connected.");
+        assert_eq!(Unreachable::NotAnswering { path: smb }.hint(), "Check the network folder is on and connected.");
+        assert_eq!(Unreachable::NotAnswering { path: "/nowhere/music/FLAC".into() }.hint(), "Check the folder still exists.");
+        assert_eq!(away[3].said("FLAC"), "Can't reach FLAC. Check the drive is plugged in.");
+        assert_eq!(away[3].card("FLAC"), ("Can't reach FLAC".into(), "Check the drive is plugged in.".into()));
+        // The rest, apart.
+        assert_eq!(Unreachable::CantWrite { path: flac.clone(), missing: false }.trouble(), Trouble::NotAllowed);
+        assert_eq!(Unreachable::NoRoom { path: flac, need: 1, free: 0 }.trouble(), Trouble::NoRoom);
     }
 
     #[test]

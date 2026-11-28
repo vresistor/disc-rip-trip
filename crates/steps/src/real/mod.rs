@@ -20,6 +20,7 @@ pub mod hash;
 pub mod lyrics;
 pub mod media;
 pub mod mismatch;
+pub mod mounts;
 pub mod musicbrainz;
 pub mod net;
 pub mod offset;
@@ -1887,7 +1888,7 @@ async fn until_there(cx: &Cx, to: &mut Dest, file: &Item, need: u64) -> bool {
     };
     loop {
         cx.log(why.sentence());
-        cx.item(file, ItemState::Waiting, why.sentence());
+        cx.item(file, ItemState::Waiting, why.said(&reach::name_of(&to.root)));
         let answer = {
             let ask = cx.ask(away(&why, &to.root, cx));
             tokio::pin!(ask);
@@ -1902,7 +1903,8 @@ async fn until_there(cx: &Cx, to: &mut Dest, file: &Item, need: u64) -> bool {
                             Ok(()) => break None,
                             Err(w) => {
                                 if w != why {
-                                    cx.item(file, ItemState::Waiting, w.sentence());
+                                    cx.log(w.sentence());
+                                    cx.item(file, ItemState::Waiting, w.said(&reach::name_of(&to.root)));
                                 }
                                 why = w;
                             }
@@ -1952,12 +1954,16 @@ async fn until_there(cx: &Cx, to: &mut Dest, file: &Item, need: u64) -> bool {
     }
 }
 
-/// What a Folder asks while its folder is away: *Waiting for /run/…/FLAC
-/// to come back*.
+/// What a Folder asks while its folder is away: *Waiting for FLAC to
+/// come back*, the folder named as everywhere else.
 fn away(why: &reach::Unreachable, root: &Path, cx: &Cx) -> trip_engine::Question {
     let choice = |l: &str, d: String| trip_engine::Choice { label: l.into(), detail: d, destructive: false, picture: None };
-    let at = reach::shown(root);
-    let prompt = if why.full() { format!("Waiting for room in {at}") } else { format!("Waiting for {at} to come back") };
+    let at = reach::name_of(root);
+    let prompt = match why.trouble() {
+        reach::Trouble::OutOfReach => format!("Waiting for {at} to come back"),
+        reach::Trouble::NoRoom => format!("Waiting for room in {at}"),
+        reach::Trouble::NotAllowed => why.title(&at),
+    };
     let work = cx.work().map(|w| reach::shown(&w)).unwrap_or_default();
     trip_engine::Question {
         prompt,

@@ -357,6 +357,9 @@ struct Plan {
     /// A quiet action on the header's own row, beside the close button: a
     /// game or data disc's Rip opens the tray from there.
     corner: Option<Act>,
+    /// A muted line under the sentence: the full path of a folder that
+    /// can't be reached.
+    note: String,
 }
 
 /// A header action. The last `Primary` one is drawn filled.
@@ -437,6 +440,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                 rename: None,
                 remove: false,
                 corner: None,
+                note: String::new(),
             })
         }
         Tray::App(Page::MakeMkv) => {
@@ -458,6 +462,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                 rename: None,
                 remove: false,
                 corner: None,
+                note: String::new(),
             })
         }
         Tray::Question { step } => {
@@ -480,6 +485,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     rename: None,
                     remove: false,
                     corner: None,
+                    note: String::new(),
                 }),
                 QuestionShape::PickOne { options, preselected, details, skip } => {
                     let n = options.len();
@@ -511,6 +517,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                         rename: None,
                         remove: false,
                         corner: None,
+                        note: String::new(),
                     })
                 }
                 QuestionShape::PerItem { .. } => Some(Plan {
@@ -525,6 +532,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     rename: None,
                     remove: false,
                     corner: None,
+                    note: String::new(),
                 }),
                 QuestionShape::Value { label, .. } => Some(Plan {
                     icon: v.step.clone(),
@@ -537,6 +545,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                     rename: None,
                     remove: false,
                     corner: None,
+                    note: String::new(),
                 }),
             }
         }
@@ -555,6 +564,7 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                 rename: None,
                 remove: false,
                 corner: None,
+                note: String::new(),
             };
             let editing = app.editing && !app.m.ripping(i);
             let Some(info) = info else {
@@ -669,6 +679,11 @@ fn plan(app: &App, snap: &Snapshot, tray: &Tray) -> Option<Plan> {
                 k if is_place(k) => {
                     let folder = folder_of(app, i, id);
                     plan.say = if folder.is_none() { "Choose a folder.".into() } else { String::new() };
+                    // Its folder can't take a disc: what to check, and where it is.
+                    if let Some((n, why)) = app.m.unreachable(i).into_iter().find(|(n, _)| n.step.as_deref() == Some(id.as_str())).filter(|_| !app.m.running(i)) {
+                        plan.say = why.said(&n.name());
+                        plan.note = n.path.display().to_string();
+                    }
                     if let Some(f) = &folder {
                         plan.acts.push(Act::OpenFolder { label: "Open folder".into(), path: filed_dir(&v.record.files, f) });
                     }
@@ -1115,6 +1130,10 @@ fn header(app: &mut App, ui: &mut Ui, p: &Pal, plan: &Plan, t: f64) {
     } else if !plan.say.is_empty() {
         ui.add_space(2.0);
         ui.add(egui::Label::new(RichText::new(&plan.say).font(font(13.0, 400)).color(p.ink)).wrap());
+    }
+    if !plan.note.is_empty() {
+        ui.add_space(2.0);
+        ui.add(egui::Label::new(RichText::new(&plan.note).font(font(12.0, 400)).color(p.subtle)).wrap());
     }
     if plan.acts.is_empty() {
         return;

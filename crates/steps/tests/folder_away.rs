@@ -110,7 +110,10 @@ async fn a_folder_that_goes_away_holds_then_files_once_it_is_back() {
     let s = until(&run, "a hold", |s| s.question.is_some()).await;
     let (step, q) = s.question.clone().unwrap();
     assert_eq!(step, "lib");
-    assert!(q.prompt.starts_with("Waiting for ") && q.prompt.ends_with(" to come back"), "{}", q.prompt);
+    // Named as the card and the list name it: by its last part.
+    assert_eq!(q.prompt, "Waiting for Music to come back");
+    let note = &s.steps["lib"].items.iter().find(|i| i.id == "track-2").unwrap().note;
+    assert!(note.starts_with("Can't reach Music. "), "{note}");
     let QuestionShape::PickOne { options, .. } = &q.shape else { panic!("{q:?}") };
     assert_eq!(options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), ["Choose another folder", "Skip"]);
     assert_eq!(s.steps["lib"].state, StepState::Needs);
